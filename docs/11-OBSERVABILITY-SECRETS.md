@@ -162,5 +162,5 @@ Support/System Admin can trigger audited cache/config refreshes.
 The UI exposes node revision status so operators can see stale runtime configuration.
 ## Event and operations diagram
 
-See [Event and Operations Flow](diagrams/07-event-operations-flow.mmd).
+See [Observability Architecture](diagrams/10-observability-architecture.mmd) and [Event and Operations Flow](diagrams/07-event-operations-flow.mmd).
 
