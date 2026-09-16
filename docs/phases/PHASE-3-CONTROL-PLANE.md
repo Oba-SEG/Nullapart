@@ -159,6 +159,23 @@ Every endpoint/action:
 
 Tenant-scoped PostgreSQL tables use RLS where practical as defense in depth. Request handling must use transaction-safe tenant context under connection pooling and must not normally run with RLS-bypass privileges.
 
+## Rate limiting and business-logic controls
+
+Apply:
+
+- principal/customer/IP/action-aware rate limiting;
+- stricter limits on impersonation, release, remediation, exports, config refresh and role changes;
+- server-side state-machine validation;
+- policy hierarchy/System floors;
+- optimistic locking/revision checks;
+- idempotency for retry-sensitive mutations;
+- bulk per-resource authorization;
+- trusted server timestamps.
+
+URLs must not carry bearer auth/session/API secrets. OIDC callback parameters are cleaned after server-side exchange.
+
+See `docs/security/22-RATE-LIMITING-ABUSE-PROTECTION.md` and `docs/security/24-BUSINESS-LOGIC-POLICY-SECURITY.md`.
+
 ## UI standard
 
 Use established neumorphic design system.
