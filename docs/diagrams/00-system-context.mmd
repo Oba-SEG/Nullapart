@@ -5,13 +5,14 @@ flowchart LR
 
     subgraph Deployment["Nullapart Regional Deployment"]
         subgraph MailPlane["Mail Plane"]
-            Postfix[Postfix SMTP]
-            Rspamd[Rspamd]
-            MailCore[Rust Mail Core]
+            Postfix[Postfix SMTP + Durable Queue]
+            Rspamd[Rspamd Milter]
+            MailCore[Rust Mail Core\nSMTP Transaction + Tenant Message Instances]
             Scanners[Scanner Fabric]
             InlineML[Inline ML]
-            Policy[Policy Runtime]
-            Quarantine[Quarantine]
+            Policy[Per-Tenant Policy Runtime]
+            Quarantine[Quarantine / Hold]
+            Reinject[Trusted Reinjection]
         end
 
         subgraph ControlPlane["Control Plane"]
@@ -19,7 +20,7 @@ flowchart LR
             Control[Control Backend]
             Identity[ZITADEL]
             Config[(PostgreSQL)]
-            Cache[(Redis)]
+            Cache[(Redis / Valkey)]
             Secrets[OpenBao]
             Audit[(Admin Audit Store)]
         end
@@ -27,7 +28,8 @@ flowchart LR
         subgraph Intelligence["Intelligence / Operations"]
             DMARC[DMARC + BIMI]
             DeepAI[Regional Deep AI]
-            Events[Durable Events]
+            Outbox[(Transactional Outbox)]
+            SQS[(Amazon SQS)]
             N8N[n8n]
             ClickUp[ClickUp]
             Notify[Notifications]
@@ -43,6 +45,7 @@ flowchart LR
     MailCore --> InlineML
     MailCore --> Policy
     Policy --> Quarantine
+    Policy --> Reinject --> Postfix
     MailCore --> Artifacts
 
     Admins --> UI --> Control
@@ -52,8 +55,10 @@ flowchart LR
     Control --> Secrets
     Control --> Audit
 
-    MailCore --> Events
-    Events --> DMARC
-    Events --> DeepAI
-    Events --> N8N --> ClickUp
-    Events --> Notify
+    MailCore --> Outbox
+    Control --> Outbox
+    DMARC --> Outbox
+    DeepAI --> Outbox
+    Outbox --> SQS
+    SQS --> N8N --> ClickUp
+    SQS --> Notify
