@@ -1,0 +1,54 @@
+flowchart TD
+    Gate[Phase -1 Security Program Gate]
+
+    Gov[Security Governance / Ownership]
+    TM[Threat Modeling]
+    Data[Data Classification / Privacy]
+    Crypto[Crypto / Network Baselines]
+    SDLC[Secure SDLC / Supply Chain]
+    VM[Vulnerability Management]
+    IR[Incident Response / Runbooks]
+    DR[Backup / Restore / DR]
+    Test[Security Testing / Penetration Testing]
+    Access[Access Governance]
+    Third[Third-Party Risk / Exceptions]
+    Metrics[Security Metrics / Evidence]
+
+    P0[Phase 0 Contracts / Security + UI Foundation]
+    Build[Implementation]
+    PreProd[Production Readiness Security Gate]
+    Prod[Production]
+    Improve[Incidents / Findings / Lessons]
+
+    Gate --> Gov
+    Gate --> TM
+    Gate --> Data
+    Gate --> Crypto
+    Gate --> SDLC
+    Gate --> VM
+    Gate --> IR
+    Gate --> DR
+    Gate --> Test
+    Gate --> Access
+    Gate --> Third
+    Gate --> Metrics
+
+    Gov --> P0
+    TM --> P0
+    Data --> P0
+    Crypto --> P0
+    SDLC --> P0
+    VM --> P0
+    IR --> P0
+    DR --> P0
+    Test --> P0
+    Access --> P0
+    Third --> P0
+    Metrics --> P0
+
+    P0 --> Build --> PreProd --> Prod
+    Prod --> Improve
+    Improve --> TM
+    Improve --> VM
+    Improve --> IR
+    Improve --> SDLC
