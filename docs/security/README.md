@@ -82,3 +82,5 @@ Examples:
 - [Mail Security Trust and Failure Model](14-MAIL-TRUST-FAILURE-MODEL.md)
 - [Security Runbooks](15-SECURITY-RUNBOOKS.md)
 - [Security Metrics](16-SECURITY-METRICS.md)
+- [Privacy, Retention and Deletion](17-PRIVACY-RETENTION-DELETION.md)
+- [Security Governance and Risk Ownership](18-SECURITY-GOVERNANCE.md)
