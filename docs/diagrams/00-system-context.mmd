@@ -21,6 +21,7 @@ flowchart LR
             Config[(PostgreSQL)]
             Cache[(Redis)]
             Secrets[OpenBao]
+            Audit[(Admin Audit Store)]
         end
 
         subgraph Intelligence["Intelligence / Operations"]
@@ -49,6 +50,7 @@ flowchart LR
     Control --> Config
     Control --> Cache
     Control --> Secrets
+    Control --> Audit
 
     MailCore --> Events
     Events --> DMARC
