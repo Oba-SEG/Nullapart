@@ -31,7 +31,10 @@ The following must exist before Phase 0 implementation:
 19. security metrics/KPIs;
 20. version-control, CI/CD, artifact-provenance and release controls;
 21. application-security invariants including ownership, validation, RLS, idempotency, OAST and safe errors;
-22. compliance assurance/control mapping.
+22. compliance assurance/control mapping;
+23. rate limiting and abuse protection;
+24. patching and dependency-version management;
+25. business-logic and policy-security invariants.
 
 No subsystem is exempt because it is "internal", "temporary", "development-only" or "not customer-facing".
 
@@ -90,3 +93,6 @@ Examples:
 - [Version Control, CI/CD and Release Security](19-VERSION-CONTROL-CICD.md)
 - [Application Security Control Baseline](20-APPLICATION-SECURITY-CONTROLS.md)
 - [Compliance Assurance and Control Mapping](21-COMPLIANCE-ASSURANCE.md)
+- [Rate Limiting and Abuse Protection](22-RATE-LIMITING-ABUSE-PROTECTION.md)
+- [Patching and Dependency Version Management](23-PATCHING-DEPENDENCY-VERSIONS.md)
+- [Business Logic and Policy Security](24-BUSINESS-LOGIC-POLICY-SECURITY.md)
