@@ -5,31 +5,38 @@ flowchart LR
     UI[Neumorphic Admin UI]
     Control[Control Backend / Modules]
     Auth[Authorization]
-    AuditWriter[Audit Writer]
+    Tx[PostgreSQL Transaction]
+    Resource[(Authoritative Resource State)]
     AuditDB[(Append-only Admin Audit Store)]
-    Streams[(Durable Event Stream)]
+    Outbox[(Transactional Outbox)]
+    SQS[(Amazon SQS)]
     Seg[SegLumberjack\nSanitized correlation only]
-    Archive[(Immutable S3 Audit Archive / Checkpoints)]
+    Archive[(Immutable S3 Object-Lock Audit Checkpoints)]
 
     System --> UI
     Support --> UI
     Customer --> UI
     UI --> Control --> Auth
 
-    Auth -->|authorized mutation| AuditWriter
-    AuditWriter --> AuditDB
-    AuditWriter --> Streams
-    AuditWriter -->|sanitized event| Seg
+    Auth -->|authorized mutation| Tx
+    Tx --> Resource
+    Tx --> AuditDB
+    Tx --> Outbox
 
-    AuditDB -. periodic integrity/archive .-> Archive
+    Outbox --> SQS
+    Control -->|sanitized telemetry| Seg
+
+    AuditDB -. signed/hash-chained checkpoints .-> Archive
 
     AuditDB -->|RBAC-scoped queries| Control
     Control -->|tables / filters / detail drawer| UI
 
-    Note1[Support audit views never expose message body or attachment content]
+    Note1[Support audit views never expose message body / raw MIME / attachment content]
     Note2[Impersonation preserves real actor + acting-as subject]
-    Note3[Audit DB is authoritative; SegLumberjack is diagnostic]
+    Note3[Mutation + audit + outbox commit atomically where possible]
+    Note4[Audit DB + immutable checkpoints are authoritative; SegLumberjack is diagnostic]
 
     AuditDB -.-> Note1
-    AuditWriter -.-> Note2
-    Seg -.-> Note3
+    Tx -.-> Note2
+    Tx -.-> Note3
+    Seg -.-> Note4
