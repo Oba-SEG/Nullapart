@@ -1,0 +1,42 @@
+flowchart TB
+    System[System Admin]
+    Support[Support Admin]
+    Owner[Customer Owner / Admin]
+    Roles[Customer RBAC Roles]
+
+    IDP[ZITADEL]
+    Backend[Nullapart Control Backend]
+    Audit[(Audit Log)]
+
+    SystemPolicies[System Policies]
+    SupportPolicies[Support Policies]
+    CustomerPolicies[Customer Policies]
+    Sensitive[Message Content / Quarantine / Remediation]
+
+    System --> IDP
+    Support --> IDP
+    Owner --> IDP
+    Roles --> IDP
+
+    IDP --> Backend
+
+    Backend --> SystemPolicies
+    Backend --> SupportPolicies
+    Backend --> CustomerPolicies
+    Backend --> Sensitive
+
+    System -. full administration .-> SystemPolicies
+    System -. full administration .-> SupportPolicies
+    System -. full administration .-> CustomerPolicies
+
+    Support -. permitted .-> SupportPolicies
+    Support -. permitted .-> CustomerPolicies
+    Support -. no body / attachment content .-> Sensitive
+
+    Owner -. tenant scope .-> CustomerPolicies
+    Owner -. assigns tenant permissions .-> Roles
+    Roles -. RBAC controlled .-> Sensitive
+
+    System -->|audited impersonation| Backend
+    Support -->|audited impersonation| Backend
+    Backend --> Audit
