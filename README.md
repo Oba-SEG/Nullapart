@@ -34,6 +34,7 @@ The architecture treats `nullapart.com` as the canonical product/control domain.
 - Amazon S3 is the expected production artifact backend behind a storage abstraction.
 - n8n remains for internal orchestration and ClickUp workflows.
 - SegLumberjack is the regional Sentry-compatible application observability platform; CloudWatch covers AWS infrastructure telemetry.
+- Administrative actions are recorded in a first-class append-only Admin Audit subsystem with RBAC-scoped UI views.
 - DMARC and BIMI are first-class product capabilities.
 - No public customer API in the initial implementation.
 - No end-user portal; administrative access only.
@@ -90,7 +91,8 @@ Start with:
 15. [Notifications and remediation](docs/14-NOTIFICATIONS-REMEDIATION.md)
 16. [AWS deployment topology](docs/15-AWS-DEPLOYMENT.md)
 17. [Build roadmap](docs/16-BUILD-ROADMAP.md)
-18. [NexusSEG reference principles](docs/99-NEXUSSEG-REFERENCE.md)
+18. [Administrative audit logging](docs/17-ADMIN-AUDIT-LOGGING.md)
+19. [NexusSEG reference principles](docs/99-NEXUSSEG-REFERENCE.md)
 
 ## Security posture
 
@@ -99,5 +101,5 @@ Nullapart is a security product. Security controls are designed into every featu
 See [SECURITY.md](SECURITY.md).
 ## Architecture diagrams
 
-See the [rendered architecture diagram set](docs/diagrams/README.md) for system context, inbound/outbound mail flow, regional AWS topology, RBAC, scanner fabric, data/storage, events, Deep AI, observability and trust boundaries.
+See the [rendered architecture diagram set](docs/diagrams/README.md) for system context, inbound/outbound mail flow, regional AWS topology, RBAC, scanner fabric, data/storage, events, Deep AI, observability, admin audit and trust boundaries.
 
