@@ -20,11 +20,14 @@ The additional domains are defensive/brand domains and may be used for carefully
 
 Default behaviour:
 
-- HTTPS on each alternate root redirects to the canonical `nullapart.com` destination.
+- HTTPS on each alternate root redirects to the canonical `nullapart.com` destination;
 - no shared browser session cookies across unrelated root domains;
 - HSTS enabled where appropriate;
+- restrictive CAA;
+- DNSSEC where supported/selected;
 - SPF/DKIM/DMARC configured deliberately for each domain;
-- unused mail domains use restrictive SPF/DMARC policies;
+- unused sending domains use restrictive SPF/DMARC;
+- domains/subdomains intentionally not receiving mail use Null MX;
 - DNS changes are managed as infrastructure code.
 
 ## Regional deployments
@@ -59,6 +62,8 @@ These are the identifiers shown in UI, URLs, logs and operations.
 
 Do not surface UUIDs as customer identities.
 
+The database stores structured region/deployment/sequence fields in addition to the visible customer ID so authorization and routing do not depend on parsing a string.
+
 ## Regional URLs
 
 Canonical control endpoints should follow one predictable naming model on `nullapart.com`.
@@ -84,11 +89,15 @@ Proposed host naming examples:
 
 Exact MX priority/topology remains a deployment decision.
 
+Public outbound SMTP node names/PTR identities may use more specific numbered hostnames where required for reputation and troubleshooting.
+
 ## Login region/deployment selector
 
 The main login experience selects the deployment before authentication.
 
 If only one deployment exists within a region, the UI can collapse redundant choices while still resolving to a specific deployment.
+
+The selected deployment determines the identity/control endpoint; it does not create a cross-region data session.
 
 ## Node naming
 
@@ -101,14 +110,20 @@ Examples:
 - `scan-doc-za-a-02`;
 - `scan-url-eu-a-01`.
 
-Every mail/scanner node has a unique IP and numbered hostname.
+Every runtime records a unique logical node identity and numbered hostname.
+
+Also record the current AWS runtime identity and IP address. Private IP addresses may change in container/orchestrated environments, so IP is an observed network attribute rather than the sole canonical identity.
+
+Internet-facing outbound SMTP nodes require stable public IP identity and PTR/rDNS planning.
 
 ## Regional independence
 
-Each deployment has unique URL, DNS, mail infrastructure, database, Redis, S3 namespace/buckets, OpenBao, ZITADEL, logs/Sentry routing, Deep AI and n8n deployment as required.
+Each deployment has unique URL, DNS, mail infrastructure, database, Redis/Valkey cache, S3 namespace/buckets, OpenBao, ZITADEL, SegLumberjack routing, CloudWatch infrastructure telemetry, Deep AI and n8n deployment as required.
 
 Customer data is not routinely queried across deployments.
 
 ## Data residency and integrations
 
 Before data leaves the deployment for any integration, configuration must define allowed data classification, endpoint region, exact fields transmitted, content/PII permission and retention expectations.
+
+Cross-region replication of customer mail/content is disabled by default and requires an explicit architecture/security decision rather than convenience configuration.
