@@ -8,7 +8,14 @@ flowchart LR
         DeepAI[Deep AI]
     end
 
+    subgraph Native["Native Mail/Security Daemons"]
+        Postfix[Postfix]
+        Rspamd[Rspamd]
+        ClamAV[ClamAV]
+    end
+
     SDK[Sentry-compatible SDK / Protocol]
+    Collector[Regional Native Log / Metrics Collector]
     Scrub[Telemetry Scrubbing / Enrichment]
     Seg[Regional SegLumberjack\nApplication Observability]
 
@@ -16,15 +23,16 @@ flowchart LR
         Compute[EC2 / ECS / Containers]
         LB[Load Balancers]
         DB[RDS / PostgreSQL]
-        Cache[Redis / Cache]
+        Cache[Redis / Valkey]
         Storage[S3]
         Network[VPC / Network]
     end
 
     CW[CloudWatch\nInfrastructure Telemetry]
 
-    Audit[(Authoritative Audit / Product DB)]
-    Streams[(Durable Event Stream)]
+    Audit[(Authoritative Admin Audit)]
+    Outbox[(PostgreSQL Outbox)]
+    SQS[(SQS Durable Events)]
 
     Frontend --> SDK
     MailCore --> SDK
@@ -35,6 +43,11 @@ flowchart LR
 
     SDK --> Scrub --> Seg
 
+    Postfix --> Collector
+    Rspamd --> Collector
+    ClamAV --> Collector
+    Collector --> Scrub
+
     Compute --> CW
     LB --> CW
     DB --> CW
@@ -43,14 +56,15 @@ flowchart LR
     Network --> CW
 
     Control --> Audit
-    MailCore --> Streams
-    Workers --> Streams
+    MailCore --> Outbox
+    Workers --> Outbox
+    Outbox --> SQS
 
     Note1[SegLumberjack is the app-observability backend]
     Note2[CloudWatch is complementary AWS infrastructure telemetry]
-    Note3[Audit/event stores remain authoritative records]
+    Note3[Audit and DB/outbox remain authoritative records]
 
     Seg -.-> Note1
     CW -.-> Note2
     Audit -.-> Note3
-    Streams -.-> Note3
+    Outbox -.-> Note3
