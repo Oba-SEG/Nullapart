@@ -66,6 +66,39 @@ See `docs/security/19-VERSION-CONTROL-CICD.md` and `docs/22-VERSIONING-RELEASE-M
 - required runbook inventory;
 - security monitoring/metrics.
 
+### Application-security invariants
+
+Accept explicit standards for:
+
+- authenticated-principal scoped filtering;
+- object ownership/BOLA/IDOR checks;
+- server-side authorization;
+- client vs server validation;
+- canonicalization;
+- PostgreSQL RLS defense in depth;
+- browser session/token storage;
+- CSRF;
+- idempotency;
+- safe errors;
+- SSRF protections;
+- OAST;
+- mass-assignment protection;
+- bounded pagination/search/export.
+
+See `docs/security/20-APPLICATION-SECURITY-CONTROLS.md`.
+
+### Compliance assurance
+
+Define:
+
+- control register/evidence model;
+- applicability/ownership process;
+- privacy/data-residency evidence;
+- third-party review evidence;
+- explicit prohibition on unverified certification/compliance claims.
+
+See `docs/security/21-COMPLIANCE-ASSURANCE.md`.
+
 ### Data/privacy
 
 - data-classification matrix;
@@ -114,7 +147,9 @@ Phase -1 evidence includes:
 - security-exception template/process;
 - runbook inventory;
 - production-readiness checklist;
-- accepted version-control/CI/CD/release policy.
+- accepted version-control/CI/CD/release policy;
+- accepted application-security baseline;
+- accepted compliance assurance/evidence process.
 
 ## Exit criteria
 
