@@ -33,9 +33,32 @@ It is not an external SaaS model dependency.
 
 `Qwen/Qwen3.8-27B` is the current leading candidate under evaluation.
 
-At the time of this architecture revision the official checkpoint is approximately 28B parameters, multimodal, Apache-2.0 licensed and compatible with common self-hosted serving stacks including vLLM.
+The official model is a 27B-class multimodal model released under Apache-2.0 and can be served through vLLM/OpenAI-compatible APIs.
 
-The model choice remains replaceable.
+The model choice remains replaceable and is not part of the Mail Core contract.
+
+## Regional capacity requirement
+
+A model choice is not considered production-ready until benchmarked in every intended AWS region/deployment class.
+
+AWS accelerated-compute availability differs materially by region. In particular, the available GPU/accelerator families in `af-south-1` may be much narrower than in large US/EU regions.
+
+Therefore the ZA inference design must be benchmarked explicitly for:
+
+- selected quantization;
+- VRAM requirement;
+- GPU count/topology;
+- tokens/second;
+- concurrent requests;
+- context-window target;
+- multimodal/image workload;
+- model load/start time;
+- failover/capacity reservation;
+- cost per analyzed message/case.
+
+Do not assume the same Qwen serving topology can be copied unchanged across ZA, EU, UK and US.
+
+If the candidate cannot meet a region's security/latency/cost targets on available regional infrastructure, the OpenAI-compatible contract allows Nullapart to use a different regional model or quantization while preserving product behaviour.
 
 ## Deep AI functions
 
@@ -69,7 +92,9 @@ Access is limited to explicitly eligible security records such as:
 
 The AI service does **not** receive broad unrestricted database/S3 access.
 
-Use a scoped artifact-access broker or short-lived signed/authorized artifact retrieval mechanism.
+Use a scoped artifact-access broker or short-lived authorized artifact retrieval mechanism.
+
+The access broker must enforce region/deployment, customer scope, case eligibility, purpose and expiry.
 
 ## Regionality
 
@@ -80,6 +105,8 @@ Examples:
 - ZA AI cannot retrieve EU customer artifacts;
 - ZAB uses its own endpoint/credentials/storage permissions;
 - inference requests do not cross regions by convenience.
+
+Model weights may be distributed to regions, but customer message data and inference payloads remain within the assigned region/deployment unless a separately approved data-residency rule explicitly permits otherwise.
 
 ## API contract
 
@@ -138,11 +165,11 @@ Policy or an authorized human determines disposition/remediation.
 
 ## Prompt-injection stance
 
-All message text is untrusted model input.
+All message text, images, documents and extracted content are untrusted model input.
 
 Content inside an email must never be treated as system/tool instructions.
 
-Model tools, if introduced later, require an explicit allowlist and server-side authorization.
+Model tools, if introduced later, require an explicit allowlist, server-side authorization and security review.
 
 ## Fine-tuning strategy
 
@@ -176,11 +203,13 @@ Training data requires:
 - security evaluation;
 - rollback capability.
 
+Customer message data selected for model development must have explicit governance and residency rules; operational content access does not automatically imply training consent or eligibility.
+
 ## Training/inference infrastructure
 
-Production inference is expected to run on AWS GPU infrastructure within the region/deployment.
+Production inference is expected to run on AWS accelerated-compute infrastructure within the region/deployment where suitable capacity exists.
 
-Fine-tuning can use dedicated GPU training infrastructure separate from the mail runtime.
+Fine-tuning can use dedicated GPU training infrastructure separate from the mail runtime, subject to training-data regional/governance rules.
 
 Model weights, adapters, datasets and evaluation artifacts should use regional encrypted storage with controlled IAM/workload access.
 
@@ -196,7 +225,7 @@ A policy may explicitly put a high-risk message into `HELD_FOR_DEEP_ANALYSIS`, s
 - ambiguous high-risk document.
 
 This path may take longer and is intentionally exceptional.
+
 ## Deep AI diagram
 
 See [Deep AI Flow](diagrams/08-deep-ai-flow.mmd).
-
