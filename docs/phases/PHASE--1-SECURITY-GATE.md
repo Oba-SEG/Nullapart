@@ -87,6 +87,24 @@ Accept explicit standards for:
 
 See `docs/security/20-APPLICATION-SECURITY-CONTROLS.md`.
 
+### Rate limiting, patching and business logic
+
+Define and accept:
+
+- web/API rate-limit layers and failure semantics;
+- SMTP connection/message/bulk rate-control rules;
+- high-risk action limits;
+- dependency pinning/update policy;
+- runtime/container/host patch process;
+- EOL policy;
+- business state-machine/policy-hierarchy invariants;
+- concurrency/idempotency rules for business operations.
+
+See:
+- `docs/security/22-RATE-LIMITING-ABUSE-PROTECTION.md`;
+- `docs/security/23-PATCHING-DEPENDENCY-VERSIONS.md`;
+- `docs/security/24-BUSINESS-LOGIC-POLICY-SECURITY.md`.
+
 ### Compliance assurance
 
 Define:
@@ -95,7 +113,8 @@ Define:
 - applicability/ownership process;
 - privacy/data-residency evidence;
 - third-party review evidence;
-- explicit prohibition on unverified certification/compliance claims.
+- explicit prohibition on unverified certification/compliance claims;
+- initial compliance documentation/register structure under `docs/compliance/`.
 
 See `docs/security/21-COMPLIANCE-ASSURANCE.md`.
 
