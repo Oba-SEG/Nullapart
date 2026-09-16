@@ -85,7 +85,11 @@ Start with:
 11. [AWS data and storage](docs/10-AWS-DATA-STORAGE.md)
 12. [Observability and secrets](docs/11-OBSERVABILITY-SECRETS.md)
 13. [UI design system](docs/12-UI-DESIGN-SYSTEM.md)
-14. [NexusSEG reference principles](docs/99-NEXUSSEG-REFERENCE.md)
+14. [SMTP response catalogue](docs/13-SMTP-RESPONSES.md)
+15. [Notifications and remediation](docs/14-NOTIFICATIONS-REMEDIATION.md)
+16. [AWS deployment topology](docs/15-AWS-DEPLOYMENT.md)
+17. [Build roadmap](docs/16-BUILD-ROADMAP.md)
+18. [NexusSEG reference principles](docs/99-NEXUSSEG-REFERENCE.md)
 
 ## Security posture
 
