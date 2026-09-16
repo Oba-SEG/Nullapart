@@ -4,23 +4,25 @@ flowchart TB
     Scanners[Scanner Nodes]
     DeepAI[Deep AI]
     DMARC[DMARC / BIMI]
-    Events[Event Consumers]
+    Consumers[Async Consumers]
 
-    PG[(PostgreSQL
-Source of Truth)]
-    Redis[(Redis
-Cache / Streams / Counters)]
-    S3[(Amazon S3
-Artifacts / Quarantine)]
-    Queue[(Postfix Queue)]
+    PG[(PostgreSQL\nSource of Truth)]
+    Audit[(Admin Audit Store\nAppend-only)]
+    Outbox[(Transactional Outbox)]
+    Redis[(Redis / Valkey\nCache / Counters / Greylisting)]
+    SQS[(Amazon SQS\nDurable Async Events)]
+    S3[(Amazon S3\nArtifacts / Quarantine / Audit Checkpoints)]
+    Queue[(Postfix Durable Mail Queue)]
     KMS[AWS KMS]
     Bao[OpenBao]
 
     Control --> PG
     Control --> Audit
+    Control --> Outbox
     Control --> Redis
 
     MailCore --> PG
+    MailCore --> Outbox
     MailCore --> Redis
     MailCore --> Queue
     MailCore --> S3
@@ -30,11 +32,15 @@ Artifacts / Quarantine)]
 
     DeepAI -->|scoped eligible artifacts| S3
     DMARC --> PG
-    Events --> Redis
+
+    Outbox --> SQS --> Consumers
+
+    Audit -. immutable checkpoints .-> S3
 
     KMS --> S3
     KMS --> PG
     KMS --> Audit
+
     Bao --> Control
     Bao --> MailCore
     Bao --> Scanners
