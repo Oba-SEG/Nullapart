@@ -32,6 +32,20 @@ Potential frameworks/regimes to evaluate as the product matures include:
 
 This list is planning context, not a certification claim.
 
+## Compliance record set
+
+The working documentation/registers live under `docs/compliance/`:
+
+- scope/applicability;
+- control register;
+- evidence catalog;
+- data-processing register;
+- third-party register;
+- risk/exception register;
+- production-readiness evidence.
+
+These records are populated as implementation/operations evidence becomes real.
+
 ## Control register
 
 Maintain a security/control register with:
