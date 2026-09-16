@@ -15,6 +15,9 @@ Nullapart is a security product. Every feature is designed with explicit trust b
 - Short-lived certificates or credentials are preferred.
 - Management, metrics, health-detail and debug endpoints must not be publicly reachable.
 - Public customer API access is not part of the initial product.
+- All System, Support and Customer administrative accounts require MFA.
+- System/Support should prefer phishing-resistant WebAuthn/passkey/security-key authentication where supported.
+- High-risk operations may require step-up authentication.
 
 ## Authorization
 
@@ -26,7 +29,9 @@ Administrative levels:
 - Support.
 - Customer Admin.
 
-Customer RBAC may further restrict message content, headers, attachments, quarantine release and remediation.
+Customer RBAC may further restrict message content, headers, attachments, quarantine release, audit access and remediation.
+
+No frontend-only permission check is sufficient.
 
 ## Impersonation
 
@@ -42,19 +47,45 @@ Every impersonated action retains:
 - session start/end;
 - action history.
 
+Impersonation cannot expand the real actor's platform permission set.
+
 ## Sensitive message content
 
-System Admin may access complete message detail where required.
+System Admin may access complete message detail where explicitly permitted.
 
-Support may access operational metadata, routing, scanner outcomes, policy decisions and transmission traces but must not receive message body/attachment content.
+Support may access operational metadata, routing, scanner outcomes, policy decisions and transmission traces but must not receive message body, raw MIME or attachment content.
 
 Customer Admin content access is controlled by customer RBAC.
+
+Content access restrictions must apply to UI pages, APIs, search snippets, exports, audit records and direct artifact/download endpoints.
+
+## Hostile message rendering
+
+Received email content is attacker-controlled.
+
+Nullapart must never render received HTML directly in the trusted administration DOM.
+
+Required controls include:
+
+- sanitization;
+- isolated/sandboxed rendering;
+- scripts/forms/event handlers removed;
+- remote resources blocked by default;
+- restrictive CSP;
+- no access to Nullapart session cookies/storage;
+- permission-checked attachment access;
+- separate artifact/download origin where practical;
+- mandatory audit for privileged content access.
+
+See `docs/19-SECURE-MESSAGE-RENDERING.md`.
 
 ## Administrative audit
 
 Administrative audit is a first-class authoritative security record, separate from application observability.
 
-All security-relevant System Admin, Support and Customer Admin actions must generate server-side audit entries.
+All security-relevant System Admin, Support and Customer Admin actions generate server-side audit entries.
+
+Where possible, the administrative mutation, audit row and transactional-outbox row commit atomically in the same PostgreSQL transaction.
 
 Requirements include:
 
@@ -67,7 +98,8 @@ Requirements include:
 - safe before/after change information;
 - reason for high-risk actions where required;
 - trace/correlation identifiers;
-- retention and integrity controls.
+- retention and integrity controls;
+- tamper-evident immutable checkpoints/archives.
 
 Audit data must not contain secrets, message bodies, raw MIME or attachment contents.
 
@@ -89,6 +121,8 @@ Preferred design:
 - per-service credentials;
 - automatic rotation;
 - scoped IAM roles.
+
+OpenBao production deployment must include HA, bootstrap/unseal/recovery/backup and PKI-rotation design; it must not be a single-node dependency.
 
 ## Regional data handling
 
@@ -114,23 +148,54 @@ SegLumberjack is the primary regional application observability platform for app
 
 The architecture does **not** require a separate hosted Sentry service. "Sentry" in implementation guidance refers to the SDK/protocol standard unless a separate service is explicitly approved.
 
-AWS CloudWatch is complementary and is used primarily for AWS infrastructure and managed-service telemetry such as EC2/ECS, load balancers, RDS, cache, network, platform metrics and AWS alarms. CloudWatch is not a substitute for the SegLumberjack application-observability role.
+Native daemons such as Postfix/Rspamd/ClamAV use an explicit regional log/metrics collector path so their telemetry is not silently omitted.
 
-Application telemetry should include region, deployment, node ID, hostname, node IP, service, release, trace ID, Nullapart message ID, customer ID, actor identity when administrative, event/reason code and timing where applicable.
+AWS CloudWatch is complementary and is used primarily for AWS infrastructure and managed-service telemetry. CloudWatch is not a substitute for the SegLumberjack application-observability role.
 
-Before telemetry leaves the application process, scrub message bodies, raw MIME, attachment content, passwords, tokens, cookies, private keys, credentials and other sensitive fields.
+Application telemetry should include region, deployment, node ID, hostname, node/runtime IP, service, release, trace ID, Nullapart transaction/tenant-message ID, customer ID, actor identity when administrative, event/reason code and timing where applicable.
+
+Before telemetry leaves the application process/collector, scrub message bodies, raw MIME, attachment content, passwords, tokens, cookies, private keys, credentials and other sensitive fields.
+
+## Durable events
+
+Critical asynchronous events use an explicitly durable architecture.
+
+Preferred AWS baseline:
+
+- PostgreSQL transactional outbox;
+- SQS;
+- idempotent consumers;
+- DLQs for critical consumers.
+
+Redis/Valkey cache is not assumed to be a durable event bus.
+
+See `docs/20-EVENT-DURABILITY.md`.
 
 ## Untrusted email input
 
-Everything received from email is untrusted, including MIME, headers, URLs, filenames, HTML, documents, archives, embedded messages and text shown to AI.
+Everything received from email is untrusted, including MIME, headers, URLs, filenames, HTML, documents, archives, embedded messages and text/images shown to AI.
 
 Nullapart generates its own trusted authentication results.
 
 Prompt text inside email is data, never AI instructions.
 
+## Scanner/parser resource safety
+
+Every parser/scanner must have explicit CPU, memory, time, nesting, decompression, artifact-count and temporary-storage limits.
+
+Encrypted/unscannable content and scanner resource-limit failures must not be silently treated as clean.
+
 ## Open-source dependencies
 
 Every dependency requires pinned versions, license review, SBOM inclusion, security-advisory monitoring, provenance/source records and an upgrade strategy.
+
+Identity/platform candidates with copyleft licenses such as AGPL require explicit licensing review before final selection or modification.
+
+## AWS SMTP commissioning
+
+Each direct-to-MX regional deployment requires explicit AWS port-25 commissioning, stable outbound public IP identity, forward/PTR DNS, HELO identity, mail authentication and reputation warm-up before production.
+
+See `docs/21-AWS-SMTP-COMMISSIONING.md`.
 
 ## Build completion
 
