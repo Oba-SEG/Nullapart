@@ -30,7 +30,8 @@ Each scanner produces a normalized result containing:
 - engine/ruleset version internally;
 - start/end/duration;
 - status;
-- findings.
+- findings;
+- resource-limit/timeout reason where applicable.
 
 Customer-facing UI uses product-neutral labels such as:
 
@@ -38,15 +39,16 @@ Customer-facing UI uses product-neutral labels such as:
 - Document analysis — Clean;
 - URL analysis — Clear.
 
-Backend technology names are not shown in normal customer/support-facing product views.
+Backend technology names are not shown in normal customer-facing product views. Support/System engineering diagnostics may expose implementation details only where their role permits it.
 
 ## SecurityFinding
 
 Common logical fields:
 
 - finding ID;
-- Nullapart message ID;
+- SMTP transaction ID and/or tenant message ID;
 - artifact reference;
+- scope: shared transaction or tenant-specific;
 - category;
 - subtype;
 - severity;
@@ -69,6 +71,8 @@ Categories include malware, phishing, spam, impersonation, credential lure, susp
 
 UNKNOWN/ERROR are never silently converted to CLEAN.
 
+Resource limits/timeouts produce explicit UNKNOWN/ERROR/SUSPICIOUS results according to scanner policy; they do not masquerade as successful scans.
+
 ## Execution classes
 
 - FAST_REQUIRED
@@ -78,20 +82,68 @@ UNKNOWN/ERROR are never silently converted to CLEAN.
 
 Every scanner defines timeout, concurrency, required/optional state and failure semantics.
 
+## Resource-exhaustion protection
+
+Email scanning is an adversarial workload. Every parser/scanner must have explicit hard limits.
+
+At minimum define limits for:
+
+- MIME nesting depth;
+- number of MIME parts/attachments;
+- maximum artifact/message size;
+- archive recursion depth;
+- total expanded/decompressed bytes;
+- compression ratio;
+- number of archive entries;
+- nested archive count;
+- parser CPU/wall-clock time;
+- process/container memory;
+- temporary disk usage;
+- document page count;
+- OCR image dimensions/pixel count;
+- extracted text length;
+- URL/QR count;
+- macro/object count where applicable.
+
+Encrypted/password-protected archives/documents return an explicit state that policy can handle; they are never treated as clean merely because content could not be inspected.
+
+## Parser isolation
+
+High-risk native parsers should run with strong process/container isolation:
+
+- non-root;
+- minimal filesystem access;
+- no unnecessary network access;
+- CPU/memory/time limits;
+- bounded temporary storage;
+- seccomp/capability reduction where practical;
+- separate failure domain for parsers with a history of memory-safety vulnerabilities.
+
+A parser crash should fail the scanner request, not the entire Mail Core.
+
 ## Node identity
 
-Every scanner node has a unique IP and numbered hostname.
+Every scanner runtime records:
 
-Internal telemetry records the exact node for every scan.
+- stable/logical node ID;
+- numbered hostname;
+- region/deployment;
+- current IP;
+- AWS runtime/task/instance identity;
+- scanner release/ruleset.
+
+The current IP is useful telemetry but may be ephemeral in container environments; it is not the sole canonical node identity.
+
+Internal telemetry records the exact runtime that handled every scan.
 
 ## Topology rule
 
 Do not prematurely force every scanner into its own container, and do not prematurely combine them all.
 
-Separate when justified by isolation, heavy dependencies, independent scaling, security boundary or resource profile.
+Separate when justified by isolation, heavy dependencies, independent scaling, security boundary, parser risk or resource profile.
 
 The common scanner contract allows later relocation without redesigning policy or Mail Core.
+
 ## Scanner diagram
 
 See [Scanner Fabric](diagrams/05-scanner-fabric.mmd).
-
