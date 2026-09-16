@@ -1,0 +1,26 @@
+flowchart TD
+    Eligible{Eligible Security Case?}
+    Quarantine[Quarantined]
+    Blocked[Blocked]
+    Reported[Reported]
+    Held[Held for Deep Analysis]
+    Review[False Positive / Negative Review]
+
+    Broker[Scoped Artifact Access / AI Broker]
+    API[Authenticated OpenAI-Compatible API]
+    Model[Regional Qwen3.8-27B Candidate]
+    Result[Structured Deep-AI Finding]
+    Policy[Policy / Authorized Human]
+    Action[Disposition / Remediation / Case Update]
+
+    Quarantine --> Eligible
+    Blocked --> Eligible
+    Reported --> Eligible
+    Held --> Eligible
+    Review --> Eligible
+
+    Eligible -->|Yes| Broker
+    Broker --> API --> Model --> Result
+    Result --> Policy --> Action
+
+    Eligible -->|No| Stop[No Deep-AI Content Access]
