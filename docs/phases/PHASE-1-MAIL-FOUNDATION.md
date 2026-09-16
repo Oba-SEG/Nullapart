@@ -23,7 +23,7 @@ Implement/configure:
 - SMTP/ESMTP;
 - STARTTLS;
 - size/resource controls;
-- connection/rate controls;
+- connection/rate controls by IP/network/tenant as appropriate;
 - relay restrictions;
 - HELO checks;
 - recipient/domain lookup;
@@ -143,6 +143,21 @@ Build at least:
 - System/Support operational mail-node state.
 
 Support receives no body/attachment content.
+
+## Network / port obligations
+
+Follow `docs/24-CONTAINER-LOADBALANCING-NETWORK.md`.
+
+For public mail nodes:
+
+- TCP 25 exposure is deliberate and documented;
+- no public SSH;
+- outbound EIP/PTR identity preserved;
+- Security Groups allow only required public/private flows;
+- scanner/control/data ports remain private;
+- direct MX to commissioned Postfix nodes is the baseline.
+
+If an NLB is introduced, client-IP preservation/STARTTLS/timeout/rate-limit behavior must be proven before acceptance.
 
 ## Operational evidence
 
