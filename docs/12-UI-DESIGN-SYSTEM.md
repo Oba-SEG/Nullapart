@@ -169,6 +169,22 @@ The UI shows security state before preview/download and warns for risky file typ
 
 See [Secure Message Rendering and Artifact Access](19-SECURE-MESSAGE-RENDERING.md).
 
+## Client validation and authentication storage
+
+Client-side validation provides immediate usable feedback but is never authoritative.
+
+Every validation/security/business rule that affects acceptance or mutation is repeated/enforced by the backend and, where appropriate, database constraints.
+
+The UI must:
+
+- show server validation errors next to the relevant field/action;
+- preserve stable product error codes/correlation IDs for supportability;
+- never display raw stack traces/database errors;
+- never assume hiding a control is authorization;
+- never store authentication or refresh tokens in Local Storage/Session Storage;
+- use the approved secure session/cookie architecture;
+- avoid persisting sensitive message content in browser storage/caches beyond what is strictly necessary.
+
 ## Policy editor
 
 Policies use guided forms, toggles, ranges, selectors and rule builders.
