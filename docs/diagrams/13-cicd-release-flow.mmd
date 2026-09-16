@@ -1,0 +1,45 @@
+flowchart LR
+    Dev[Human / AI Developer]
+    Branch[Short-lived Branch]
+    PR[Pull Request]
+    Review[Required Review / CODEOWNERS]
+    PRCI[PR CI\nBuild + Tests + Security Gates]
+    Main[Protected main]
+    Build[Main Build]
+    Artifact[Immutable Artifact\nVersion + Git SHA + Digest]
+    SBOM[SBOM / Provenance / Attestation]
+    Registry[(Approved Registry)]
+    DevEnv[Development Environment]
+    Stage[Staging Environment]
+    Approval[Production Approval]
+    Prod[Production Deployment\nExplicit Region / Deployment]
+    Verify[Post-deploy Verification]
+    Rollback[Rollback / Containment]
+
+    Dev --> Branch --> PR
+    PR --> Review
+    PR --> PRCI
+    Review --> Main
+    PRCI -->|all required checks pass| Main
+    Main --> Build --> Artifact
+    Build --> SBOM
+    Artifact --> Registry
+    SBOM --> Registry
+
+    Registry -->|same digest| DevEnv
+    DevEnv -->|promote same digest| Stage
+    Stage --> Approval
+    Approval -->|GitHub OIDC / scoped AWS role| Prod
+    Prod --> Verify
+    Verify -->|failure| Rollback
+    Rollback --> Registry
+
+    Note1[No direct normal push to main]
+    Note2[No long-lived AWS deployment keys]
+    Note3[Do not rebuild per environment]
+    Note4[AI may prepare; cannot self-approve production]
+
+    Main -.-> Note1
+    Approval -.-> Note2
+    Stage -.-> Note3
+    Approval -.-> Note4
