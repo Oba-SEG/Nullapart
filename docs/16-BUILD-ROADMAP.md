@@ -15,7 +15,8 @@ Define and test:
 - SMTP reason catalogue;
 - event contract;
 - ArtifactStore contract;
-- audit contract;
+- Admin Audit event/storage/query contract;
+- Admin Audit UI table/filter/detail design;
 - neumorphic design tokens/layout shell;
 - Sentry/logging baseline.
 
@@ -69,7 +70,8 @@ Build:
 - runtime cache visibility/refresh;
 - tenant lifecycle;
 - node/scanner health;
-- full trace/message permission model.
+- full trace/message permission model;
+- append-only Admin Audit store, RBAC queries and UI.
 
 ## Phase 4 — inline ML
 
@@ -143,7 +145,7 @@ Across every phase:
 - per-service identity;
 - Sentry-compatible instrumentation routed to SegLumberjack;
 - CloudWatch for AWS infrastructure telemetry;
-- audit;
+- first-class Admin Audit subsystem and UI;
 - regional isolation;
 - UI with feature;
 - tests with feature;
