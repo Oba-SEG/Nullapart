@@ -44,6 +44,9 @@ If rendered SVG/PNG/embedded Markdown diagrams are added later, they should be g
 12. [Administrative audit architecture](11-admin-audit-architecture.mmd)
     - Atomic mutation/audit/outbox pattern, RBAC-scoped UI, immutable audit checkpoints and diagnostic SegLumberjack correlation.
 
+13. [Security program gate](12-security-program-gate.mmd)
+    - Phase -1 governance/process controls that must be accepted before Phase 0 implementation, plus production-readiness and continuous-improvement feedback.
+
 ## Diagram rules
 
 - Update the relevant `.mmd` file whenever its architecture changes.
