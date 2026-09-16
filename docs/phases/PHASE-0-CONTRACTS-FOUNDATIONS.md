@@ -155,19 +155,76 @@ Create:
 - security regression test location;
 - fuzzing harness placeholders for MIME/contracts.
 
-## CI/CD foundation
+## Version-control and CI/CD foundation
+
+Implement the approved policy in `docs/security/19-VERSION-CONTROL-CICD.md`.
+
+### Repository controls
+
+Establish:
+
+- protected `main`;
+- pull-request-only normal changes;
+- required checks;
+- required reviews;
+- force-push protection;
+- CODEOWNERS once actual owners are known;
+- PR template;
+- release/tag naming;
+- GitHub environment structure.
+
+### Pull-request CI
 
 At minimum:
 
 - formatting/lint;
-- tests;
+- compile/build;
+- unit tests;
+- relevant integration/security/UI tests;
 - dependency/SCA;
 - secret scan;
 - SAST where selected;
-- SBOM;
-- container scan when images exist;
+- SBOM generation/validation;
 - license checks;
-- migration validation.
+- migration validation;
+- IaC scan when infrastructure exists;
+- container build/scan when image definitions exist.
+
+### Main/release build
+
+Establish:
+
+- immutable artifact/image creation;
+- Git SHA + semantic version metadata;
+- registry publishing;
+- SBOM/provenance association;
+- artifact signing/attestation where selected;
+- no production deployment by mutable `latest`.
+
+### AWS deployment identity
+
+Prepare GitHub Actions OIDC trust with scoped AWS roles.
+
+Do not introduce long-lived AWS access keys for routine deployment.
+
+Roles/environments must separate development/staging/production and deployment regions.
+
+### Environment promotion
+
+The pipeline promotes the same immutable digest from lower environments to production. Environment configuration/secrets remain external.
+
+### Migration/release controls
+
+Implement:
+
+- immutable migration files after use;
+- migration validation;
+- production migration approval;
+- release notes/changelog mechanism;
+- rollback/containment metadata.
+
+Detailed policy: `docs/security/19-VERSION-CONTROL-CICD.md`.
+Version contract: `docs/22-VERSIONING-RELEASE-MANAGEMENT.md`.
 
 ## Observability foundation
 
@@ -204,7 +261,9 @@ Phase 0 is complete when:
 - policy/event/audit/artifact contracts are versioned;
 - UI shell/design tokens exist and pass accessibility baseline;
 - authorization/audit infrastructure patterns are established;
-- CI security gates run;
+- repository protection and CI security gates run;
+- immutable build/release identity is established;
+- CI AWS access uses scoped OIDC roles rather than long-lived deployment keys;
 - observability context/scrubbing exists;
 - architecture docs and contracts match implementation.
 
