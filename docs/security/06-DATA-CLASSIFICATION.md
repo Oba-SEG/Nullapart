@@ -2,21 +2,10 @@
 
 ## Classes
 
-### PUBLIC
-
-Intended for public disclosure.
-
-### INTERNAL
-
-Operational information not intended for public release.
-
-### CONFIDENTIAL
-
-Customer/security/operational information requiring controlled access.
-
-### RESTRICTED
-
-Highest-sensitivity data such as message content, secrets, credentials, private keys and sensitive mailbox artifacts.
+- **PUBLIC** — intended for public disclosure.
+- **INTERNAL** — operational information not intended for public release.
+- **CONFIDENTIAL** — customer/security/operational information requiring controlled access.
+- **RESTRICTED** — message content, credentials, private keys, secrets and sensitive mailbox artifacts.
 
 ## Baseline matrix
 
@@ -28,7 +17,7 @@ Highest-sensitivity data such as message content, secrets, credentials, private 
 | Raw MIME | Restricted | No | Authorized + audited | No | No | Eligible cases only |
 | Attachment | Restricted | No | Authorized + audited | No | No | Eligible cases only |
 | Extracted document text | Restricted | No | Authorized | No | No | Eligible cases only |
-| SecurityFinding | Confidential | Scoped | Yes | Sanitized | Minimal | Yes when relevant |
+| SecurityFinding | Confidential | Scoped | Yes | Sanitized | Minimal | When relevant |
 | Admin audit | Confidential | Scoped | Yes | Sanitized correlation | No | No |
 | Password/token/private key | Restricted | No | Limited operational access | Never | Never | Never |
 | Connector credential | Restricted | No | Limited operational access | Never | Never | Never |
@@ -36,35 +25,16 @@ Highest-sensitivity data such as message content, secrets, credentials, private 
 
 ## Handling
 
-RESTRICTED data requires:
-
-- encryption in transit/at rest;
-- least-privilege access;
-- explicit retention;
-- access audit where applicable;
-- no casual export;
-- regional-residency enforcement;
-- no use in development without approved sanitization.
+RESTRICTED data requires encryption, least privilege, explicit retention, access audit where applicable, regional-residency enforcement and no casual export.
 
 ## Training data
 
-Operational content access does not imply training permission.
-
-Training eligibility requires separate governance, provenance and retention decisions.
+Operational content access does not imply training permission. Training eligibility has separate governance/provenance.
 
 ## Logging
 
 Never log secrets or message content by default.
 
-Observability fields must be explicitly classified/scrubbed.
-
 ## Export
 
-Every export path must declare:
-
-- data classes;
-- authorized roles;
-- destination;
-- retention;
-- regional implications;
-- audit behaviour.
+Every export path declares data classes, authorized roles, destination, retention, regional implications and audit behaviour.
