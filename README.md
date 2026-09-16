@@ -96,3 +96,7 @@ Start with:
 Nullapart is a security product. Security controls are designed into every feature rather than applied afterward. Every network API is authenticated, administrative operations are audited, service identities are unique, message content is tightly access-controlled, regional boundaries are explicit, and untrusted email data is never treated as trusted instructions.
 
 See [SECURITY.md](SECURITY.md).
+## Architecture diagrams
+
+See the [rendered architecture diagram set](docs/diagrams/README.md) for system context, inbound/outbound mail flow, regional AWS topology, RBAC, scanner fabric, data/storage, events, Deep AI and trust boundaries.
+
