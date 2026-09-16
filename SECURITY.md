@@ -6,7 +6,7 @@ These rules apply to architecture, implementation, operations, UI and testing.
 
 No Nullapart implementation begins before the [Security Program](docs/security/README.md) is defined and accepted.
 
-The security program establishes governance, threat modeling, secure SDLC, vulnerability management, incident response, access governance, data classification, privacy/retention/deletion, cryptographic/network baselines, backup/DR, supply-chain controls, security testing, abuse response, third-party risk, exceptions, mail trust/failure semantics, runbooks and security metrics.
+The security program establishes governance, threat modeling, secure SDLC, vulnerability management, incident response, access governance, data classification, privacy/retention/deletion, cryptographic/network baselines, backup/DR, supply-chain controls, security testing, abuse response, third-party risk, exceptions, mail failure semantics, runbooks and security metrics.
 
 Architecture and implementation changes must comply with these controls or use the formal time-limited security-exception process.
 
@@ -70,11 +70,72 @@ Protocol-mandated short-lived OIDC authorization callback values are immediately
 
 Restricted mail-artifact access should not expose reusable S3 presigned query credentials to the browser as the normal design.
 
+## TLS trust, mTLS and certificate pinning
+
+Certificate trust follows `docs/security/25-CERTIFICATE-TRUST-PINNING.md`.
+
+Rules:
+
+- normal modern PKI validation is the default;
+- browser-facing Nullapart does not use HPKP/Public-Key-Pins;
+- HSTS/CAA/certificate monitoring and automated renewal protect public HTTPS;
+- internal high-value service communication may use regional private PKI/mTLS;
+- TLS verification is never disabled for convenience;
+- any future non-browser SPKI pinning requires explicit threat model, backup pinset, rotation and recovery design.
+
+## HMAC and webhook integrity
+
+HMAC/webhook signing follows `docs/security/26-HMAC-SIGNING-WEBHOOKS.md`.
+
+For new Nullapart shared-secret signing protocols:
+
+- use HMAC-SHA-256;
+- keys are purpose-scoped RESTRICTED secrets;
+- use deterministic raw-body based canonicalization;
+- include version/timestamp/event identity as required;
+- verify with constant-time comparison;
+- prevent replay with timestamp/event-id/idempotency controls;
+- rotate keys with bounded overlap;
+- never place HMAC secrets/signatures-as-credentials in URLs.
+
+Provider callbacks use the provider's documented verification mechanism rather than a home-grown replacement.
+
+## API compatibility and feature switches
+
+API/version/feature-switch governance follows `docs/27-API-VERSIONING-FEATURE-FLAGS.md`.
+
+Rules:
+
+- initial Control Plane API uses `/api/v1` compatibility semantics;
+- independently consumed event/scanner/config/AI skill contracts are versioned;
+- breaking changes require explicit new version/coordinated migration;
+- feature switches are server-authoritative configuration, not authorization;
+- release/experiment flags have owner/removal lifecycle;
+- kill switches produce explicit safe degraded behavior;
+- feature additions require threat/data/API/UI/audit/rate-limit/failure/test/compliance review.
+
+## ML / LLM skills and tools
+
+Production model capabilities follow `docs/25-AI-LLM-SKILLS-TOOLS.md`.
+
+Rules:
+
+- models operate through versioned skills with explicit input/output schemas;
+- tools are server-enforced capability adapters, not unrestricted SDKs/credentials;
+- initial Deep-AI tools are read-only where possible;
+- message/tool content is untrusted data and cannot redefine authorization;
+- model output/evidence references are schema/provenance validated;
+- context/token budgets and tool limits are explicit;
+- the model cannot self-authorize administrative, mail, policy or remediation actions;
+- coding-agent repository/cloud permissions never imply production model permissions.
+
 ## Patching and dependency versions
 
-Patching/version management follows `docs/security/23-PATCHING-DEPENDENCY-VERSIONS.md`.
+Patching/version management follows `docs/security/23-PATCHING-DEPENDENCY-VERSIONS.md` and stack compatibility follows `docs/26-PACKAGE-COMPATIBILITY.md`.
 
 Dependencies, base images, actions, models and rulesets are pinned/reproducible; production containers are rebuilt and promoted rather than patched interactively.
+
+Incompatible dependencies are resolved deliberately rather than by disabling peer/type/security checks.
 
 ## Authorization
 
@@ -203,7 +264,7 @@ Nullapart application
 
 SegLumberjack is the primary regional application observability platform for application errors, exceptions, traces/performance telemetry where supported, release context and service/node correlation.
 
-The architecture does **not** require a separate hosted Sentry service. "Sentry" in implementation guidance refers to the SDK/protocol standard unless a separate service is explicitly approved.
+The architecture does **not** require a separate hosted Sentry service. "Sentry" in implementation guidance refers to the SDK/protocol standard unless a separate Sentry service is explicitly approved.
 
 Native daemons such as Postfix/Rspamd/ClamAV use an explicit regional log/metrics collector path so their telemetry is not silently omitted.
 
