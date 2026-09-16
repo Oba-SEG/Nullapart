@@ -1,0 +1,85 @@
+# Nullapart Coding Agent Instructions
+
+This repository is architecture/security-first.
+
+Before modifying implementation:
+
+1. read `SECURITY.md`;
+2. read `docs/16-BUILD-ROADMAP.md`;
+3. identify and read the owning phase under `docs/phases/`;
+4. read only the architecture/security documents directly relevant to the task;
+5. inspect existing abstractions before creating new ones.
+
+Detailed AI-agent operating rules: `docs/ai/CODING-AGENT-OPERATING-MODEL.md`.
+
+## Non-negotiable rules
+
+- Do not modify `obakeng-SEG/NexusSEG` unless explicitly requested.
+- The canonical repository/product is Nullapart.
+- Do not recreate NexusSEG-style service-per-feature synchronous HTTP chains.
+- Every network API is authenticated unless the protocol uses an explicitly designed alternative trust mechanism.
+- Server-side authorization and resource ownership checks are mandatory.
+- Tenant/customer scope derives from authenticated context, not client IDs.
+- PostgreSQL RLS is defense in depth where applicable.
+- Client validation never replaces server validation.
+- Auth/refresh tokens are not stored in browser Local Storage/Session Storage/IndexedDB.
+- Secrets/auth credentials never go in URLs.
+- Retryable/destructive side effects require idempotency.
+- Administrative/security actions are audited.
+- Support cannot access message body/raw MIME/attachments.
+- Untrusted email content never executes in the trusted UI origin.
+- Unknown/scanner/model failure never silently becomes CLEAN.
+- No raw JSON admin UI.
+- No public database/cache/secrets/scanner/Deep-AI management endpoints.
+- Do not disable CI/security controls to complete a task.
+- Do not claim compliance/certification without verified evidence/audit basis.
+
+## Architecture defaults
+
+- Rust Mail Core.
+- Postfix MTA/durable queue + Rspamd bounded SMTP/Milter work.
+- PostgreSQL authoritative data + transactional outbox.
+- SQS durable async path.
+- Redis/Valkey runtime cache/counters.
+- S3 ArtifactStore production backend.
+- ECS ordinary container baseline.
+- dedicated EC2 mail nodes for stable SMTP identity/queue lifecycle.
+- ALB/WAF for HTTPS Control Plane.
+- direct commissioned Postfix MX nodes for SMTP baseline.
+- React/TypeScript/Vite frontend baseline.
+- SegLumberjack receives Sentry-compatible application telemetry.
+- CloudWatch covers AWS infrastructure telemetry.
+
+## Change discipline
+
+Do not introduce a new:
+
+- service/process;
+- datastore;
+- public endpoint;
+- API major version;
+- persistent identifier type;
+- third-party data export;
+- LLM action tool;
+- EKS/Kubernetes dependency
+
+without checking whether the architecture explicitly allows it.
+
+## Required completion
+
+For a feature, include as applicable:
+
+- implementation;
+- backend authorization/ownership;
+- validation;
+- persistence/RLS;
+- audit;
+- rate limiting;
+- idempotency;
+- safe errors;
+- UI;
+- observability;
+- tests;
+- docs/runbook updates.
+
+When documentation and implementation disagree, treat it as a defect: either make code match, or deliberately update/review architecture first.
