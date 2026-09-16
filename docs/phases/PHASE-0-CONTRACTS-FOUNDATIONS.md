@@ -153,6 +153,61 @@ Establish a modular-monolith control backend boundary with:
 - ownership-scoped repository/query conventions;
 - authoritative server-side validation.
 
+## Frontend implementation baseline
+
+Implement the stack and security architecture in `docs/23-FRONTEND-ARCHITECTURE.md`.
+
+Baseline:
+
+- React + TypeScript;
+- Vite;
+- TanStack Router/Query/Table;
+- React Hook Form + Zod;
+- Radix Primitives;
+- custom CSS-token/CSS-Module neumorphic design system;
+- pnpm lockfile;
+- Vitest/Testing Library/Playwright;
+- Sentry-compatible browser SDK -> regional SegLumberjack.
+
+Use Node.js LTS for CI/build.
+
+No browser Local Storage/Session Storage authentication tokens.
+
+## Infrastructure/container/network baseline
+
+Establish the IaC foundation described in `docs/24-CONTAINER-LOADBALANCING-NETWORK.md`:
+
+- ECS baseline for normal containers;
+- dedicated mail-node exception;
+- public ALB/WAF for HTTPS Control Plane;
+- direct MX/Postfix baseline for SMTP;
+- deny-by-default Security Groups;
+- explicit port registry;
+- no public SSH/databases/cache/secrets/AI.
+
+## Rate limiting foundation
+
+Create reusable application rate-limiter primitives with:
+
+- principal/customer/action keys;
+- Redis/Valkey distributed counters where appropriate;
+- safe fallback/failure behavior;
+- standard 429/error response;
+- test helpers.
+
+Do not rely only on WAF/IP limiting.
+
+## Dependency/patching foundation
+
+Implement version policy from `docs/security/23-PATCHING-DEPENDENCY-VERSIONS.md`:
+
+- lockfiles;
+- automated dependency update PR mechanism;
+- base-image pinning;
+- action/IaC pinning;
+- SBOM/version inventory;
+- EOL monitoring process.
+
 ## UI foundation
 
 Build the actual application shell:
@@ -326,6 +381,10 @@ Phase 0 is complete when:
 - CI AWS access uses scoped OIDC roles rather than long-lived deployment keys;
 - observability context/scrubbing exists;
 - architecture docs and contracts match implementation;
+- frontend stack/package manager/lockfile baseline exists;
+- rate-limiter primitives and safe failure tests exist;
+- infrastructure port/firewall/container baseline is represented in IaC;
+- dependency-update and patch/version inventory process is active;
 - tenant-scoped database tables selected for RLS have policies and bypass tests;
 - browser auth does not use Local Storage/Session Storage for credentials;
 - standardized server validation/error/idempotency patterns are implemented;
