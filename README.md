@@ -33,6 +33,7 @@ The architecture treats `nullapart.com` as the canonical product/control domain.
 - OpenBao is the leading open-source secrets/workload-identity candidate.
 - Amazon S3 is the expected production artifact backend behind a storage abstraction.
 - n8n remains for internal orchestration and ClickUp workflows.
+- SegLumberjack is the regional Sentry-compatible application observability platform; CloudWatch covers AWS infrastructure telemetry.
 - DMARC and BIMI are first-class product capabilities.
 - No public customer API in the initial implementation.
 - No end-user portal; administrative access only.
@@ -98,5 +99,5 @@ Nullapart is a security product. Security controls are designed into every featu
 See [SECURITY.md](SECURITY.md).
 ## Architecture diagrams
 
-See the [rendered architecture diagram set](docs/diagrams/README.md) for system context, inbound/outbound mail flow, regional AWS topology, RBAC, scanner fabric, data/storage, events, Deep AI and trust boundaries.
+See the [rendered architecture diagram set](docs/diagrams/README.md) for system context, inbound/outbound mail flow, regional AWS topology, RBAC, scanner fabric, data/storage, events, Deep AI, observability and trust boundaries.
 
