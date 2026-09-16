@@ -393,8 +393,8 @@ flowchart LR
     Notify[Customer Notifications]
     N8N[n8n]
     ClickUp[ClickUp]
-    Sentry[Sentry]
-    Logs[SegLumberjack / CloudWatch]
+    Seg[SegLumberjack\nSentry-compatible app observability]
+    CW[CloudWatch\nAWS infrastructure telemetry]
     Analytics[Reporting / Analytics]
 
     Mail --> Streams
@@ -407,14 +407,13 @@ flowchart LR
     Streams --> N8N --> ClickUp
     Streams --> Analytics
 
-    Mail --> Sentry
-    Control --> Sentry
-    DeepAI --> Sentry
+    Mail -->|Sentry SDK / compatible telemetry| Seg
+    Control -->|Sentry SDK / compatible telemetry| Seg
+    DMARC -->|Sentry SDK / compatible telemetry| Seg
+    Outbound -->|Sentry SDK / compatible telemetry| Seg
+    DeepAI -->|Sentry SDK / compatible telemetry| Seg
 
-    Mail --> Logs
-    Control --> Logs
-    DMARC --> Logs
-    Outbound --> Logs
+    AWS[AWS Runtime / Managed Services] --> CW
 ```
 
 ## 9. Deep AI flow
@@ -479,6 +478,7 @@ flowchart TB
         Redis[(Redis)]
         S3[(S3)]
         Secrets[OpenBao]
+        Seg[SegLumberjack\nSentry-compatible observability]
     end
 
     subgraph AIBoundary["Regional AI Boundary"]
@@ -486,8 +486,11 @@ flowchart TB
         Model[Deep AI Model]
     end
 
+    subgraph AWSOps["AWS Infrastructure Telemetry"]
+        CW[CloudWatch]
+    end
+
     subgraph ExternalOps["External / Operational Integrations"]
-        Sentry[Sentry]
         ClickUp[ClickUp]
         TI[Threat Intelligence]
     end
@@ -514,9 +517,68 @@ flowchart TB
     MailCore --> AIGateway --> Model
     Model --> S3
 
-    PrivateApp -->|sanitized / classified only| Sentry
+    PrivateApp -->|sanitized Sentry-compatible telemetry| Seg
+    AIGateway -->|sanitized telemetry| Seg
+    Model -->|sanitized telemetry| Seg
+
+    AWS[AWS Runtime / Managed Services] --> CW
+
     N8N -->|minimized metadata only| ClickUp
     Scanners -->|explicit allowed fields only| TI
+```
+
+## 11. Observability architecture
+
+Source: [10-observability-architecture.mmd](10-observability-architecture.mmd)
+
+```mermaid
+flowchart LR
+    subgraph Apps["Nullapart Application Components"]
+        Frontend[Frontend]
+        MailCore[Rust Mail Core]
+        Control[Control Backend]
+        Scanners[Scanner Nodes]
+        Workers[DMARC / Outbound / Workers]
+        DeepAI[Deep AI]
+    end
+
+    SDK[Sentry-compatible SDK / Protocol]
+    Scrub[Telemetry Scrubbing / Enrichment]
+    Seg[Regional SegLumberjack\nApplication Observability]
+
+    subgraph AWS["AWS Infrastructure / Managed Services"]
+        Compute[EC2 / ECS / Containers]
+        LB[Load Balancers]
+        DB[RDS / PostgreSQL]
+        Cache[Redis / Cache]
+        Storage[S3]
+        Network[VPC / Network]
+    end
+
+    CW[CloudWatch\nInfrastructure Telemetry]
+
+    Audit[(Authoritative Audit / Product DB)]
+    Streams[(Durable Event Stream)]
+
+    Frontend --> SDK
+    MailCore --> SDK
+    Control --> SDK
+    Scanners --> SDK
+    Workers --> SDK
+    DeepAI --> SDK
+
+    SDK --> Scrub --> Seg
+
+    Compute --> CW
+    LB --> CW
+    DB --> CW
+    Cache --> CW
+    Storage --> CW
+    Network --> CW
+
+    Control --> Audit
+    MailCore --> Streams
+    Workers --> Streams
 ```
 
 ## Diagram rules
