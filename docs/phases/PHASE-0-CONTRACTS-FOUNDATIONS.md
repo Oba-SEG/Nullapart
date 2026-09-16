@@ -173,6 +173,22 @@ Establish:
 - release/tag naming;
 - GitHub environment structure.
 
+### Repository-control activation gate
+
+Before normal implementation PRs begin, activate and verify the repository controls permitted by the GitHub plan/organization:
+
+- protected `main`;
+- no normal direct pushes;
+- no force pushes;
+- required PR review;
+- required CI checks;
+- security-owner/CODEOWNERS review once maintainers are assigned;
+- protected release-tag/ruleset controls where available.
+
+If the current GitHub plan cannot provide a desired control, record the limitation and implement the strongest available compensating process rather than silently assuming protection exists.
+
+The current ChatGPT GitHub integration cannot administer these repository settings, so activation is an explicit human/organization administration task.
+
 ### Pull-request CI
 
 At minimum:
@@ -261,7 +277,8 @@ Phase 0 is complete when:
 - policy/event/audit/artifact contracts are versioned;
 - UI shell/design tokens exist and pass accessibility baseline;
 - authorization/audit infrastructure patterns are established;
-- repository protection and CI security gates run;
+- repository protection has been activated/verified (or a documented compensating control exists for unavailable plan features);
+- CI security gates run;
 - immutable build/release identity is established;
 - CI AWS access uses scoped OIDC roles rather than long-lived deployment keys;
 - observability context/scrubbing exists;
