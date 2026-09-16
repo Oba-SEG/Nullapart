@@ -91,3 +91,7 @@ Do not prematurely force every scanner into its own container, and do not premat
 Separate when justified by isolation, heavy dependencies, independent scaling, security boundary or resource profile.
 
 The common scanner contract allows later relocation without redesigning policy or Mail Core.
+## Scanner diagram
+
+See [Scanner Fabric](diagrams/05-scanner-fabric.mmd).
+
