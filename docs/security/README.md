@@ -34,7 +34,9 @@ The following must exist before Phase 0 implementation:
 22. compliance assurance/control mapping;
 23. rate limiting and abuse protection;
 24. patching and dependency-version management;
-25. business-logic and policy-security invariants.
+25. business-logic and policy-security invariants;
+26. certificate trust/mTLS/pinning policy;
+27. HMAC/webhook integrity and replay protection.
 
 No subsystem is exempt because it is "internal", "temporary", "development-only" or "not customer-facing".
 
@@ -96,3 +98,5 @@ Examples:
 - [Rate Limiting and Abuse Protection](22-RATE-LIMITING-ABUSE-PROTECTION.md)
 - [Patching and Dependency Version Management](23-PATCHING-DEPENDENCY-VERSIONS.md)
 - [Business Logic and Policy Security](24-BUSINESS-LOGIC-POLICY-SECURITY.md)
+- [Certificate Trust, mTLS and Pinning](25-CERTIFICATE-TRUST-PINNING.md)
+- [HMAC Signing and Webhook Security](26-HMAC-SIGNING-WEBHOOKS.md)
