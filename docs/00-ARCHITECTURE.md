@@ -32,6 +32,7 @@ NexusSEG is a reference/foundation project. Nullapart does not blindly fork its 
 - runtime cache/version control.
 - scanner configuration.
 - region/deployment administration.
+- first-class Admin Audit store and UI.
 
 ### Intelligence and Operations Plane
 
@@ -78,7 +79,7 @@ The Rust Mail Core owns Nullapart-specific orchestration: message normalization,
 
 ## Data authority
 
-- PostgreSQL: authoritative configuration/security metadata.
+- PostgreSQL: authoritative configuration/security metadata, including an append-only administrative audit schema/store.
 - Redis: cache, streams, realtime counters and greylisting.
 - S3-compatible ArtifactStore: raw MIME, quarantine and artifacts.
 - Postfix queue: durable SMTP responsibility.
@@ -94,5 +95,5 @@ There is no supported public customer API, API gateway product or customer API-k
 Nullapart should not reproduce a deep synchronous HTTP chain, put an LLM in every-message delivery, implement SMTP itself, write custom mail cryptography where mature implementations exist, use one shared service secret, expose raw JSON in UI, include billing, depend on Control Plane availability for mail, or create a container for every feature.
 ## Architecture diagrams
 
-See [Architecture Diagrams](diagrams/README.md), especially the [system context](diagrams/00-system-context.mmd) and [regional AWS topology](diagrams/03-regional-aws-topology.mmd).
+See [Architecture Diagrams](diagrams/README.md), especially the [system context](diagrams/00-system-context.mmd), [regional AWS topology](diagrams/03-regional-aws-topology.mmd), and [Admin Audit Architecture](diagrams/11-admin-audit-architecture.mmd).
 
