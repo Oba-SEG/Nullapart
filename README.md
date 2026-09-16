@@ -18,6 +18,14 @@ Additional owned/supported domains:
 
 The architecture treats `nullapart.com` as the canonical product/control domain. The additional domains are reserved, protected and deliberately routed/redirected according to the regional/domain strategy in [Regions, tenancy and naming](docs/02-REGIONS-TENANCY-NAMING.md).
 
+## Security-first project gate
+
+Before Phase 0 implementation, Nullapart requires acceptance of the [Security Program](docs/security/README.md).
+
+This Phase -1 gate defines threat modeling, secure SDLC, vulnerability management, incident response, access governance, data classification, privacy/retention/deletion, cryptographic/network baselines, backup/DR, supply-chain controls, security testing, abuse response, third-party risk, exceptions, mail failure semantics, runbooks and security metrics.
+
+Implementation does not outrun these security rules.
+
 ## Core direction
 
 - AWS-hosted regional deployments.
@@ -82,29 +90,30 @@ Each deployment has its own URL, DNS, mail infrastructure, databases, caches, ar
 
 Start with:
 
-1. [Architecture](docs/00-ARCHITECTURE.md)
-2. [Security principles](docs/01-SECURITY-PRINCIPLES.md)
-3. [Regions, tenancy, naming and domains](docs/02-REGIONS-TENANCY-NAMING.md)
-4. [Identity, RBAC and impersonation](docs/03-IDENTITY-RBAC-IMPERSONATION.md)
-5. [Mail flows](docs/04-MAIL-FLOWS.md)
-6. [Scanner fabric](docs/05-SCANNER-FABRIC.md)
-7. [Policies and runtime configuration](docs/06-POLICY-MODEL.md)
-8. [Message visibility, trace and audit](docs/07-MESSAGE-TRACE-VISIBILITY.md)
-9. [DMARC and BIMI](docs/08-DMARC-BIMI.md)
-10. [ML and Deep AI](docs/09-ML-DEEP-AI.md)
-11. [AWS data and storage](docs/10-AWS-DATA-STORAGE.md)
-12. [Observability and secrets](docs/11-OBSERVABILITY-SECRETS.md)
-13. [UI design system](docs/12-UI-DESIGN-SYSTEM.md)
-14. [SMTP response catalogue](docs/13-SMTP-RESPONSES.md)
-15. [Notifications and remediation](docs/14-NOTIFICATIONS-REMEDIATION.md)
-16. [AWS deployment topology](docs/15-AWS-DEPLOYMENT.md)
-17. [Build roadmap](docs/16-BUILD-ROADMAP.md)
-18. [Administrative audit logging](docs/17-ADMIN-AUDIT-LOGGING.md)
-19. [SMTP transaction and tenant message contract](docs/18-MESSAGE-TRANSACTION-CONTRACT.md)
-20. [Secure message rendering and artifact access](docs/19-SECURE-MESSAGE-RENDERING.md)
-21. [Durable event architecture](docs/20-EVENT-DURABILITY.md)
-22. [AWS SMTP deployment commissioning](docs/21-AWS-SMTP-COMMISSIONING.md)
-23. [NexusSEG reference principles](docs/99-NEXUSSEG-REFERENCE.md)
+1. [Security Program — Phase -1 gate](docs/security/README.md)
+2. [Architecture](docs/00-ARCHITECTURE.md)
+3. [Security principles](docs/01-SECURITY-PRINCIPLES.md)
+4. [Regions, tenancy, naming and domains](docs/02-REGIONS-TENANCY-NAMING.md)
+5. [Identity, RBAC and impersonation](docs/03-IDENTITY-RBAC-IMPERSONATION.md)
+6. [Mail flows](docs/04-MAIL-FLOWS.md)
+7. [Scanner fabric](docs/05-SCANNER-FABRIC.md)
+8. [Policies and runtime configuration](docs/06-POLICY-MODEL.md)
+9. [Message visibility, trace and audit](docs/07-MESSAGE-TRACE-VISIBILITY.md)
+10. [DMARC and BIMI](docs/08-DMARC-BIMI.md)
+11. [ML and Deep AI](docs/09-ML-DEEP-AI.md)
+12. [AWS data and storage](docs/10-AWS-DATA-STORAGE.md)
+13. [Observability and secrets](docs/11-OBSERVABILITY-SECRETS.md)
+14. [UI design system](docs/12-UI-DESIGN-SYSTEM.md)
+15. [SMTP response catalogue](docs/13-SMTP-RESPONSES.md)
+16. [Notifications and remediation](docs/14-NOTIFICATIONS-REMEDIATION.md)
+17. [AWS deployment topology](docs/15-AWS-DEPLOYMENT.md)
+18. [Build roadmap](docs/16-BUILD-ROADMAP.md)
+19. [Administrative audit logging](docs/17-ADMIN-AUDIT-LOGGING.md)
+20. [SMTP transaction and tenant message contract](docs/18-MESSAGE-TRANSACTION-CONTRACT.md)
+21. [Secure message rendering and artifact access](docs/19-SECURE-MESSAGE-RENDERING.md)
+22. [Durable event architecture](docs/20-EVENT-DURABILITY.md)
+23. [AWS SMTP deployment commissioning](docs/21-AWS-SMTP-COMMISSIONING.md)
+24. [NexusSEG reference principles](docs/99-NEXUSSEG-REFERENCE.md)
 
 ## Security posture
 
