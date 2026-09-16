@@ -111,12 +111,14 @@ Start with:
 19. [Detailed Phase Specifications](docs/phases/README.md)
 20. [Version Control, CI/CD and Release Security](docs/security/19-VERSION-CONTROL-CICD.md)
 21. [Versioning and Release Management](docs/22-VERSIONING-RELEASE-MANAGEMENT.md)
-22. [Administrative audit logging](docs/17-ADMIN-AUDIT-LOGGING.md)
-23. [SMTP transaction and tenant message contract](docs/18-MESSAGE-TRANSACTION-CONTRACT.md)
-24. [Secure message rendering and artifact access](docs/19-SECURE-MESSAGE-RENDERING.md)
-25. [Durable event architecture](docs/20-EVENT-DURABILITY.md)
-26. [AWS SMTP deployment commissioning](docs/21-AWS-SMTP-COMMISSIONING.md)
-27. [NexusSEG reference principles](docs/99-NEXUSSEG-REFERENCE.md)
+22. [Application Security Control Baseline](docs/security/20-APPLICATION-SECURITY-CONTROLS.md)
+23. [Compliance Assurance and Control Mapping](docs/security/21-COMPLIANCE-ASSURANCE.md)
+24. [Administrative audit logging](docs/17-ADMIN-AUDIT-LOGGING.md)
+25. [SMTP transaction and tenant message contract](docs/18-MESSAGE-TRANSACTION-CONTRACT.md)
+26. [Secure message rendering and artifact access](docs/19-SECURE-MESSAGE-RENDERING.md)
+27. [Durable event architecture](docs/20-EVENT-DURABILITY.md)
+28. [AWS SMTP deployment commissioning](docs/21-AWS-SMTP-COMMISSIONING.md)
+29. [NexusSEG reference principles](docs/99-NEXUSSEG-REFERENCE.md)
 
 ## Security posture
 
