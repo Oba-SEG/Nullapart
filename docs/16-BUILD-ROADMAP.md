@@ -8,17 +8,26 @@ Define and test:
 
 - regional/customer identity rules;
 - authentication/RBAC/impersonation;
-- canonical message record;
-- SecurityFinding contract;
+- MFA/step-up/session requirements;
+- SMTP Transaction + Tenant Message Instance contract;
+- SecurityFinding contract and scope;
 - scanner contract;
 - policy/config revision model;
 - SMTP reason catalogue;
-- event contract;
+- durable event contract;
+- PostgreSQL transactional outbox contract;
+- SQS consumer/idempotency/DLQ contract;
 - ArtifactStore contract;
 - Admin Audit event/storage/query contract;
+- transactional audit + mutation semantics;
+- immutable audit-checkpoint/archive model;
 - Admin Audit UI table/filter/detail design;
+- secure hostile-message rendering/artifact-access contract;
 - neumorphic design tokens/layout shell;
-- Sentry/logging baseline.
+- Sentry-compatible SDK instrumentation routed to regional SegLumberjack;
+- native daemon log/metrics collector path;
+- CloudWatch infrastructure telemetry baseline;
+- AWS SMTP commissioning checklist.
 
 No feature is considered backend-only if it requires an administrative UI.
 
@@ -28,16 +37,20 @@ Build:
 
 - containerized Postfix;
 - Rspamd restriction/Milter integration;
+- explicit Postfix after-queue filter handoff;
+- trusted reinjection listener/transport with loop prevention;
 - Rust Mail Core foundation;
 - inbound/outbound routing;
 - durable queue semantics;
+- SMTP Transaction + tenant-message recipient partitioning;
 - tenant/domain/recipient resolution;
 - source IP/connector authorization;
 - greylisting;
 - RBL/GeoIP;
 - trusted auth results;
 - transmission trace;
-- initial policy runtime/cache.
+- initial policy runtime/cache;
+- AWS outbound port-25/PTR/HELO commissioning for the first deployment.
 
 Goal: a robust bidirectional SEG without advanced AI.
 
@@ -54,14 +67,21 @@ Build the common scanner SDK/orchestrator and initial analyzers:
 - OCR/QR/image;
 - static/YARA.
 
-Add quarantine/hold and UI at the same time.
+Add:
+
+- parser/container isolation;
+- hard CPU/memory/time/decompression/nesting limits;
+- encrypted/unscannable content handling;
+- quarantine/hold;
+- UI at the same time.
 
 ## Phase 3 — control plane
 
 Build:
 
-- ZITADEL integration;
+- ZITADEL integration after security/license validation;
 - System/Support/Customer Admin RBAC;
+- MFA and step-up controls;
 - impersonation;
 - customers;
 - domains;
@@ -70,8 +90,11 @@ Build:
 - runtime cache visibility/refresh;
 - tenant lifecycle;
 - node/scanner health;
+- stable node identity plus runtime IP/AWS identity;
 - full trace/message permission model;
-- append-only Admin Audit store, RBAC queries and UI.
+- secure sanitized message/full-content view;
+- append-only Admin Audit store, RBAC queries and UI;
+- immutable audit checkpoint/archive job.
 
 ## Phase 4 — inline ML
 
@@ -88,12 +111,15 @@ Build:
 
 Build:
 
-- report ingestion;
+- RFC 9989/9990/9991-aware report ingestion;
+- external report-destination authorization automation/validation;
 - parser hardening;
+- aggregate vs failure-report privacy controls;
 - authentication source inventory;
 - dashboards;
 - DNS/domain observation;
-- BIMI;
+- BIMI enforcement/readiness validation;
+- secure BIMI SVG handling;
 - MTA-STS/TLS-RPT views;
 - alerts.
 
@@ -113,12 +139,15 @@ Build:
 
 Deploy regional inference and integrate:
 
-- Qwen3.8-27B candidate;
+- Qwen3.8-27B candidate or validated replacement;
+- per-region capacity/quantization/concurrency benchmarks;
 - authenticated OpenAI-compatible endpoint;
+- scoped artifact-access broker;
 - quarantined/blocked/reported analysis;
 - complex BEC/impersonation;
 - deep-analysis hold policy;
 - analyst summaries;
+- prompt-injection/tool restrictions;
 - AI audit/retention/security controls.
 
 ## Phase 8 — connectors/remediation
@@ -135,7 +164,7 @@ Implement as required:
 
 ## Phase 9 — operational automation
 
-Expand durable events, n8n and ClickUp workflows for incidents, outages, remediation, DMARC degradation and support operations.
+Expand PostgreSQL outbox + SQS durable events, n8n and ClickUp workflows for incidents, outages, remediation, DMARC degradation and support operations.
 
 ## Continuous requirements
 
@@ -143,12 +172,16 @@ Across every phase:
 
 - authenticated APIs;
 - per-service identity;
+- MFA for all admin accounts;
 - Sentry-compatible instrumentation routed to SegLumberjack;
+- native daemon telemetry collection;
 - CloudWatch for AWS infrastructure telemetry;
 - first-class Admin Audit subsystem and UI;
+- transactional outbox + explicitly durable async delivery;
 - regional isolation;
 - UI with feature;
+- secure hostile-content rendering where message content is displayed;
 - tests with feature;
 - no raw JSON UI;
-- open-source/security review;
+- open-source/security/license review;
 - dependency/SBOM management.
