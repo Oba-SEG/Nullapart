@@ -29,6 +29,8 @@ Implementation does not outrun these security rules.
 ## Core direction
 
 - AWS-hosted regional deployments.
+- Amazon ECS is the initial container orchestration baseline; dedicated mail EC2 nodes are the stable SMTP exception.
+- Public Control Plane HTTPS uses ALB/WAF; public SMTP uses direct commissioned Postfix MX identities by default.
 - Rust for the custom mail core.
 - Postfix as the containerized Internet-facing MTA and durable mail queue.
 - Rspamd at bounded SMTP restriction/Milter stages.
@@ -113,12 +115,18 @@ Start with:
 21. [Versioning and Release Management](docs/22-VERSIONING-RELEASE-MANAGEMENT.md)
 22. [Application Security Control Baseline](docs/security/20-APPLICATION-SECURITY-CONTROLS.md)
 23. [Compliance Assurance and Control Mapping](docs/security/21-COMPLIANCE-ASSURANCE.md)
-24. [Administrative audit logging](docs/17-ADMIN-AUDIT-LOGGING.md)
-25. [SMTP transaction and tenant message contract](docs/18-MESSAGE-TRANSACTION-CONTRACT.md)
-26. [Secure message rendering and artifact access](docs/19-SECURE-MESSAGE-RENDERING.md)
-27. [Durable event architecture](docs/20-EVENT-DURABILITY.md)
-28. [AWS SMTP deployment commissioning](docs/21-AWS-SMTP-COMMISSIONING.md)
-29. [NexusSEG reference principles](docs/99-NEXUSSEG-REFERENCE.md)
+24. [Rate Limiting and Abuse Protection](docs/security/22-RATE-LIMITING-ABUSE-PROTECTION.md)
+25. [Patching and Dependency Version Management](docs/security/23-PATCHING-DEPENDENCY-VERSIONS.md)
+26. [Business Logic and Policy Security](docs/security/24-BUSINESS-LOGIC-POLICY-SECURITY.md)
+27. [Frontend Architecture and Package Baseline](docs/23-FRONTEND-ARCHITECTURE.md)
+28. [Container, Load-Balancing and Network Security](docs/24-CONTAINER-LOADBALANCING-NETWORK.md)
+29. [Compliance Documentation Register](docs/compliance/README.md)
+30. [Administrative audit logging](docs/17-ADMIN-AUDIT-LOGGING.md)
+31. [SMTP transaction and tenant message contract](docs/18-MESSAGE-TRANSACTION-CONTRACT.md)
+32. [Secure message rendering and artifact access](docs/19-SECURE-MESSAGE-RENDERING.md)
+33. [Durable event architecture](docs/20-EVENT-DURABILITY.md)
+34. [AWS SMTP deployment commissioning](docs/21-AWS-SMTP-COMMISSIONING.md)
+35. [NexusSEG reference principles](docs/99-NEXUSSEG-REFERENCE.md)
 
 ## Security posture
 
