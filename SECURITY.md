@@ -47,6 +47,35 @@ Mandatory rules include:
 
 Compliance/security evidence mapping follows [Compliance Assurance](docs/security/21-COMPLIANCE-ASSURANCE.md). Nullapart does not claim a certification merely because controls are mapped.
 
+## Rate limiting and business-logic protection
+
+Rate limiting/abuse controls follow `docs/security/22-RATE-LIMITING-ABUSE-PROTECTION.md`.
+
+Business logic/state/policy invariants follow `docs/security/24-BUSINESS-LOGIC-POLICY-SECURITY.md`.
+
+Key rules:
+
+- high-risk actions have dedicated principal/customer/action limits;
+- limiter failure never silently becomes unlimited access;
+- security state transitions are enforced server-side and transaction-safe;
+- bulk operations re-check every resource;
+- lower-level policy cannot weaken System security floors;
+- stale/concurrent updates are detected.
+
+## Authentication material in URLs
+
+Do not put bearer credentials, access/refresh tokens, session IDs, API keys, passwords or secrets in URL paths/query strings/fragments.
+
+Protocol-mandated short-lived OIDC authorization callback values are immediately exchanged server-side and the browser is redirected to a clean URL.
+
+Restricted mail-artifact access should not expose reusable S3 presigned query credentials to the browser as the normal design.
+
+## Patching and dependency versions
+
+Patching/version management follows `docs/security/23-PATCHING-DEPENDENCY-VERSIONS.md`.
+
+Dependencies, base images, actions, models and rulesets are pinned/reproducible; production containers are rebuilt and promoted rather than patched interactively.
+
 ## Authorization
 
 Authorization is enforced server-side.
