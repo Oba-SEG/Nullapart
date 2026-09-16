@@ -50,6 +50,12 @@ If rendered SVG/PNG/embedded Markdown diagrams are added later, they should be g
 14. [CI/CD and release flow](13-cicd-release-flow.mmd)
     - Short-lived branch -> PR/review/security CI -> protected main -> immutable artifact -> same-digest environment promotion -> approved production deployment.
 
+15. [Control-plane request security](14-control-plane-request-security.mmd)
+    - HTTPS/session -> layered rate limit -> validation -> ownership authorization -> business logic -> RLS-protected transaction/audit/outbox -> safe error handling.
+
+16. [Container/network topology](15-container-network-topology.mmd)
+    - ALB/WAF web edge, direct Postfix MX nodes, ECS private workloads, private data/security services and controlled AI/network boundaries.
+
 ## Diagram rules
 
 - Update the relevant `.mmd` file whenever its architecture changes.
