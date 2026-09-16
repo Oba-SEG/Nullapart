@@ -59,6 +59,48 @@ Create a new process/service/container only when justified by:
 
 Prefer module boundaries inside the Rust Mail Core or Control Backend before introducing a new network service.
 
+### Rate limiting and abuse controls
+
+- use layered edge + application + SMTP limits;
+- authenticated API limits key on actor/customer/action, not only IP;
+- high-risk actions have dedicated stricter limits;
+- limiter backend failure has explicit safe behavior;
+- abuse-rate exemptions are scoped and audited.
+
+### Patching and dependency lifecycle
+
+- production dependencies/runtimes are pinned/reproducible;
+- lockfiles are committed;
+- automated update PRs are reviewed/tested;
+- unsupported/EOL critical runtimes require a time-limited exception;
+- containers are rebuilt rather than interactively patched;
+- mail nodes patch through safe drain/rolling procedures.
+
+### Frontend architecture
+
+- React/TypeScript/Vite baseline from `docs/23-FRONTEND-ARCHITECTURE.md`;
+- pnpm lockfile;
+- no auth tokens in browser persistent storage;
+- one typed API client boundary;
+- client validation does not replace server validation;
+- no raw JSON UI.
+
+### Container/network/firewall baseline
+
+- ECS is the ordinary container baseline;
+- dedicated mail EC2 nodes are the stable-MTA exception;
+- ALB/WAF for HTTPS;
+- direct MX/Postfix baseline for SMTP;
+- Security Groups are primary workload firewall;
+- no public SSH/database/cache/secrets/AI;
+- authoritative port registry must match IaC.
+
+### Compliance documentation
+
+- maintain `docs/compliance/` scope/control/evidence/data-processing/third-party/risk records;
+- architecture changes with data/security impact require compliance-impact review;
+- do not claim certification without verified audit/legal basis.
+
 ### Application-security invariants
 
 - derive data scope from authenticated principal, not client-provided IDs;
