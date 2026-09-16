@@ -36,6 +36,24 @@ Before sending telemetry to SegLumberjack:
 - avoid sending complete AI prompts when they contain message content;
 - preserve only the trace/message/customer/node identifiers needed for diagnostics.
 
+## Native daemon telemetry
+
+Postfix, Rspamd, ClamAV and similar native daemons do not naturally emit Sentry-compatible application events.
+
+Provide an explicit regional collection pipeline for their logs/metrics, using a suitable collector such as Vector, Fluent Bit or an OpenTelemetry-compatible collector.
+
+The collector must:
+
+- parse native syslog/log formats;
+- add region/deployment/node/release context;
+- redact message content/secrets;
+- preserve queue/transaction correlation identifiers where safe;
+- route appropriate application diagnostics to SegLumberjack when supported;
+- route AWS infrastructure/platform telemetry to CloudWatch as appropriate;
+- avoid making the collector a mail-path dependency.
+
+Do not silently drop native daemon telemetry simply because it is not Sentry-native.
+
 ## AWS infrastructure telemetry: CloudWatch
 
 CloudWatch has a separate responsibility from SegLumberjack.
@@ -46,7 +64,7 @@ Use CloudWatch primarily for AWS infrastructure and managed-service telemetry su
 - CPU/memory/disk/network;
 - load balancers;
 - RDS/PostgreSQL service metrics;
-- Redis/cache service metrics;
+- Redis/Valkey cache service metrics;
 - S3/AWS service metrics;
 - VPC/network telemetry;
 - AWS alarms and service health;
@@ -56,22 +74,29 @@ Do not describe CloudWatch as an interchangeable replacement for SegLumberjack a
 
 ## Authoritative audit and product events
 
-Observability data is not the authoritative audit record.
+Observability data is not the authoritative audit record or durable event store.
 
-Security/product events such as impersonation, policy changes, quarantine release, remediation and tenant-state changes must be persisted in the dedicated Admin Audit Store and/or authoritative product/event stores even if a correlated event is also sent to SegLumberjack.
+Security/product events such as impersonation, policy changes, quarantine release, remediation and tenant-state changes are persisted in the dedicated Admin Audit Store and/or authoritative product tables plus the transactional outbox before asynchronous delivery.
 
 A useful mental model is:
 
 ```text
-security/product action
+security/product transaction
    |-- authoritative DB/audit record
-   |-- durable event stream
-   '-- sanitized observability event -> SegLumberjack
+   |-- transactional outbox
+   |       '--> SQS / async consumers
+   '--> sanitized observability event -> SegLumberjack
 ```
+
+See [Durable Event Architecture](20-EVENT-DURABILITY.md).
 
 ## Node-level visibility
 
-Because every mail/scanner node has a unique IP and numbered hostname, operational trace must show exactly which node performed each action.
+Every runtime records stable/logical node identity plus the observed runtime hostname/IP/AWS identity.
+
+Operational trace should show exactly which runtime performed an action, while recognizing that private IPs can be ephemeral in containerized environments.
+
+Internet-facing SMTP egress addresses remain stable commissioned identities.
 
 ## Metrics
 
@@ -83,10 +108,12 @@ Mail metrics include:
 - receipt/delivery latency;
 - scan latency p50/p95/p99;
 - RBL/DNS/reputation latency;
-- scanner failure/error rate;
+- scanner failure/error/resource-limit rate;
 - inline ML latency;
 - reject/defer/quarantine rates;
-- outbound rates/outbreak detections.
+- outbound rates/outbreak detections;
+- after-queue filter/reinjection failures;
+- SQS/outbox backlog and DLQ depth.
 
 Security-product metrics include:
 
@@ -94,7 +121,8 @@ Security-product metrics include:
 - reported false negatives;
 - phishing/BEC/impersonation detection outcomes;
 - model confidence/calibration;
-- model version distribution.
+- model version distribution;
+- admin-audit write/checkpoint failures.
 
 ## OpenBao
 
@@ -110,6 +138,26 @@ Use it for:
 - database credentials where appropriate.
 
 AWS Secrets Manager/KMS may be used where managed AWS functionality is preferable/required.
+
+## OpenBao availability and bootstrap
+
+OpenBao cannot be a single-node dependency for the platform.
+
+Before production, define per-deployment:
+
+- HA topology;
+- storage backend;
+- bootstrap ceremony;
+- unseal/auto-unseal approach;
+- KMS integration where appropriate;
+- root/recovery key custody;
+- backup/restore;
+- disaster recovery;
+- PKI root/intermediate hierarchy;
+- certificate renewal grace behaviour;
+- root/intermediate/key rotation procedures.
+
+Services should tolerate a short OpenBao outage by continuing to use still-valid short-lived credentials rather than immediately failing all mail processing, but they must not bypass certificate expiry or authentication checks.
 
 ## Per-service identity
 
@@ -131,8 +179,9 @@ n8n remains an internal asynchronous orchestration platform.
 Typical flow:
 
 ```text
-durable Nullapart event
-  -> n8n
+PostgreSQL outbox
+  -> SQS durable event
+  -> n8n worker
   -> ClickUp / internal operational workflow
 ```
 
@@ -160,7 +209,7 @@ Notifications require loop protection and are recorded in message/incident trace
 Support/System Admin can trigger audited cache/config refreshes.
 
 The UI exposes node revision status so operators can see stale runtime configuration.
+
 ## Event and operations diagram
 
 See [Observability Architecture](diagrams/10-observability-architecture.mmd), [Admin Audit Architecture](diagrams/11-admin-audit-architecture.mmd), and [Event and Operations Flow](diagrams/07-event-operations-flow.mmd).
-
