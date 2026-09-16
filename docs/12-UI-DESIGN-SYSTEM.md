@@ -151,6 +151,75 @@ Impersonation displays a persistent visually distinct banner with:
 
 It must be impossible to confuse an impersonated session with the operator's normal session.
 
+## Administrative Audit UI
+
+Administrative audit is a dedicated product surface, not a raw log viewer.
+
+### Navigation
+
+Suggested placement:
+
+- System Admin: `System → Audit Log`;
+- Support: `Operations → Audit Log`;
+- Customer Admin: `Administration → Audit Log`.
+
+### Primary view
+
+Use a dense operational table with:
+
+- timestamp;
+- actor;
+- Acting As / impersonated subject;
+- customer;
+- action;
+- resource;
+- result;
+- source IP;
+- reason;
+- trace ID.
+
+Columns are permission/context aware.
+
+### Filtering
+
+Provide role-appropriate filters for:
+
+- date/time;
+- actor;
+- customer ID;
+- action category;
+- resource type;
+- result;
+- impersonation;
+- source IP;
+- trace ID;
+- high-risk actions.
+
+### Detail view
+
+Selecting an event opens a neumorphic detail drawer/page showing:
+
+- actor and role;
+- impersonation chain;
+- customer;
+- source/session context;
+- authorization context;
+- affected resource;
+- safe before/after values;
+- reason;
+- outcome;
+- correlated trace/event IDs.
+
+No raw JSON is shown.
+
+### Permissions
+
+Support audit views must never reveal message body, raw MIME or attachment content.
+
+Customer audit views remain tenant/RBAC scoped.
+
+Audit exports are permission-controlled and the export action is itself audited.
+
 ## System/Support operations
 
 Operational views should include:
