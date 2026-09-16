@@ -22,6 +22,7 @@ flowchart TB
         Redis[(Redis)]
         S3[(S3)]
         Secrets[OpenBao]
+        Seg[SegLumberjack\nSentry-compatible observability]
     end
 
     subgraph AIBoundary["Regional AI Boundary"]
@@ -29,8 +30,11 @@ flowchart TB
         Model[Deep AI Model]
     end
 
+    subgraph AWSOps["AWS Infrastructure Telemetry"]
+        CW[CloudWatch]
+    end
+
     subgraph ExternalOps["External / Operational Integrations"]
-        Sentry[Sentry]
         ClickUp[ClickUp]
         TI[Threat Intelligence]
     end
@@ -57,6 +61,11 @@ flowchart TB
     MailCore --> AIGateway --> Model
     Model --> S3
 
-    PrivateApp -->|sanitized / classified only| Sentry
+    PrivateApp -->|sanitized Sentry-compatible telemetry| Seg
+    AIGateway -->|sanitized telemetry| Seg
+    Model -->|sanitized telemetry| Seg
+
+    AWS[AWS Runtime / Managed Services] --> CW
+
     N8N -->|minimized metadata only| ClickUp
     Scanners -->|explicit allowed fields only| TI
