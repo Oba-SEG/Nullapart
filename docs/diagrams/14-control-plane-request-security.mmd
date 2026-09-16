@@ -1,0 +1,28 @@
+flowchart LR
+    Browser[Browser]
+    ALB[ALB + WAF]
+    Session[Server/BFF Session\nHttpOnly Secure Cookie]
+    Rate[Rate Limit\nIP + Principal + Customer + Action]
+    Validate[Server Validation\nCanonicalization]
+    Authz[Authorization + Ownership\nActor / Tenant / Resource / Action]
+    Logic[Business Logic / State Machine\nPolicy Floors + Revision Checks]
+    DBTX[PostgreSQL Transaction]
+    RLS[RLS Defense in Depth]
+    Data[(Tenant-scoped Data)]
+    Audit[(Admin Audit)]
+    Outbox[(Transactional Outbox)]
+    SQS[(SQS)]
+    Error[Safe Error Mapper\nStable code + correlation ID]
+
+    Browser -->|HTTPS; no bearer auth in URL/storage| ALB
+    ALB --> Session --> Rate --> Validate --> Authz --> Logic --> DBTX
+    DBTX --> RLS --> Data
+    DBTX --> Audit
+    DBTX --> Outbox --> SQS
+
+    Rate -. reject .-> Error
+    Validate -. reject .-> Error
+    Authz -. deny .-> Error
+    Logic -. invalid state .-> Error
+    DBTX -. failure .-> Error
+    Error --> Browser
