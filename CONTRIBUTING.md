@@ -84,6 +84,26 @@ Production deployments use immutable digests and approved GitHub/AWS identities.
 
 See [Version Control, CI/CD and Release Security](docs/security/19-VERSION-CONTROL-CICD.md).
 
+## Application-security checklist
+
+For any API/resource/data change, reviewers and developers must answer:
+
+- What authenticated principal/customer/deployment scope applies?
+- Is every object access protected by server-side ownership/authorization?
+- Does the database query explicitly scope tenant data?
+- Is PostgreSQL RLS applicable as defense in depth?
+- Is client validation duplicated by authoritative server validation?
+- Are input canonicalization and database constraints correct?
+- Can the operation be retried? If so, what is the idempotency rule?
+- Does browser auth avoid Local Storage/Session Storage?
+- Are CSRF protections required?
+- Can this feature trigger outbound DNS/HTTP/network access? If yes, SSRF/OAST tests are required.
+- Are writable fields explicitly allowlisted against mass assignment?
+- Are external errors safe, stable and free of secrets/internal detail?
+- Are wrong-user/wrong-tenant/wrong-owner tests present?
+
+See [Application Security Control Baseline](docs/security/20-APPLICATION-SECURITY-CONTROLS.md).
+
 ## Definition of Done
 
 If a feature requires a UI, its UI is implemented and tested at the same time as the backend capability.
