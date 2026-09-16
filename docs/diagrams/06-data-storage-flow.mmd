@@ -17,6 +17,7 @@ Artifacts / Quarantine)]
     Bao[OpenBao]
 
     Control --> PG
+    Control --> Audit
     Control --> Redis
 
     MailCore --> PG
@@ -33,6 +34,7 @@ Artifacts / Quarantine)]
 
     KMS --> S3
     KMS --> PG
+    KMS --> Audit
     Bao --> Control
     Bao --> MailCore
     Bao --> Scanners
