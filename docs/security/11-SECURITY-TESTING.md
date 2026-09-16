@@ -5,6 +5,9 @@
 Automated security tests include:
 
 - tenant isolation;
+- authenticated-principal filtering;
+- resource ownership/BOLA/IDOR;
+- PostgreSQL RLS bypass and pooled-connection tenant-context leakage;
 - RBAC/IDOR;
 - impersonation constraints;
 - audit completeness;
@@ -12,6 +15,8 @@ Automated security tests include:
 - stored/reflected XSS;
 - hostile email HTML/SVG;
 - SSRF;
+- OAST for blind SSRF/XXE/unintended callbacks;
+- DNS rebinding/redirect revalidation where outbound fetch exists;
 - path traversal;
 - artifact authorization;
 - MIME/parser fuzzing;
@@ -23,7 +28,20 @@ Automated security tests include:
 - queue exhaustion;
 - secret leakage;
 - observability leakage;
+- mass assignment;
+- unsafe error disclosure;
+- idempotency/replay failures;
+- browser token persistence checks;
+- CSRF;
 - AI prompt injection/tool abuse.
+
+## OAST
+
+Use controlled out-of-band application security testing for features that can trigger server-side network activity.
+
+Relevant tests include blind SSRF, XXE/external references and unexpected DNS/HTTP callbacks from URL scanners, report parsers, document processors, webhook handlers, remote-resource proxies and future AI tools.
+
+OAST infrastructure is test-controlled and must not receive production secrets/customer content.
 
 ## Fuzzing
 
