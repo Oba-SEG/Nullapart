@@ -43,6 +43,7 @@ Implementation does not outrun these security rules.
 - Local last-known-good policy/configuration snapshots on mail nodes.
 - Lightweight inline ML for fast classification.
 - Separate regional Deep AI over an authenticated OpenAI-compatible API.
+- Runtime ML/LLM capabilities use versioned skills, explicit tool permissions, structured outputs and context budgets.
 - Qwen3.8-27B is a leading Deep-AI candidate under regional capacity evaluation, not a locked dependency.
 - ZITADEL is the leading identity candidate subject to security/license validation.
 - OpenBao is the leading open-source secrets/workload-identity candidate with HA/bootstrap design required before production.
@@ -52,6 +53,13 @@ Implementation does not outrun these security rules.
 - Administrative actions are recorded in a first-class append-only/tamper-evident Admin Audit subsystem with RBAC-scoped UI views.
 - Received message content is treated as hostile and rendered in an isolated/sanitized UI path.
 - DMARC and BIMI are first-class product capabilities using the current DMARC RFC 9989/9990/9991 model.
+- Initial Control Plane API uses explicit `/api/v1` compatibility semantics; event/scanner/config/AI contracts are versioned.
+- Feature switches are server-authoritative versioned configuration with ownership, audit and lifecycle; they are not authorization.
+- Browser-facing TLS uses normal PKI/HSTS/CAA; HPKP is not used.
+- HMAC-SHA-256 is the default Nullapart shared-secret signing primitive for applicable future webhook/event integrity.
+- Package compatibility is validated as a stack and exact implementation versions are locked/reproducible.
+- GitHub Actions uses minimum permissions, locked dependencies, immutable artifacts and OIDC to scoped AWS deployment roles.
+- Coding agents follow root `AGENTS.md` and a minimal-context/skill-based operating model.
 - No public customer API in the initial implementation.
 - No end-user portal; administrative access only.
 - No billing subsystem in Nullapart.
@@ -77,7 +85,8 @@ Each deployment has its own URL, DNS, mail infrastructure, databases, caches, ar
 
 ## Repository layout
 
-- `docs/` — architecture and security documentation.
+- `AGENTS.md` — repository-wide coding-agent instructions.
+- `docs/` — architecture, security, compliance, phase and AI documentation.
 - `crates/` — Rust workspace boundaries for the future mail core and shared contracts.
 - `mail/` — Postfix and Rspamd configuration.
 - `scanners/` — scanner fabric and analyzer adapters.
@@ -118,15 +127,23 @@ Start with:
 24. [Rate Limiting and Abuse Protection](docs/security/22-RATE-LIMITING-ABUSE-PROTECTION.md)
 25. [Patching and Dependency Version Management](docs/security/23-PATCHING-DEPENDENCY-VERSIONS.md)
 26. [Business Logic and Policy Security](docs/security/24-BUSINESS-LOGIC-POLICY-SECURITY.md)
-27. [Frontend Architecture and Package Baseline](docs/23-FRONTEND-ARCHITECTURE.md)
-28. [Container, Load-Balancing and Network Security](docs/24-CONTAINER-LOADBALANCING-NETWORK.md)
-29. [Compliance Documentation Register](docs/compliance/README.md)
-30. [Administrative audit logging](docs/17-ADMIN-AUDIT-LOGGING.md)
-31. [SMTP transaction and tenant message contract](docs/18-MESSAGE-TRANSACTION-CONTRACT.md)
-32. [Secure message rendering and artifact access](docs/19-SECURE-MESSAGE-RENDERING.md)
-33. [Durable event architecture](docs/20-EVENT-DURABILITY.md)
-34. [AWS SMTP deployment commissioning](docs/21-AWS-SMTP-COMMISSIONING.md)
-35. [NexusSEG reference principles](docs/99-NEXUSSEG-REFERENCE.md)
+27. [Certificate Trust, mTLS and Pinning](docs/security/25-CERTIFICATE-TRUST-PINNING.md)
+28. [HMAC Signing and Webhook Security](docs/security/26-HMAC-SIGNING-WEBHOOKS.md)
+29. [Frontend Architecture and Package Baseline](docs/23-FRONTEND-ARCHITECTURE.md)
+30. [Container, Load-Balancing and Network Security](docs/24-CONTAINER-LOADBALANCING-NETWORK.md)
+31. [ML / LLM Skills and Tool Governance](docs/25-AI-LLM-SKILLS-TOOLS.md)
+32. [Package Compatibility and Upgrade Matrix](docs/26-PACKAGE-COMPATIBILITY.md)
+33. [API Versioning, Feature Flags and Feature Additions](docs/27-API-VERSIONING-FEATURE-FLAGS.md)
+34. [GitHub Actions Architecture](docs/28-GITHUB-ACTIONS-ARCHITECTURE.md)
+35. [AI Engineering Index](docs/ai/README.md)
+36. [Coding Agent Operating Model](docs/ai/CODING-AGENT-OPERATING-MODEL.md)
+37. [Compliance Documentation Register](docs/compliance/README.md)
+38. [Administrative audit logging](docs/17-ADMIN-AUDIT-LOGGING.md)
+39. [SMTP transaction and tenant message contract](docs/18-MESSAGE-TRANSACTION-CONTRACT.md)
+40. [Secure message rendering and artifact access](docs/19-SECURE-MESSAGE-RENDERING.md)
+41. [Durable event architecture](docs/20-EVENT-DURABILITY.md)
+42. [AWS SMTP deployment commissioning](docs/21-AWS-SMTP-COMMISSIONING.md)
+43. [NexusSEG reference principles](docs/99-NEXUSSEG-REFERENCE.md)
 
 ## Security posture
 
