@@ -3,15 +3,19 @@ flowchart TD
     Restrict[Postfix SMTP Restriction Stage]
     Milter[Rspamd Milter Stage]
     Queue[(Postfix Durable Queue)]
+    Handoff[After-queue Filter Handoff]
+    Tx[Create SMTP Transaction]
     Normalize[MIME Normalization]
-    Fanout{Parallel Security Analysis}
+    Fanout{Parallel Shared Security Analysis}
     Malware[Malware Scanner]
     URL[URL / Domain Scanner]
     Docs[Document / Archive Scanner]
     OCR[OCR / QR / Image]
     Static[Static / YARA]
-    ML[Inline ML]
-    Policy[Policy Evaluation]
+    Split[Partition Recipients by Tenant / Policy Scope]
+    ML[Inline ML / Tenant Context]
+    Policy[Per-Tenant Policy Evaluation]
+    Reinject[Trusted Postfix Reinjection]
     Deliver[Deliver to Customer]
     Quarantine[Quarantine]
     Hold[Hold]
@@ -22,8 +26,7 @@ flowchart TD
     Restrict -->|Reject condition| Reject
     Restrict -->|Temporary failure| Defer
     Restrict -->|Continue| Milter
-    Milter --> Queue
-    Queue --> Normalize --> Fanout
+    Milter --> Queue --> Handoff --> Tx --> Normalize --> Fanout
 
     Fanout --> Malware
     Fanout --> URL
@@ -31,13 +34,15 @@ flowchart TD
     Fanout --> OCR
     Fanout --> Static
 
-    Malware --> ML
-    URL --> ML
-    Docs --> ML
-    OCR --> ML
-    Static --> ML
+    Malware --> Split
+    URL --> Split
+    Docs --> Split
+    OCR --> Split
+    Static --> Split
 
-    ML --> Policy
-    Policy -->|Allow / Warn| Deliver
+    Split --> ML --> Policy
+    Policy -->|Allow / Warn| Reinject --> Deliver
     Policy -->|Quarantine| Quarantine
     Policy -->|Hold / Deep Analysis| Hold
+
+    Reinject -. internal marker prevents re-filter loop .-> Queue
