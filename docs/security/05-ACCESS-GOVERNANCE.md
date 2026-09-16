@@ -12,63 +12,24 @@
 
 ## Joiner / mover / leaver
 
-Provisioning must follow approved role requests.
+Provisioning follows approved role requests.
 
-When role/employment/responsibility changes:
-
-- remove obsolete roles immediately;
-- revoke sessions/tokens;
-- rotate shared integration credentials if exposure requires;
-- validate ownership of automation/service accounts.
-
-Leavers lose access promptly.
+Role/responsibility changes remove obsolete permissions immediately. Leavers lose access promptly and sessions/tokens are revoked.
 
 ## Privileged roles
 
-System Admin and Support access require:
-
-- stronger authentication;
-- periodic review;
-- documented justification;
-- monitored impersonation;
-- step-up for high-risk actions.
+System Admin and Support require stronger authentication, periodic review, documented justification, monitored impersonation and step-up for high-risk actions.
 
 ## Access reviews
 
-Perform periodic reviews of:
-
-- System Admins;
-- Support roles;
-- customer owners/admins where platform responsibility applies;
-- AWS/IAM privileged roles;
-- OpenBao privileged identities;
-- ZITADEL administrators;
-- GitHub/release permissions;
-- production access;
-- n8n/ClickUp integrations.
+Review System/Support admins, customer owners/admins where applicable, AWS/IAM privilege, OpenBao/ZITADEL admins, GitHub/release permissions, production access and n8n/ClickUp integrations.
 
 Initial target: quarterly for privileged platform access.
 
 ## Break-glass
 
-Maintain tightly controlled emergency access with:
-
-- minimal number of accounts;
-- strong hardware-backed MFA;
-- sealed/controlled credentials;
-- use only during defined emergencies;
-- immediate alerting;
-- mandatory audit/review after use.
+Emergency access uses a minimal number of accounts, strong hardware-backed MFA, controlled credentials, immediate alerting and mandatory post-use review.
 
 ## Service accounts
 
-Every service identity has:
-
-- owner;
-- purpose;
-- allowed resources;
-- rotation/expiry;
-- region/deployment;
-- no interactive login unless explicitly required.
-
-Dormant/unused identities are removed.
+Every identity has an owner, purpose, allowed resources, rotation/expiry and region/deployment. Dormant/unused identities are removed.
