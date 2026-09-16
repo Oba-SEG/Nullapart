@@ -196,3 +196,7 @@ A policy may explicitly put a high-risk message into `HELD_FOR_DEEP_ANALYSIS`, s
 - ambiguous high-risk document.
 
 This path may take longer and is intentionally exceptional.
+## Deep AI diagram
+
+See [Deep AI Flow](diagrams/08-deep-ai-flow.mmd).
+
