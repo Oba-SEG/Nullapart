@@ -5,7 +5,8 @@ flowchart LR
     Outbound[Outbound Intelligence]
     DeepAI[Deep AI]
 
-    Streams[(Durable Event Stream)]
+    Outbox[(PostgreSQL Transactional Outbox)]
+    SQS[(Amazon SQS)]
 
     Notify[Customer Notifications]
     N8N[n8n]
@@ -13,16 +14,19 @@ flowchart LR
     Seg[SegLumberjack\nSentry-compatible app observability]
     CW[CloudWatch\nAWS infrastructure telemetry]
     Analytics[Reporting / Analytics]
+    DLQ[(Dead-letter Queues)]
 
-    Mail --> Streams
-    Control --> Streams
-    DMARC --> Streams
-    Outbound --> Streams
-    DeepAI --> Streams
+    Mail --> Outbox
+    Control --> Outbox
+    DMARC --> Outbox
+    Outbound --> Outbox
+    DeepAI --> Outbox
 
-    Streams --> Notify
-    Streams --> N8N --> ClickUp
-    Streams --> Analytics
+    Outbox --> SQS
+    SQS --> Notify
+    SQS --> N8N --> ClickUp
+    SQS --> Analytics
+    SQS -. failed messages .-> DLQ
 
     Mail -->|Sentry SDK / compatible telemetry| Seg
     Control -->|Sentry SDK / compatible telemetry| Seg
@@ -30,4 +34,5 @@ flowchart LR
     Outbound -->|Sentry SDK / compatible telemetry| Seg
     DeepAI -->|Sentry SDK / compatible telemetry| Seg
 
+    Native[Postfix / Rspamd / ClamAV] --> Collector[Regional Native Log / Metrics Collector] --> Seg
     AWS[AWS Runtime / Managed Services] --> CW
