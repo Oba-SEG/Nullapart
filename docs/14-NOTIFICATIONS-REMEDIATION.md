@@ -33,6 +33,21 @@ Customer notifications may include:
 - retroactive remediation failure;
 - connector/security failure requiring customer action.
 
+## Durable delivery of notification work
+
+Notification work is created through the authoritative transaction/outbox path and delivered asynchronously through the durable event architecture.
+
+Preferred AWS path:
+
+```text
+PostgreSQL transaction / outbox
+  -> SQS
+  -> notification worker
+  -> trusted Nullapart outbound MTA submission
+```
+
+Consumers are idempotent so event replay does not send duplicate customer alerts.
+
 ## Sending path
 
 Security notifications are generated internally and submitted through Nullapart's own trusted outbound MTA path.
@@ -62,9 +77,9 @@ Include useful safe fields:
 
 - message receipt time;
 - sender;
-- recipient(s);
+- recipient(s) within the relevant tenant scope;
 - subject;
-- Nullapart tracking ID;
+- Nullapart tenant-message tracking ID;
 - threat category;
 - severity;
 - normalized reason/evidence;
@@ -72,6 +87,8 @@ Include useful safe fields:
 - recommended action.
 
 Do not attach the malicious original message.
+
+Do not include raw MIME, attachment content, secrets or another tenant's recipients.
 
 ## Retroactive remediation
 
@@ -88,6 +105,8 @@ Where enabled, Nullapart may:
 - record every attempt/result.
 
 No connector receives more privilege than the enabled capabilities require.
+
+Remediation requests and results are audited.
 
 ## VIP
 
@@ -112,6 +131,10 @@ Any message/mailbox storage created by these connectors follows regional storage
 
 ## Internal operations
 
-Serious security/operational events can publish durable events consumed by n8n and sent to ClickUp.
+Serious security/operational events flow through PostgreSQL outbox + SQS and may be consumed by n8n for ClickUp/internal workflows.
+
+n8n/ClickUp never block mail delivery.
 
 ClickUp receives minimized metadata and a regional Nullapart link rather than raw message content.
+
+See [Durable Event Architecture](20-EVENT-DURABILITY.md).
