@@ -56,7 +56,9 @@ Examples:
 
 Administrative sessions require:
 
+- server-side/BFF session handling where practical;
 - secure/HttpOnly/SameSite cookie controls where browser sessions are used;
+- authentication/refresh credentials must not be persisted in Local Storage, Session Storage or other JavaScript-readable persistent browser storage;
 - region/deployment binding;
 - CSRF protection where applicable;
 - idle and absolute expiry;
@@ -71,6 +73,27 @@ Audit retains actor, impersonated subject, customer ID, reason, requested role, 
 The UI shows a persistent impersonation banner.
 
 Impersonation must not grant permissions the real Support/System actor is not authorized to exercise. The effective authorization decision considers both impersonation scope and the real actor's platform permission.
+
+## Resource ownership authorization
+
+Role membership alone is insufficient.
+
+For every resource read/write/action, Nullapart validates server-side:
+
+- real actor;
+- impersonation context;
+- deployment;
+- customer/tenant;
+- resource ownership/scope;
+- requested action;
+- role/permission;
+- step-up requirement where applicable.
+
+Client-supplied customer/user IDs are filters, never proof of authorization.
+
+Direct-object identifiers and guessed URLs must not bypass ownership checks.
+
+PostgreSQL Row-Level Security is used where practical as database defense in depth, but it does not replace application authorization.
 
 ## Product authorization
 
