@@ -1,0 +1,65 @@
+flowchart TB
+    Internet((Internet))
+    Admin[Admin Browser]
+    Sender[External SMTP]
+    Customer[Customer Mail Server]
+
+    subgraph Public["Public Edge"]
+        ALB[ALB + WAF\n443]
+        MX1[Dedicated Postfix EC2\nmx1 :25]
+        MX2[Dedicated Postfix EC2\nmx2 :25]
+        Relay[Outbound/Relay Postfix\ncommissioned EIP]
+    end
+
+    subgraph App["Private Application / ECS"]
+        Frontend[Frontend]
+        Control[Control Backend / BFF]
+        Workers[Async Workers]
+        Scanners[Scanner ECS/EC2 Capacity]
+    end
+
+    subgraph Data["Private Data / Security"]
+        PG[(PostgreSQL)]
+        Redis[(Redis / Valkey)]
+        S3[(S3 via private path)]
+        Bao[OpenBao]
+        IDP[ZITADEL]
+        SQS[(SQS)]
+    end
+
+    subgraph AI["Private AI"]
+        AIAPI[Authenticated Deep AI Endpoint]
+        GPU[Accelerated EC2 / ECS Capacity]
+    end
+
+    Admin -->|443| ALB
+    ALB --> Frontend
+    ALB --> Control
+
+    Sender -->|25| MX1
+    Sender -->|25| MX2
+    Customer -->|25/587 when explicitly enabled| Relay
+
+    MX1 --> Scanners
+    MX2 --> Scanners
+    Relay --> Scanners
+
+    Control --> PG
+    Control --> Redis
+    Control --> S3
+    Control --> Bao
+    Control --> IDP
+    Workers --> SQS
+    Scanners --> S3
+    Scanners --> Redis
+    Scanners --> AIAPI --> GPU
+
+    Relay -->|25 direct MX using stable EIP/PTR| Internet
+
+    Note1[Security Groups: deny by absence; SG-to-SG private access]
+    Note2[No public SSH / DB / cache / secrets / scanner / AI]
+    Note3[ECS baseline; dedicated mail EC2 is intentional exception]
+
+    App -.-> Note1
+    Data -.-> Note2
+    Public -.-> Note3
