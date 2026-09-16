@@ -2,6 +2,14 @@
 
 These rules apply to architecture, implementation, operations, UI and testing.
 
+## Phase -1 security program gate
+
+No Nullapart implementation begins before the [Security Program](docs/security/README.md) is defined and accepted.
+
+The security program establishes governance, threat modeling, secure SDLC, vulnerability management, incident response, access governance, data classification, privacy/retention/deletion, cryptographic/network baselines, backup/DR, supply-chain controls, security testing, abuse response, third-party risk, exceptions, mail trust/failure semantics, runbooks and security metrics.
+
+Architecture and implementation changes must comply with these controls or use the formal time-limited security-exception process.
+
 ## Security-first engineering
 
 Nullapart is a security product. Every feature is designed with explicit trust boundaries, least privilege, auditable administration, secure failure behaviour and regional data handling from the beginning.
