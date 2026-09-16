@@ -16,8 +16,8 @@ Use a regional same-origin application model:
 Browser
   -> https://<deployment>.nullapart.com
   -> AWS ALB / WAF
-       |-- /api/* and /auth/* -> Control Backend / BFF
-       '-- UI/static routes   -> Frontend service/static delivery
+       |-- /api/v1/* and /auth/* -> Control Backend / BFF
+       '-- UI/static routes      -> Frontend service/static delivery
 ```
 
 The browser should not manage long-lived OAuth/OIDC bearer credentials.
@@ -65,6 +65,8 @@ As of September 2026, the ecosystem baseline selected for Phase 0 is compatible 
 
 Exact patch versions are selected at Phase 0 initialization and pinned in `pnpm-lock.yaml`; architecture docs should not be used as a substitute for the lockfile.
 
+See [Package Compatibility and Upgrade Matrix](26-PACKAGE-COMPATIBILITY.md).
+
 ## Package manager
 
 Use `pnpm`.
@@ -76,6 +78,25 @@ Commit:
 - package-manager version metadata.
 
 Do not use multiple frontend package managers in the same repo.
+
+CI uses frozen lockfile installation.
+
+## Dependency compatibility
+
+Frontend dependencies are evaluated as a stack, not independently.
+
+Requirements include:
+
+- React/ReactDOM compatibility;
+- Vite/Node compatibility;
+- TypeScript support window;
+- peer-dependency correctness;
+- package-manager compatibility;
+- test/build compatibility;
+- browser support;
+- license/security review.
+
+Do not use `--force`/legacy peer dependency bypass as the normal solution to incompatibility.
 
 ## Dependency rules
 
@@ -130,6 +151,7 @@ URLs must not contain:
 - passwords;
 - OpenBao/AWS credentials;
 - bearer credentials;
+- HMAC/shared secrets;
 - message body/content;
 - sensitive audit evidence.
 
@@ -160,17 +182,33 @@ Frontend code treats authentication state as session status, not as ownership of
 
 Provide one typed API-client boundary responsible for:
 
+- `/api/v1` contract access;
 - credentials/cookie behavior;
 - CSRF token;
 - correlation ID handling;
 - error normalization;
 - retry rules;
 - idempotency key support;
-- cancellation/timeouts.
+- cancellation/timeouts;
+- compatible API/schema handling.
 
 Do not let every component hand-roll `fetch`.
 
 Automatic retries must never blindly repeat unsafe mutations.
+
+See [API Versioning, Feature Flags and Feature Addition Governance](27-API-VERSIONING-FEATURE-FLAGS.md).
+
+## Feature switches
+
+The frontend may use feature flags to shape navigation/UX, but backend evaluation remains authoritative for security-sensitive capabilities.
+
+Rules:
+
+- do not treat hidden UI as authorization;
+- design disabled/unavailable states;
+- do not allow client parameters to self-enable a feature;
+- temporary release flags have owner/removal target;
+- System kill switches should produce a clear product state/error rather than a broken page.
 
 ## Validation
 
@@ -198,6 +236,22 @@ Never display:
 - raw JSON exception objects;
 - auth tokens;
 - Restricted message data in unrelated error banners.
+
+## TLS / certificate trust
+
+Browser HTTPS uses normal modern Web PKI validation.
+
+Do not add HPKP/Public-Key-Pins headers or hard-code browser certificate fingerprints.
+
+Use:
+
+- valid public certificates;
+- HSTS;
+- CAA;
+- certificate renewal/monitoring;
+- normal browser trust validation.
+
+See `docs/security/25-CERTIFICATE-TRUST-PINNING.md`.
 
 ## Security headers/browser policy
 
@@ -235,6 +289,7 @@ Use Vitest + Testing Library.
 Test:
 
 - permissions/visibility;
+- feature-enabled/disabled states;
 - validation;
 - errors;
 - loading/empty states;
@@ -255,6 +310,8 @@ Use Playwright for:
 - audit;
 - hostile message rendering;
 - token/local-storage checks;
+- feature-switch behavior;
+- API compatibility critical workflows;
 - critical policy workflows.
 
 ## Bundle/security
@@ -281,6 +338,7 @@ frontend/
     api/
     auth/
     security/
+    flags/
     styles/
     test/
 ```
@@ -294,7 +352,8 @@ AI agents must:
 - use existing design-system components before inventing new patterns;
 - keep API access through the central client;
 - never store auth tokens in browser storage;
-- never treat route guards as authorization;
+- never treat route guards or feature flags as authorization;
 - implement server-error handling, loading and empty states;
 - add role/wrong-tenant tests for protected UI;
+- preserve the package compatibility matrix/lockfile;
 - not introduce packages merely to save a few lines of code.
