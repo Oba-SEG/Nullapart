@@ -8,6 +8,52 @@ Before building a new subsystem or high-risk feature, confirm the applicable thr
 
 A change that violates a mandatory security baseline requires an approved, time-limited security exception. Security cannot be deferred as post-implementation cleanup.
 
+## Human and AI developer execution protocol
+
+Before modifying implementation, configuration, infrastructure or UI:
+
+1. identify the owning phase in [Build Roadmap](docs/16-BUILD-ROADMAP.md);
+2. read the matching detailed specification in [Phase Specifications](docs/phases/README.md);
+3. read all architecture/security documents referenced by that phase;
+4. identify affected trust boundaries, data classes, RBAC/audit requirements and failure semantics;
+5. identify whether the change modifies an existing contract;
+6. implement backend/UI/security/tests/documentation together where applicable;
+7. verify the phase's exit criteria affected by the change.
+
+### AI coding agents
+
+AI agents must:
+
+- preserve existing architecture unless explicitly asked to change it;
+- avoid inventing new services, IDs, data models or public APIs for convenience;
+- prefer established project contracts over generic JSON/dynamic structures;
+- make tenant/customer scope explicit in every data/query/API path;
+- treat email/message content as hostile;
+- never weaken authentication, authorization, audit or failure semantics to complete a task;
+- update tests and documentation when behaviour changes;
+- stop implementation and surface the conflict if a request would violate a mandatory security rule unless the architecture/security rule is deliberately being revised.
+
+AI agents must not infer that an undocumented shortcut is approved simply because it is technically easy.
+
+### Human developers/reviewers
+
+Human developers and reviewers must:
+
+- validate that the implementation matches the owning phase;
+- challenge unnecessary services/network boundaries;
+- review security-sensitive changes against Phase -1;
+- require evidence for exit criteria rather than relying on description alone;
+- deliberately update architecture first when changing a foundational contract.
+
+### Documentation/code disagreement
+
+Documentation and implementation disagreement is a defect.
+
+Resolve it by either:
+
+- changing the implementation to match the architecture; or
+- deliberately reviewing and updating architecture/threat models before changing implementation.
+
 ## Definition of Done
 
 If a feature requires a UI, its UI is implemented and tested at the same time as the backend capability.
@@ -23,7 +69,7 @@ Expected completion includes, where applicable:
 - UI validation;
 - loading/empty/error states;
 - accessibility;
-- Sentry instrumentation;
+- Sentry-compatible instrumentation routed to SegLumberjack;
 - operational logs;
 - unit tests;
 - integration tests;
