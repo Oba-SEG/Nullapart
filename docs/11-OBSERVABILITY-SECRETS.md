@@ -4,40 +4,70 @@
 
 Nullapart must make security, delivery and infrastructure behaviour explainable without leaking customer content.
 
-## Sentry
+## Application observability: Sentry-compatible instrumentation to SegLumberjack
 
-Sentry is the application error/exception telemetry platform.
+SegLumberjack is Nullapart's primary regional application observability platform.
+
+Nullapart application components use Sentry-compatible SDKs/protocols as the standard instrumentation interface.
+
+```text
+Frontend / Rust Mail Core / Control Backend / Scanner / Worker
+                         |
+                         | Sentry SDK / compatible envelope
+                         v
+                Regional SegLumberjack
+                         |
+          errors / exceptions / traces / releases
+          node/service correlation / diagnostics
+```
+
+This architecture does not require events to be sent to a separate hosted Sentry service. References to "Sentry instrumentation" mean the SDK/protocol compatibility layer unless a separate Sentry service is explicitly introduced and approved.
 
 Instrumentation must be included as features are built, not added later.
 
-Before sending events:
+Before sending telemetry to SegLumberjack:
 
 - remove message body/content;
 - remove raw MIME;
 - remove attachment content;
 - remove tokens/cookies/passwords;
-- classify email addresses/PII;
-- preserve trace/message/customer/node identifiers needed for diagnostics.
+- remove secrets/private keys;
+- classify and minimize email addresses/PII;
+- avoid sending complete AI prompts when they contain message content;
+- preserve only the trace/message/customer/node identifiers needed for diagnostics.
 
-## Operational logging
+## AWS infrastructure telemetry: CloudWatch
 
-Regional operational logging is sent to SegLumberjack and/or the AWS CloudWatch-equivalent selected for that deployment.
+CloudWatch has a separate responsibility from SegLumberjack.
 
-Every relevant record should contain:
+Use CloudWatch primarily for AWS infrastructure and managed-service telemetry such as:
 
-- timestamp;
-- region;
-- deployment;
-- node ID;
-- hostname;
-- node IP;
-- service;
-- trace ID;
-- Nullapart message ID;
-- customer ID;
-- event/reason code;
-- severity;
-- duration where relevant.
+- EC2/ECS/container infrastructure;
+- CPU/memory/disk/network;
+- load balancers;
+- RDS/PostgreSQL service metrics;
+- Redis/cache service metrics;
+- S3/AWS service metrics;
+- VPC/network telemetry;
+- AWS alarms and service health;
+- infrastructure/platform logs where AWS-native collection is appropriate.
+
+Do not describe CloudWatch as an interchangeable replacement for SegLumberjack application observability.
+
+## Authoritative audit and product events
+
+Observability data is not the authoritative audit record.
+
+Security/product events such as impersonation, policy changes, quarantine release, remediation and tenant-state changes must be persisted in the appropriate Nullapart database/audit/event stores even if a correlated event is also sent to SegLumberjack.
+
+A useful mental model is:
+
+```text
+security/product action
+   |-- authoritative DB/audit record
+   |-- durable event stream
+   '-- sanitized observability event -> SegLumberjack
+```
 
 ## Node-level visibility
 
