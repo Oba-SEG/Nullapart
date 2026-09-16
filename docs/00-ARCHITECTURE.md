@@ -91,3 +91,7 @@ There is no supported public customer API, API gateway product or customer API-k
 ## Anti-goals
 
 Nullapart should not reproduce a deep synchronous HTTP chain, put an LLM in every-message delivery, implement SMTP itself, write custom mail cryptography where mature implementations exist, use one shared service secret, expose raw JSON in UI, include billing, depend on Control Plane availability for mail, or create a container for every feature.
+## Architecture diagrams
+
+See [Architecture Diagrams](diagrams/README.md), especially the [system context](diagrams/00-system-context.mmd) and [regional AWS topology](diagrams/03-regional-aws-topology.mmd).
+
