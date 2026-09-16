@@ -69,15 +69,29 @@ Each tenant belongs to one region/deployment.
 
 Customer mail content and associated security records remain in that deployment unless an explicitly approved integration is permitted to receive a defined data class.
 
-Third-party services such as Sentry, ClickUp, threat intelligence and AI are treated as potential data-export paths.
+Third-party or externally hosted services such as ClickUp, threat intelligence and AI are treated as potential data-export paths. SegLumberjack is intended to be deployed/operated as the regional application observability backend; any deployment topology that would export customer telemetry outside the allowed region must be reviewed explicitly.
 
-## Logging
+## Observability and logging
 
-Nullapart uses Sentry for application error telemetry and SegLumberjack or an AWS CloudWatch-equivalent for regional operational logging.
+Nullapart applications use **Sentry-compatible SDK instrumentation** as the standard application telemetry interface.
 
-Logs should include region, deployment, node ID, hostname, node IP, service, trace ID, Nullapart message ID, customer ID, actor identity when administrative, event/reason code and timing.
+The normal telemetry path is:
 
-Do not log message bodies, raw MIME, attachment content, passwords, tokens, cookies, private keys or credentials by default.
+```text
+Nullapart application
+  -> Sentry SDK / Sentry-compatible protocol
+  -> regional SegLumberjack
+```
+
+SegLumberjack is the primary regional application observability platform for application errors, exceptions, traces/performance telemetry where supported, release context and service/node correlation.
+
+The architecture does **not** require a separate hosted Sentry service. "Sentry" in implementation guidance refers to the SDK/protocol standard unless a separate service is explicitly approved.
+
+AWS CloudWatch is complementary and is used primarily for AWS infrastructure and managed-service telemetry such as EC2/ECS, load balancers, RDS, cache, network, platform metrics and AWS alarms. CloudWatch is not a substitute for the SegLumberjack application-observability role.
+
+Application telemetry should include region, deployment, node ID, hostname, node IP, service, release, trace ID, Nullapart message ID, customer ID, actor identity when administrative, event/reason code and timing where applicable.
+
+Before telemetry leaves the application process, scrub message bodies, raw MIME, attachment content, passwords, tokens, cookies, private keys, credentials and other sensitive fields.
 
 ## Untrusted email input
 
