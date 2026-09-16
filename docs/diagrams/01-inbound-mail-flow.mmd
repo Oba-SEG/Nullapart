@@ -1,0 +1,43 @@
+flowchart TD
+    Sender[External SMTP Sender]
+    Restrict[Postfix SMTP Restriction Stage]
+    Milter[Rspamd Milter Stage]
+    Queue[(Postfix Durable Queue)]
+    Normalize[MIME Normalization]
+    Fanout{Parallel Security Analysis}
+    Malware[Malware Scanner]
+    URL[URL / Domain Scanner]
+    Docs[Document / Archive Scanner]
+    OCR[OCR / QR / Image]
+    Static[Static / YARA]
+    ML[Inline ML]
+    Policy[Policy Evaluation]
+    Deliver[Deliver to Customer]
+    Quarantine[Quarantine]
+    Hold[Hold]
+    Reject[SMTP Reject]
+    Defer[SMTP Defer]
+
+    Sender --> Restrict
+    Restrict -->|Reject condition| Reject
+    Restrict -->|Temporary failure| Defer
+    Restrict -->|Continue| Milter
+    Milter --> Queue
+    Queue --> Normalize --> Fanout
+
+    Fanout --> Malware
+    Fanout --> URL
+    Fanout --> Docs
+    Fanout --> OCR
+    Fanout --> Static
+
+    Malware --> ML
+    URL --> ML
+    Docs --> ML
+    OCR --> ML
+    Static --> ML
+
+    ML --> Policy
+    Policy -->|Allow / Warn| Deliver
+    Policy -->|Quarantine| Quarantine
+    Policy -->|Hold / Deep Analysis| Hold
