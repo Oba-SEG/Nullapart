@@ -48,6 +48,37 @@ Every policy family/setting declares one management level:
 - `SUPPORT`;
 - `SYSTEM`.
 
+## Audit-log visibility
+
+### System Admin
+
+Can access the regional administrative audit log when granted the required System permission.
+
+May inspect System, Support and Customer administrative actions, including impersonation chains.
+
+### Support
+
+Can access audit events only within Support RBAC/customer scope.
+
+Support can inspect operational administrative changes but audit detail must never expose message body or attachment content.
+
+### Customer Admin
+
+Tenant audit access is customer-scoped.
+
+The customer owner controls which tenant roles may view the tenant audit log or export it.
+
+### Audit invariants
+
+Every impersonated event retains both:
+
+- real actor;
+- impersonated subject.
+
+Audit reads, filters, exports and high-risk views are themselves auditable.
+
+See [Administrative Audit Logging](17-ADMIN-AUDIT-LOGGING.md).
+
 ## Tenant lifecycle
 
 - ACTIVE;
