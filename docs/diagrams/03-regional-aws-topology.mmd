@@ -5,11 +5,14 @@ flowchart TB
         ZAWeb[za.nullapart.com]
         ZAMX[mx1 / mx2.za.nullapart.com]
         ZAApp[Control + Mail Runtime]
-        ZADB[(PostgreSQL)]
-        ZARedis[(Redis)]
+        ZADB[(PostgreSQL + Audit + Outbox)]
+        ZARedis[(Redis / Valkey Cache)]
+        ZASQS[(SQS)]
         ZAS3[(S3)]
         ZAID[ZITADEL]
-        ZAVault[OpenBao]
+        ZAVault[OpenBao HA]
+        ZASeg[SegLumberjack]
+        ZACW[CloudWatch]
         ZAAI[Regional Deep AI]
     end
 
@@ -17,11 +20,14 @@ flowchart TB
         ZABWeb[zab.nullapart.com]
         ZABMX[mx1 / mx2.zab.nullapart.com]
         ZABApp[Control + Mail Runtime]
-        ZABDB[(PostgreSQL)]
-        ZABRedis[(Redis)]
+        ZABDB[(PostgreSQL + Audit + Outbox)]
+        ZABRedis[(Redis / Valkey Cache)]
+        ZABSQS[(SQS)]
         ZABS3[(S3)]
         ZABID[ZITADEL]
-        ZABVault[OpenBao]
+        ZABVault[OpenBao HA]
+        ZABSeg[SegLumberjack]
+        ZABCW[CloudWatch]
         ZABAI[Regional Deep AI]
     end
 
@@ -29,11 +35,14 @@ flowchart TB
         EUWeb[eu.nullapart.com]
         EUMX[mx1 / mx2.eu.nullapart.com]
         EUApp[Control + Mail Runtime]
-        EUDB[(PostgreSQL)]
-        EURedis[(Redis)]
+        EUDB[(PostgreSQL + Audit + Outbox)]
+        EURedis[(Redis / Valkey Cache)]
+        EUSQS[(SQS)]
         EUS3[(S3)]
         EUID[ZITADEL]
-        EUVault[OpenBao]
+        EUVault[OpenBao HA]
+        EUSeg[SegLumberjack]
+        EUCW[CloudWatch]
         EUAI[Regional Deep AI]
     end
 
@@ -45,28 +54,37 @@ flowchart TB
     ZAMX --> ZAApp
     ZAApp --> ZADB
     ZAApp --> ZARedis
+    ZADB --> ZASQS
     ZAApp --> ZAS3
     ZAApp --> ZAID
     ZAApp --> ZAVault
+    ZAApp --> ZASeg
     ZAApp --> ZAAI
+    ZAApp --> ZACW
 
     ZABWeb --> ZABApp
     ZABMX --> ZABApp
     ZABApp --> ZABDB
     ZABApp --> ZABRedis
+    ZABDB --> ZABSQS
     ZABApp --> ZABS3
     ZABApp --> ZABID
     ZABApp --> ZABVault
+    ZABApp --> ZABSeg
     ZABApp --> ZABAI
+    ZABApp --> ZABCW
 
     EUWeb --> EUApp
     EUMX --> EUApp
     EUApp --> EUDB
     EUApp --> EURedis
+    EUDB --> EUSQS
     EUApp --> EUS3
     EUApp --> EUID
     EUApp --> EUVault
+    EUApp --> EUSeg
     EUApp --> EUAI
+    EUApp --> EUCW
 
     ZA -. no customer-data federation .- ZAB
     ZAB -. no customer-data federation .- EU
