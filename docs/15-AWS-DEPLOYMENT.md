@@ -70,6 +70,30 @@ At minimum use:
 
 A multi-account AWS model may be considered later for stronger isolation, but deployment design should not require it to function.
 
+## Control-plane load balancing
+
+The regional HTTPS Control Plane uses:
+
+```text
+Internet
+ -> Route 53
+ -> public Application Load Balancer
+ -> AWS WAF
+ -> regional frontend / Control Backend targets
+```
+
+Only TCP 443 is required publicly for normal administration. TCP 80 is optional redirect-only if enabled.
+
+Backend target ports are not Internet reachable.
+
+## SMTP load balancing
+
+Public SMTP uses direct commissioned MX/Postfix node identities as the baseline rather than placing SMTP behind an HTTP load balancer.
+
+A Network Load Balancer may be introduced only after validating client-IP preservation, STARTTLS transparency, timeouts, health checks, IPv4/IPv6 behavior and RBL/rate-limit correctness.
+
+Outbound SMTP uses stable commissioned public EIPs/PTR identities rather than a generic shared NAT identity.
+
 ## SMTP nodes
 
 Postfix nodes require:
@@ -104,13 +128,42 @@ Private IPs may be ephemeral in ECS/EKS-style environments. They remain useful o
 
 Internet-facing SMTP egress IPs are a special case and require stable public identity.
 
-## Application containers
+## Container management baseline
 
-Containers may run on EC2/ECS/EKS according to operational needs.
+Amazon ECS is the initial container orchestration baseline.
 
-Do not force all workloads into one orchestration technology before benchmarking.
+Use ECS capacity providers so workload placement can choose between Fargate and EC2-backed capacity according to isolation/resource requirements.
 
-Rust Mail Core and scanners should remain portable containers.
+Expected examples:
+
+- frontend/Control Backend/lightweight workers: Fargate where suitable;
+- scanners/native/high-resource workers: ECS EC2 capacity where suitable;
+- GPU/accelerated Deep AI: dedicated regional accelerated EC2/ECS capacity;
+- public Postfix mail nodes: dedicated EC2 mail hosts as an intentional exception where stable EIP/PTR identity, durable spool and predictable drain/patch lifecycle are required.
+
+EKS/Kubernetes is not the initial baseline and requires a demonstrated need before introduction.
+
+Rust Mail Core and scanners remain portable containers.
+
+See [Container, Load-Balancing and Network Security Architecture](24-CONTAINER-LOADBALANCING-NETWORK.md).
+
+## Firewall and port security
+
+Security Groups are the primary stateful workload firewall.
+
+Principles:
+
+- deny by absence;
+- SG-to-SG references for private service access;
+- no public PostgreSQL/Redis/OpenBao/Deep-AI/scanner APIs;
+- no public SSH; use Systems Manager/controlled break-glass;
+- scanner egress denied unless required;
+- explicit workload egress;
+- VPC endpoints for AWS services where practical.
+
+Maintain the authoritative port registry at `infrastructure/aws/PORTS.md`.
+
+Network ACLs remain coarse subnet guardrails and should not duplicate every Security Group rule.
 
 ## Databases
 
