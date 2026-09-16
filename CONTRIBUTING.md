@@ -54,6 +54,36 @@ Resolve it by either:
 - changing the implementation to match the architecture; or
 - deliberately reviewing and updating architecture/threat models before changing implementation.
 
+## Git and pull-request workflow
+
+Normal development uses short-lived branches and pull requests into protected `main`.
+
+Do not push directly to `main` or rewrite protected history.
+
+Before opening a PR:
+
+- identify owning phase;
+- run relevant tests/checks locally where practical;
+- update documentation when behaviour/contracts change;
+- ensure no secrets/generated sensitive artifacts are present.
+
+PRs must state:
+
+- objective;
+- phase;
+- architecture/security impact;
+- tests;
+- UI impact;
+- migration impact;
+- audit/observability impact;
+- rollback/containment.
+
+Production artifacts are created by CI, not developer laptops.
+
+Production deployments use immutable digests and approved GitHub/AWS identities.
+
+See [Version Control, CI/CD and Release Security](docs/security/19-VERSION-CONTROL-CICD.md).
+
 ## Definition of Done
 
 If a feature requires a UI, its UI is implemented and tested at the same time as the backend capability.
