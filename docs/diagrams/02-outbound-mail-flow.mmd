@@ -1,0 +1,30 @@
+flowchart TD
+    Customer[Customer Mail System]
+    Postfix[Postfix Outbound]
+    Tenant[Identify Tenant / Trusted Source]
+    Domain[Validate Sending Domain]
+    Bulk[Bulk / Rate / Abuse Controls]
+    Queue[(Durable Queue)]
+    Scan[Security Scanner Fabric]
+    Behaviour[Outbound Behaviour Analysis]
+    Policy[Outbound Policy]
+    Signing[DKIM / Transport Controls]
+    Route{Route}
+    Smart[Smart Host]
+    Direct[Direct MX]
+    Block[Block / Reject]
+    Defer[Defer / Throttle / Hold]
+    Internet((Internet))
+
+    Customer --> Postfix --> Tenant
+    Tenant -->|Unauthorized| Block
+    Tenant --> Domain
+    Domain -->|Domain not INTERNAL or approved SEND_ONLY| Block
+    Domain --> Bulk
+    Bulk -->|Abuse / Unapproved bulk| Defer
+    Bulk --> Queue --> Scan --> Behaviour --> Policy
+    Policy -->|Block| Block
+    Policy -->|Defer / Throttle / Hold| Defer
+    Policy -->|Allow| Signing --> Route
+    Route --> Smart --> Internet
+    Route --> Direct --> Internet
