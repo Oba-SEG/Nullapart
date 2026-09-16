@@ -29,7 +29,9 @@ The following must exist before Phase 0 implementation:
 17. mail-security trust/failure model;
 18. security runbooks;
 19. security metrics/KPIs;
-20. version-control, CI/CD, artifact-provenance and release controls.
+20. version-control, CI/CD, artifact-provenance and release controls;
+21. application-security invariants including ownership, validation, RLS, idempotency, OAST and safe errors;
+22. compliance assurance/control mapping.
 
 No subsystem is exempt because it is "internal", "temporary", "development-only" or "not customer-facing".
 
@@ -86,3 +88,5 @@ Examples:
 - [Privacy, Retention and Deletion](17-PRIVACY-RETENTION-DELETION.md)
 - [Security Governance and Risk Ownership](18-SECURITY-GOVERNANCE.md)
 - [Version Control, CI/CD and Release Security](19-VERSION-CONTROL-CICD.md)
+- [Application Security Control Baseline](20-APPLICATION-SECURITY-CONTROLS.md)
+- [Compliance Assurance and Control Mapping](21-COMPLIANCE-ASSURANCE.md)
