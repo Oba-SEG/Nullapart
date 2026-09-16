@@ -1,0 +1,72 @@
+flowchart TB
+    Login[nullapart.com Login / Region Selector]
+
+    subgraph ZA["ZA Deployment"]
+        ZAWeb[za.nullapart.com]
+        ZAMX[mx1 / mx2.za.nullapart.com]
+        ZAApp[Control + Mail Runtime]
+        ZADB[(PostgreSQL)]
+        ZARedis[(Redis)]
+        ZAS3[(S3)]
+        ZAID[ZITADEL]
+        ZAVault[OpenBao]
+        ZAAI[Regional Deep AI]
+    end
+
+    subgraph ZAB["ZAB Deployment"]
+        ZABWeb[zab.nullapart.com]
+        ZABMX[mx1 / mx2.zab.nullapart.com]
+        ZABApp[Control + Mail Runtime]
+        ZABDB[(PostgreSQL)]
+        ZABRedis[(Redis)]
+        ZABS3[(S3)]
+        ZABID[ZITADEL]
+        ZABVault[OpenBao]
+        ZABAI[Regional Deep AI]
+    end
+
+    subgraph EU["EU Deployment"]
+        EUWeb[eu.nullapart.com]
+        EUMX[mx1 / mx2.eu.nullapart.com]
+        EUApp[Control + Mail Runtime]
+        EUDB[(PostgreSQL)]
+        EURedis[(Redis)]
+        EUS3[(S3)]
+        EUID[ZITADEL]
+        EUVault[OpenBao]
+        EUAI[Regional Deep AI]
+    end
+
+    Login --> ZAWeb
+    Login --> ZABWeb
+    Login --> EUWeb
+
+    ZAWeb --> ZAApp
+    ZAMX --> ZAApp
+    ZAApp --> ZADB
+    ZAApp --> ZARedis
+    ZAApp --> ZAS3
+    ZAApp --> ZAID
+    ZAApp --> ZAVault
+    ZAApp --> ZAAI
+
+    ZABWeb --> ZABApp
+    ZABMX --> ZABApp
+    ZABApp --> ZABDB
+    ZABApp --> ZABRedis
+    ZABApp --> ZABS3
+    ZABApp --> ZABID
+    ZABApp --> ZABVault
+    ZABApp --> ZABAI
+
+    EUWeb --> EUApp
+    EUMX --> EUApp
+    EUApp --> EUDB
+    EUApp --> EURedis
+    EUApp --> EUS3
+    EUApp --> EUID
+    EUApp --> EUVault
+    EUApp --> EUAI
+
+    ZA -. no customer-data federation .- ZAB
+    ZAB -. no customer-data federation .- EU
