@@ -131,6 +131,22 @@ Every regional deployment that sends direct-to-MX mail must explicitly commissio
 
 See [AWS SMTP Deployment Commissioning](21-AWS-SMTP-COMMISSIONING.md).
 
+## Frontend architecture
+
+The administration UI baseline is React + TypeScript + Vite with typed TanStack routing/server-state/table primitives, React Hook Form + Zod, Radix accessibility primitives, custom Nullapart neumorphic styling, and a same-origin Control Backend/BFF session architecture.
+
+Authentication/refresh tokens are not persisted in browser Local Storage/Session Storage.
+
+See [Frontend Architecture and Package Baseline](23-FRONTEND-ARCHITECTURE.md).
+
+## Container/network baseline
+
+Amazon ECS is the initial ordinary-container orchestrator. Dedicated EC2 mail nodes remain an intentional exception for stable SMTP identity/queue semantics.
+
+The HTTPS Control Plane uses ALB/WAF. Public SMTP uses direct commissioned Postfix MX identities by default. Security Groups enforce deny-by-absence workload access.
+
+See [Container, Load-Balancing and Network Security Architecture](24-CONTAINER-LOADBALANCING-NETWORK.md).
+
 ## No public customer API initially
 
 Nullapart exposes an authenticated administration UI backed by its Control Backend.
