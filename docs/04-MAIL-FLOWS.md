@@ -135,3 +135,7 @@ Bulk authorization never bypasses malware or malicious-content controls.
 Nullapart maintains a structured SMTP response catalogue covering connection/resource, TLS, protocol, authentication, relay, recipient, tenant, greylisting, rate, reputation, GeoIP, SPF, DKIM, DMARC, size, malware, attachments, content, outbound authorization, bulk, routing, DNS, downstream SMTP and internal security pipeline failures.
 
 Remote errors are safe and concise; internal views contain permission-controlled diagnostic detail.
+## Flow diagrams
+
+See [Inbound Mail Flow](diagrams/01-inbound-mail-flow.mmd) and [Outbound Mail Flow](diagrams/02-outbound-mail-flow.mmd).
+
