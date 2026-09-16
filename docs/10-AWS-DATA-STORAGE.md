@@ -156,3 +156,7 @@ Use:
 - isolated key policies by deployment.
 
 Key-management decisions remain region-specific and auditable.
+## Data diagram
+
+See [Data and Storage Flow](diagrams/06-data-storage-flow.mmd).
+
