@@ -56,3 +56,7 @@ Every policy family/setting declares one management level:
 - TERMINATED.
 
 Billing is external to Nullapart.
+## RBAC diagram
+
+See [Control-plane RBAC and Impersonation](diagrams/04-control-plane-rbac.mmd).
+
