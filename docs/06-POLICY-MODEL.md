@@ -41,6 +41,14 @@ Each setting declares:
 
 Customer settings cannot weaken System-enforced minimum security bounds.
 
+## Policy scope and recipient partitioning
+
+Policy evaluation is customer/recipient scoped even when several customers received the same original SMTP transaction.
+
+Shared content findings can be reused, but effective policy/disposition is calculated on the relevant Tenant Message Instance.
+
+See [SMTP Transaction and Tenant Message Contract](18-MESSAGE-TRANSACTION-CONTRACT.md).
+
 ## Source of truth
 
 PostgreSQL is authoritative.
@@ -48,17 +56,25 @@ PostgreSQL is authoritative.
 Runtime flow:
 
 ```text
-PostgreSQL
-  -> policy/config compiler
-  -> versioned snapshot
-  -> Redis cache + durable change event
-  -> Mail/scanner nodes
-  -> local last-known-good snapshot
+PostgreSQL transaction
+  |-- policy/config change
+  '-- transactional outbox row
+          |
+          v
+        SQS
+          |
+          v
+runtime refresh consumers
+          |
+          +--> Redis/Valkey shared cache
+          '--> Mail/scanner node local snapshot
 ```
+
+Redis/Valkey accelerates reads; it is not the source of truth and is not assumed to be the durable configuration event bus.
 
 ## Cache refresh
 
-Normal update is event-driven and immediate.
+Normal update is event-driven and immediate through the durable event/outbox path.
 
 Periodic reconciliation repairs missed events and regularly refreshes stale caches.
 
@@ -77,11 +93,27 @@ Support/System UI should display database/config revision vs node-loaded revisio
 
 Mail nodes persist the most recent valid runtime snapshot.
 
-If control services are temporarily unavailable, nodes can load the last-known-good snapshot where safe and clearly report stale configuration status.
+If control services, SQS or Redis/Valkey are temporarily unavailable, nodes can load the last-known-good snapshot where safe and clearly report stale configuration status.
+
+A stale snapshot must not silently be presented as current.
 
 ## Transactional changes
 
-Configuration updates should use the transactional outbox pattern so database commits and configuration-change events cannot silently diverge.
+Configuration mutation, audit and outbox creation should be one PostgreSQL transaction where applicable:
+
+```text
+BEGIN
+  authorize
+  update policy/config
+  increment revision
+  insert admin audit event
+  insert outbox event
+COMMIT
+```
+
+The outbox publisher delivers the event only after commit.
+
+This prevents database state, audit history and runtime-refresh events from silently diverging.
 
 ## Policy actions
 
@@ -99,3 +131,7 @@ Core actions include:
 - temporarily suspend sender/tenant for outbound abuse where configured.
 
 Each action carries a stable internal reason code.
+
+SMTP-stage actions are only used at stages where SMTP semantics permit them. A policy evaluated after SMTP `250` cannot retroactively reject the original SMTP transaction.
+
+See [Durable Event Architecture](20-EVENT-DURABILITY.md).
