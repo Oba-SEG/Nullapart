@@ -27,6 +27,26 @@ Nullapart is a security product. Every feature is designed with explicit trust b
 - System/Support should prefer phishing-resistant WebAuthn/passkey/security-key authentication where supported.
 - High-risk operations may require step-up authentication.
 
+## Application security invariants
+
+All control-plane/API implementation follows the [Application Security Control Baseline](docs/security/20-APPLICATION-SECURITY-CONTROLS.md).
+
+Mandatory rules include:
+
+- derive tenant/user scope from authenticated server context;
+- server-side object ownership/BOLA/IDOR checks for every resource action;
+- client-side validation for UX only and authoritative server-side validation for security/business rules;
+- PostgreSQL Row-Level Security for tenant-scoped tables where practical as defense in depth;
+- transaction-safe tenant context when connection pooling is used;
+- explicit idempotency for retryable/destructive/externally side-effecting operations;
+- no authentication tokens/refresh tokens in browser Local Storage;
+- CSRF protections for cookie-authenticated state-changing requests;
+- safe structured errors with no stack trace/secret/internal-data leakage;
+- OAST/SSRF/XXE testing for components capable of outbound network interaction;
+- mass-assignment protection through explicit writable-field allowlists.
+
+Compliance/security evidence mapping follows [Compliance Assurance](docs/security/21-COMPLIANCE-ASSURANCE.md). Nullapart does not claim a certification merely because controls are mapped.
+
 ## Authorization
 
 Authorization is enforced server-side.
