@@ -6,6 +6,7 @@ flowchart TB
     subgraph PublicEdge["Public / Edge Boundary"]
         SMTP[Postfix SMTP]
         Web[Regional Web Entry]
+        ArtifactEdge[Artifact / Untrusted Render Origin]
     end
 
     subgraph PrivateApp["Private Application Boundary"]
@@ -15,11 +16,15 @@ flowchart TB
         Control[Control Backend]
         IDP[ZITADEL]
         N8N[n8n]
+        Collector[Native Log / Metrics Collector]
     end
 
     subgraph DataBoundary["Regional Data Boundary"]
         PG[(PostgreSQL)]
-        Redis[(Redis)]
+        Audit[(Admin Audit)]
+        Outbox[(Transactional Outbox)]
+        Redis[(Redis / Valkey Cache)]
+        SQS[(SQS)]
         S3[(S3)]
         Secrets[OpenBao]
         Seg[SegLumberjack\nSentry-compatible observability]
@@ -47,25 +52,33 @@ flowchart TB
     Web --> Control
     Control --> IDP
 
+    Control -->|short-lived RBAC checked access| ArtifactEdge --> S3
+
     MailCore --> Scanners
     MailCore --> PG
     MailCore --> Redis
     MailCore --> S3
+    MailCore --> Outbox
     Control --> PG
+    Control --> Audit
     Control --> Redis
+    Control --> Outbox
+    Outbox --> SQS
 
     Secrets --> MailCore
     Secrets --> Scanners
     Secrets --> Control
 
     MailCore --> AIGateway --> Model
-    Model --> S3
+    AIGateway -->|scoped eligible artifacts| S3
 
     PrivateApp -->|sanitized Sentry-compatible telemetry| Seg
     AIGateway -->|sanitized telemetry| Seg
     Model -->|sanitized telemetry| Seg
+    SMTP --> Collector --> Seg
+    Rspamd --> Collector
 
     AWS[AWS Runtime / Managed Services] --> CW
 
-    N8N -->|minimized metadata only| ClickUp
+    SQS --> N8N -->|minimized metadata only| ClickUp
     Scanners -->|explicit allowed fields only| TI
