@@ -64,7 +64,8 @@ Expected AWS-native capabilities include:
 - IAM;
 - VPC/network isolation;
 - regional DNS/load balancing;
-- CloudWatch-equivalent logging integration;
+- CloudWatch for AWS infrastructure telemetry;
+- SegLumberjack as the regional Sentry-compatible application observability backend;
 - managed database/cache where selected.
 
 ## Mail stack
