@@ -1,217 +1,186 @@
 # Nullapart Build Roadmap
 
-The roadmap is architectural sequencing, not a delivery-date promise.
+**Audience:** human developers, AI coding agents, reviewers, security engineers and operators.
 
-## Phase -1 — security program gate
+**Status:** authoritative implementation sequencing document.
 
-**No Phase 0 implementation starts until this gate is accepted.**
+This roadmap defines **what must exist before implementation, what each phase is allowed to change, what each phase must deliver, and the evidence required before moving forward**.
 
-Required before implementation:
+It is not a delivery-date estimate.
 
-- security governance and named ownership;
-- threat-modeling process;
-- secure SDLC/change-control rules;
-- vulnerability-management process and remediation SLAs;
-- incident-response process;
-- privileged-access governance;
-- data-classification matrix;
-- privacy/retention/deletion policy;
-- cryptographic standards;
-- network-security baseline;
-- backup/restore/DR policy and restore-test plan;
-- software supply-chain controls;
-- penetration/security-testing strategy;
-- abuse/misuse response;
-- third-party risk process;
-- security-exception process;
-- mail trust/failure model;
-- required security runbooks;
-- security metrics/control-health requirements.
+## How to use this roadmap
 
-See [Security Program](security/README.md).
+Before starting any work:
 
-Phase -1 completion means the processes, ownership, evidence expectations and security gates are documented and accepted. Operational exercises such as restore tests, penetration tests and production runbook drills occur at the appropriate pre-production/production-readiness gates.
+1. identify the current phase;
+2. read this document;
+3. read the detailed phase specification under `docs/phases/`;
+4. read all architecture/security documents referenced by that phase;
+5. confirm Phase -1 security controls applicable to the work;
+6. identify affected trust boundaries/data classes;
+7. implement backend and UI together where the capability has an administrative UI;
+8. add tests, audit, observability and documentation in the same change;
+9. satisfy the phase exit criteria before beginning work that depends on it.
 
-## Phase 0 — contracts, security and UI foundation
+AI agents must not infer missing architectural decisions from convenience. If a phase specification says a decision is not yet made, preserve the abstraction and do not silently lock the implementation.
 
-Define and test:
+Human developers should treat phase exit criteria as release gates, not suggestions.
 
-- regional/customer identity rules;
-- authentication/RBAC/impersonation;
-- MFA/step-up/session requirements;
-- SMTP Transaction + Tenant Message Instance contract;
-- SecurityFinding contract and scope;
-- scanner contract;
-- policy/config revision model;
-- SMTP reason catalogue;
-- durable event contract;
-- PostgreSQL transactional outbox contract;
-- SQS consumer/idempotency/DLQ contract;
-- ArtifactStore contract;
-- Admin Audit event/storage/query contract;
-- transactional audit + mutation semantics;
-- immutable audit-checkpoint/archive model;
-- Admin Audit UI table/filter/detail design;
-- secure hostile-message rendering/artifact-access contract;
-- neumorphic design tokens/layout shell;
-- Sentry-compatible SDK instrumentation routed to regional SegLumberjack;
-- native daemon log/metrics collector path;
-- CloudWatch infrastructure telemetry baseline;
-- AWS SMTP commissioning checklist.
+## Global implementation rules
 
-No feature is considered backend-only if it requires an administrative UI.
+These rules apply to every phase.
 
-## Phase 1 — SMTP/mail foundation
+### Security
 
-Build:
+- Security Program Phase -1 controls are mandatory.
+- Every network API is authenticated.
+- Authorization is server-side.
+- No shared global service secret.
+- Secrets never enter source control/frontend bundles.
+- Message content is treated as hostile.
+- Support never receives message body/raw MIME/attachment content.
+- Administrative changes are audited.
+- Customer/tenant boundaries are enforced in storage, queries, APIs and UI.
+- Unknown/failed security analysis never silently becomes CLEAN.
+- New trust boundaries require threat-model review.
 
-- containerized Postfix;
-- Rspamd restriction/Milter integration;
-- explicit Postfix after-queue filter handoff;
-- trusted reinjection listener/transport with loop prevention;
-- Rust Mail Core foundation;
-- inbound/outbound routing;
-- durable queue semantics;
-- SMTP Transaction + tenant-message recipient partitioning;
-- tenant/domain/recipient resolution;
-- source IP/connector authorization;
-- greylisting;
-- RBL/GeoIP;
-- trusted auth results;
-- transmission trace;
-- initial policy runtime/cache;
-- AWS outbound port-25/PTR/HELO commissioning for the first deployment.
+### Architecture restraint
 
-Goal: a robust bidirectional SEG without advanced AI.
+Do not recreate NexusSEG-style synchronous microservice chains.
 
-## Phase 2 — scanner fabric
+Create a new process/service/container only when justified by:
 
-Build the common scanner SDK/orchestrator and initial analyzers:
+- isolation;
+- failure-domain separation;
+- independently different scaling;
+- resource profile;
+- incompatible dependencies/runtime;
+- security boundary.
 
-- malware;
-- URL/domain;
-- file type;
-- archives;
-- PDF;
-- Office;
-- OCR/QR/image;
-- static/YARA.
+Prefer module boundaries inside the Rust Mail Core or Control Backend before introducing a new network service.
 
-Add:
+### UI
 
-- parser/container isolation;
-- hard CPU/memory/time/decompression/nesting limits;
-- encrypted/unscannable content handling;
-- quarantine/hold;
-- UI at the same time.
+If a feature is visible/manageable by an administrator, its UI is implemented at the same time as the backend.
 
-## Phase 3 — control plane
+No raw JSON UI.
 
-Build:
+Use the Nullapart neumorphic design system while preserving dense, accessible operational tables and timelines.
 
-- ZITADEL integration after security/license validation;
-- System/Support/Customer Admin RBAC;
-- MFA and step-up controls;
-- impersonation;
-- customers;
-- domains;
-- source groups;
-- policy management;
-- runtime cache visibility/refresh;
-- tenant lifecycle;
-- node/scanner health;
-- stable node identity plus runtime IP/AWS identity;
-- full trace/message permission model;
-- secure sanitized message/full-content view;
-- append-only Admin Audit store, RBAC queries and UI;
-- immutable audit checkpoint/archive job.
+### Observability
 
-## Phase 4 — inline ML
+- Application SDK telemetry -> regional SegLumberjack via Sentry-compatible protocol.
+- Native Postfix/Rspamd/ClamAV telemetry -> regional collector -> appropriate observability path.
+- AWS infrastructure telemetry -> CloudWatch.
+- Admin Audit is authoritative and separate from observability.
+- Sensitive message content/secrets are scrubbed.
 
-Build:
+### Data
 
-- training/evaluation pipeline;
-- compact encoder;
-- ONNX/runtime integration;
-- calibrated outputs;
-- model registry/version reporting;
-- feedback candidate workflow.
+- PostgreSQL is authoritative.
+- Redis/Valkey is cache/runtime acceleration, not authoritative durable events.
+- PostgreSQL transactional outbox + SQS is the preferred durable async path.
+- S3 is the production artifact backend behind ArtifactStore.
+- Customer content remains region/deployment bound unless explicitly approved otherwise.
 
-## Phase 5 — DMARC/BIMI
+### Required change evidence
 
-Build:
+Every material change should include, where applicable:
 
-- RFC 9989/9990/9991-aware report ingestion;
-- external report-destination authorization automation/validation;
-- parser hardening;
-- aggregate vs failure-report privacy controls;
-- authentication source inventory;
-- dashboards;
-- DNS/domain observation;
-- BIMI enforcement/readiness validation;
-- secure BIMI SVG handling;
-- MTA-STS/TLS-RPT views;
-- alerts.
+- design/architecture reference;
+- threat-model update;
+- code/config;
+- migrations;
+- backend authorization;
+- audit events;
+- UI;
+- unit tests;
+- integration tests;
+- security tests;
+- UI/E2E tests;
+- observability;
+- runbook/update notes;
+- rollback/containment plan.
 
-## Phase 6 — outbound intelligence
+## Phase sequence
 
-Build:
+| Phase | Name | Primary outcome |
+|---|---|---|
+| -1 | Security Program Gate | Security governance/processes exist before code |
+| 0 | Contracts and Foundations | Stable contracts, schemas, UI shell, testing/CI foundations |
+| 1 | SMTP and Mail Foundation | Safe bidirectional mail movement without advanced scanners/AI |
+| 2 | Scanner Fabric and Quarantine | Parallel security analysis, quarantine/hold and scanner UI |
+| 3 | Control Plane and Administration | Identity, RBAC, tenants, policies, trace, audit and operations UI |
+| 4 | Inline ML | Low-latency ML evidence integrated safely into policy |
+| 5 | DMARC / BIMI / Domain Security | Report ingestion, telemetry, dashboards and domain-security monitoring |
+| 6 | Outbound Intelligence | Bulk controls, behavioural detection and compromised-sender response |
+| 7 | Regional Deep AI | Controlled deep analysis and model lifecycle outside normal mail hot path |
+| 8 | Connectors and Remediation | M365/Google/directory/mailbox integration and retro-remediation |
+| 9 | Operational Automation and Production Hardening | n8n/ClickUp workflows, production gates, resilience and operational maturity |
 
-- rolling sender/tenant counters;
-- approved bulk sender policy;
-- campaign/fuzzy signals;
-- recipient fanout;
-- compromised sender detection;
-- throttle/defer/block/hold actions;
-- live dashboards/notifications.
+Detailed specifications:
 
-## Phase 7 — Deep AI
+- [Phase -1 — Security Program Gate](phases/PHASE--1-SECURITY-GATE.md)
+- [Phase 0 — Contracts and Foundations](phases/PHASE-0-CONTRACTS-FOUNDATIONS.md)
+- [Phase 1 — SMTP and Mail Foundation](phases/PHASE-1-MAIL-FOUNDATION.md)
+- [Phase 2 — Scanner Fabric and Quarantine](phases/PHASE-2-SCANNER-FABRIC.md)
+- [Phase 3 — Control Plane and Administration](phases/PHASE-3-CONTROL-PLANE.md)
+- [Phase 4 — Inline ML](phases/PHASE-4-INLINE-ML.md)
+- [Phase 5 — DMARC/BIMI/Domain Security](phases/PHASE-5-DMARC-BIMI.md)
+- [Phase 6 — Outbound Intelligence](phases/PHASE-6-OUTBOUND-INTELLIGENCE.md)
+- [Phase 7 — Regional Deep AI](phases/PHASE-7-DEEP-AI.md)
+- [Phase 8 — Connectors and Remediation](phases/PHASE-8-CONNECTORS-REMEDIATION.md)
+- [Phase 9 — Operational Automation and Production Hardening](phases/PHASE-9-OPERATIONS-HARDENING.md)
 
-Deploy regional inference and integrate:
+## Dependency rules
 
-- Qwen3.8-27B candidate or validated replacement;
-- per-region capacity/quantization/concurrency benchmarks;
-- authenticated OpenAI-compatible endpoint;
-- scoped artifact-access broker;
-- quarantined/blocked/reported analysis;
-- complex BEC/impersonation;
-- deep-analysis hold policy;
-- analyst summaries;
-- prompt-injection/tool restrictions;
-- AI audit/retention/security controls.
+Phases express logical dependency, not necessarily a prohibition on preparatory research.
 
-## Phase 8 — connectors/remediation
+Allowed examples:
 
-Implement as required:
+- benchmark Deep-AI candidates before Phase 7;
+- prototype UI components before Phase 3;
+- research DMARC parsing before Phase 5.
 
-- Microsoft 365;
-- Google Workspace;
-- directory sync;
-- VIP enrichment;
-- mailbox search;
-- retro remediation;
-- IMAP/POP only if platform-enabled.
+Not allowed:
 
-## Phase 9 — operational automation
+- shipping a production subsystem whose prerequisites/gates have not passed;
+- bypassing Phase -1 controls because work is "prototype";
+- implementing customer-visible policy before authorization/audit contracts exist;
+- introducing a network service whose trust/security model is not documented.
 
-Expand PostgreSQL outbox + SQS durable events, n8n and ClickUp workflows for incidents, outages, remediation, DMARC degradation and support operations.
+## Production-readiness gate
 
-## Continuous requirements
+No deployment is production-ready merely because Phase 9 code exists.
 
-Across every phase:
+Production readiness requires at minimum:
 
-- authenticated APIs;
-- per-service identity;
-- MFA for all admin accounts;
-- Sentry-compatible instrumentation routed to SegLumberjack;
-- native daemon telemetry collection;
-- CloudWatch for AWS infrastructure telemetry;
-- first-class Admin Audit subsystem and UI;
-- transactional outbox + explicitly durable async delivery;
-- regional isolation;
-- UI with feature;
-- secure hostile-content rendering where message content is displayed;
-- tests with feature;
-- no raw JSON UI;
-- open-source/security/license review;
-- dependency/SBOM management.
+- Phase -1 security program accepted;
+- implemented subsystem threat models reviewed;
+- MFA/admin audit operational;
+- tenant isolation tests passing;
+- backup/restore tested;
+- required runbooks exercised;
+- SMTP commissioning complete;
+- no unresolved Critical security finding;
+- High findings resolved or formally time-limited with compensating controls;
+- observability/alerting active;
+- SQS/DLQ/outbox health visible;
+- scanner failure semantics verified;
+- regional data-residency controls verified;
+- rollback/containment tested;
+- external security testing completed as required.
+
+## Definition of complete
+
+A phase is complete only when:
+
+1. its required deliverables exist;
+2. acceptance tests pass;
+3. documentation matches implementation;
+4. security evidence exists;
+5. UI/backend behaviour is consistent;
+6. operational failure modes are observable;
+7. exit criteria in the phase document are approved.
+
+"Code works on a developer machine" is never sufficient phase completion.
