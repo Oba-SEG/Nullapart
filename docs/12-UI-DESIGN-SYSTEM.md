@@ -18,6 +18,7 @@ Nullapart remains an operational security console and must support dense tables,
 6. Important actions are never communicated by shadow alone.
 7. Every feature ships with its UI and tests.
 8. No raw JSON in the UI.
+9. Untrusted email content never inherits the trusted control-plane DOM/origin implicitly.
 
 ## Shell
 
@@ -49,6 +50,8 @@ Example controls:
 If a region has only one deployment, redundant choice may be collapsed.
 
 After selection, authentication is handled by the regional identity endpoint.
+
+All administrative accounts require MFA.
 
 ## Surfaces
 
@@ -101,7 +104,9 @@ Use a vertical timeline with:
 - expandable permitted detail;
 - node detail only for authorized support/system views.
 
-Do not show backend engine names in customer/product-facing trace labels.
+Do not show backend engine names in customer-facing trace labels.
+
+For multi-tenant SMTP transactions, a Customer Admin sees only that customer's Tenant Message Instance. Cross-tenant recipient information is not shown.
 
 ## Full message view
 
@@ -119,13 +124,50 @@ Tabs may include:
 - Delivery;
 - Remediation.
 
+Opening full content, raw MIME, sensitive headers or attachments is audited.
+
 ### Support
 
-Do not render body/attachment content. Support gets operational/derived data appropriate to role.
+Do not render body, raw MIME or attachment content. Support gets operational/derived data appropriate to role.
+
+Direct artifact/download URLs must enforce the same backend restriction; hiding a Content tab is insufficient.
 
 ### Customer Admin
 
 Tabs/actions are determined by customer RBAC.
+
+## Hostile email rendering
+
+All received message content is untrusted.
+
+### HTML message body
+
+The trusted Nullapart DOM must never directly execute received HTML.
+
+Use:
+
+- strict sanitization;
+- sandboxed iframe and/or dedicated untrusted rendering origin;
+- no scripts/event handlers/forms;
+- remote resources blocked by default;
+- restrictive CSP;
+- no access to Nullapart cookies/storage/parent DOM.
+
+Remote content is only loaded after an explicit privacy warning because loading it can disclose that the message was viewed.
+
+### Plain text and raw data
+
+Plain text, headers and raw MIME are escaped and displayed as text rather than interpreted markup.
+
+### Attachments
+
+Attachment preview/download uses an authenticated, permission-checked artifact path with short-lived authorization and safe content-disposition.
+
+A separate artifact/download origin without control-plane session cookies is preferred.
+
+The UI shows security state before preview/download and warns for risky file types.
+
+See [Secure Message Rendering and Artifact Access](19-SECURE-MESSAGE-RENDERING.md).
 
 ## Policy editor
 
@@ -227,10 +269,13 @@ Operational views should include:
 - deployment health;
 - mail nodes;
 - scanner nodes;
-- unique hostname/IP;
+- stable/logical node ID;
+- current hostname/IP/AWS runtime identity;
 - version;
 - loaded config revision;
 - queue/latency;
+- SQS/outbox/DLQ status;
+- SMTP commissioning status for public mail nodes;
 - status;
 - manual refresh where authorized.
 
@@ -242,10 +287,14 @@ Use:
 - trend charts;
 - source tables;
 - domain-security status;
+- external report authorization status;
+- BIMI enforcement/readiness status;
 - drill-down views;
 - human-readable explanations.
 
 Never display raw report XML as the normal user experience.
+
+Failure-report content follows the same hostile-content and RBAC controls as other message samples.
 
 ## Accessibility
 
@@ -269,4 +318,6 @@ Every UI-bearing feature includes:
 - loading/empty/error tests;
 - keyboard/accessibility checks;
 - role visibility tests;
+- cross-tenant isolation tests;
+- hostile-content rendering/XSS tests for message views;
 - critical workflow E2E coverage.
