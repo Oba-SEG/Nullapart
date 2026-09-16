@@ -35,6 +35,26 @@ This phase does not build product features. It defines the rules under which eve
 - container/IaC scanning expectations;
 - vulnerability management and remediation targets.
 
+### Version control and delivery security
+
+Define and accept:
+
+- protected `main` branch policy;
+- pull-request/review requirements;
+- CODEOWNERS strategy for security-critical paths;
+- signed/traceable release/tag policy;
+- CI security gates;
+- artifact/SBOM/provenance requirements;
+- GitHub Actions permission model;
+- GitHub OIDC -> AWS role model;
+- environment promotion;
+- production approval;
+- database migration policy;
+- release/versioning policy;
+- rollback/emergency-change process.
+
+See `docs/security/19-VERSION-CONTROL-CICD.md` and `docs/22-VERSIONING-RELEASE-MANAGEMENT.md`.
+
 ### Operational security
 
 - incident-response process;
@@ -93,7 +113,8 @@ Phase -1 evidence includes:
 - access-review cadence;
 - security-exception template/process;
 - runbook inventory;
-- production-readiness checklist.
+- production-readiness checklist;
+- accepted version-control/CI/CD/release policy.
 
 ## Exit criteria
 
