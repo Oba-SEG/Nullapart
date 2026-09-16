@@ -1,0 +1,62 @@
+flowchart TB
+    Internet((Public Internet))
+    Customer[Customer Mail Systems]
+    Admin[Administrators]
+
+    subgraph PublicEdge["Public / Edge Boundary"]
+        SMTP[Postfix SMTP]
+        Web[Regional Web Entry]
+    end
+
+    subgraph PrivateApp["Private Application Boundary"]
+        Rspamd[Rspamd]
+        MailCore[Mail Core]
+        Scanners[Scanner Nodes]
+        Control[Control Backend]
+        IDP[ZITADEL]
+        N8N[n8n]
+    end
+
+    subgraph DataBoundary["Regional Data Boundary"]
+        PG[(PostgreSQL)]
+        Redis[(Redis)]
+        S3[(S3)]
+        Secrets[OpenBao]
+    end
+
+    subgraph AIBoundary["Regional AI Boundary"]
+        AIGateway[Authenticated AI Endpoint]
+        Model[Deep AI Model]
+    end
+
+    subgraph ExternalOps["External / Operational Integrations"]
+        Sentry[Sentry]
+        ClickUp[ClickUp]
+        TI[Threat Intelligence]
+    end
+
+    Internet --> SMTP
+    Customer <--> SMTP
+    Admin --> Web
+
+    SMTP --> Rspamd --> MailCore
+    Web --> Control
+    Control --> IDP
+
+    MailCore --> Scanners
+    MailCore --> PG
+    MailCore --> Redis
+    MailCore --> S3
+    Control --> PG
+    Control --> Redis
+
+    Secrets --> MailCore
+    Secrets --> Scanners
+    Secrets --> Control
+
+    MailCore --> AIGateway --> Model
+    Model --> S3
+
+    PrivateApp -->|sanitized / classified only| Sentry
+    N8N -->|minimized metadata only| ClickUp
+    Scanners -->|explicit allowed fields only| TI
