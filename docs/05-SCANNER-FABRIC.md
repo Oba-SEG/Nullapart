@@ -121,28 +121,6 @@ High-risk native parsers should run with strong process/container isolation:
 
 A parser crash should fail the scanner request, not the entire Mail Core.
 
-## Resource-exhaustion and parser safety
-
-Every scanner profile defines hard resource limits. At minimum, relevant scanners constrain:
-
-- MIME nesting depth;
-- attachment count;
-- archive recursion depth;
-- total decompressed bytes;
-- compression ratio;
-- per-artifact and per-message expanded size;
-- document page/sheet/slide count;
-- OCR image dimensions/pixel count;
-- URL count and redirect depth;
-- parser CPU time;
-- wall-clock timeout;
-- memory usage;
-- temporary disk usage.
-
-Password-protected/encrypted, malformed or otherwise unscannable artifacts receive an explicit `UNKNOWN`/`UNSCANNABLE`-type finding and are handled by policy; they are never silently considered clean.
-
-Archive bombs, parser crashes and resource-limit violations must be isolated to the scanner worker/process and must not destabilize Mail Core.
-
 ## Node identity
 
 Every scanner runtime records:
