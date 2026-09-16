@@ -53,7 +53,11 @@ Define and accept:
 - release/versioning policy;
 - rollback/emergency-change process.
 
-See `docs/security/19-VERSION-CONTROL-CICD.md` and `docs/22-VERSIONING-RELEASE-MANAGEMENT.md`.
+See:
+
+- `docs/security/19-VERSION-CONTROL-CICD.md`;
+- `docs/22-VERSIONING-RELEASE-MANAGEMENT.md`;
+- `docs/28-GITHUB-ACTIONS-ARCHITECTURE.md`.
 
 ### Operational security
 
@@ -101,9 +105,84 @@ Define and accept:
 - concurrency/idempotency rules for business operations.
 
 See:
+
 - `docs/security/22-RATE-LIMITING-ABUSE-PROTECTION.md`;
 - `docs/security/23-PATCHING-DEPENDENCY-VERSIONS.md`;
 - `docs/security/24-BUSINESS-LOGIC-POLICY-SECURITY.md`.
+
+### Cryptographic trust and message integrity
+
+Define and accept:
+
+- browser/public PKI strategy;
+- internal mTLS/private-PKI strategy;
+- explicit rule that browser HPKP is not used;
+- approval/rotation/recovery requirements for any future non-browser pinning;
+- HMAC-SHA-256 webhook/event signing pattern where shared-secret integrity is appropriate;
+- replay protection, key rotation and constant-time verification rules.
+
+See:
+
+- `docs/security/25-CERTIFICATE-TRUST-PINNING.md`;
+- `docs/security/26-HMAC-SIGNING-WEBHOOKS.md`.
+
+### API compatibility and feature governance
+
+Define and accept:
+
+- initial `/api/v1` Control Plane compatibility contract;
+- event/scanner/policy/AI skill schema versioning;
+- deprecation/breaking-change process;
+- server-authoritative feature-switch classes;
+- kill-switch behavior;
+- feature flag ownership/expiry/audit;
+- feature-addition threat/data/API/UI/test checklist.
+
+See `docs/27-API-VERSIONING-FEATURE-FLAGS.md`.
+
+### Package compatibility
+
+Define a stack-level compatibility process rather than selecting packages independently.
+
+Require:
+
+- exact implementation lockfiles;
+- runtime/toolchain compatibility matrix;
+- peer dependency review;
+- frozen CI installs;
+- grouped ecosystem upgrades;
+- production ML/CUDA/model compatibility testing per target environment.
+
+See `docs/26-PACKAGE-COMPATIBILITY.md`.
+
+### ML / LLM capability and tool governance
+
+Before production AI work, define:
+
+- skill registry/versioning;
+- allowed data classes;
+- tool allowlists;
+- read-only-first tool model;
+- server-enforced authorization for every tool;
+- prompt-injection boundaries;
+- structured output schemas;
+- model/skill evaluations;
+- context/token budgets;
+- training-data provenance/governance;
+- rule that models cannot directly self-authorize administrative/remediation actions.
+
+See `docs/25-AI-LLM-SKILLS-TOOLS.md`.
+
+### Coding-agent governance
+
+AI coding agents operate under:
+
+- root `AGENTS.md`;
+- `docs/ai/CODING-AGENT-OPERATING-MODEL.md`.
+
+The coding-agent model defines project skills, minimal-context loading, token/context discipline, escalation triggers and completion evidence.
+
+Coding-agent repository/cloud permissions are never treated as production LLM permissions.
 
 ### Compliance assurance
 
@@ -136,7 +215,8 @@ It must not:
 - silently choose weaker security defaults;
 - create bypasses because security infrastructure is not yet implemented;
 - invent risk acceptance;
-- assume "internal" means trusted.
+- assume "internal" means trusted;
+- expand its own project/tool permissions into production AI capability assumptions.
 
 When a requested change conflicts with Phase -1 rules, the agent should surface the conflict and implement only after the architecture/security rule has been intentionally changed.
 
@@ -168,7 +248,12 @@ Phase -1 evidence includes:
 - production-readiness checklist;
 - accepted version-control/CI/CD/release policy;
 - accepted application-security baseline;
-- accepted compliance assurance/evidence process.
+- accepted compliance assurance/evidence process;
+- accepted TLS trust/pinning and HMAC/webhook policy;
+- accepted API/versioning/feature-switch policy;
+- accepted ML/LLM skill/tool governance;
+- accepted coding-agent operating model;
+- accepted package-compatibility process.
 
 ## Exit criteria
 
@@ -181,6 +266,7 @@ Phase -1 is complete when:
 - build/release security gates are defined;
 - incident/vulnerability/access/backup processes have owners;
 - mail dependency failure behaviour is documented;
+- API/feature/AI/tool/cryptographic compatibility rules are explicit;
 - the project owner explicitly accepts Phase -1.
 
 ## Must not be built yet
