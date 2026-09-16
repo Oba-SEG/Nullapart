@@ -16,18 +16,7 @@ Require:
 - no direct production changes from developer workstations;
 - CODEOWNERS or equivalent for security-critical paths.
 
-Security-critical paths include:
-
-- authentication/authorization;
-- audit;
-- secrets/PKI;
-- Postfix/Rspamd/security policy;
-- scanner sandboxing;
-- artifact access;
-- Deep AI tool permissions;
-- regional/data-residency controls;
-- infrastructure/IAM;
-- CI/CD.
+Security-critical paths include authentication/authorization, audit, secrets/PKI, Postfix/Rspamd/security policy, scanner sandboxing, artifact access, Deep AI tool permissions, regional/data-residency controls, infrastructure/IAM and CI/CD.
 
 ## CI security gates
 
@@ -42,17 +31,13 @@ Before merge/release:
 - IaC/security-policy scan;
 - license-policy check;
 - lint/format/build;
-- tests for tenant isolation/RBAC where relevant.
+- tenant-isolation/RBAC tests where relevant.
 
 Critical findings block release unless a documented exception exists.
 
 ## Environments
 
-Separate:
-
-- development;
-- test/staging;
-- production.
+Separate development, test/staging and production.
 
 Production secrets/data must not be copied casually into lower environments.
 
@@ -60,36 +45,16 @@ Synthetic/sanitized data is preferred for development/testing.
 
 ## Change control
 
-Production changes must record:
-
-- change owner;
-- reason;
-- affected deployment/region;
-- risk;
-- test evidence;
-- rollback plan;
-- approval;
-- execution result.
+Production changes record owner, reason, affected deployment/region, risk, test evidence, rollback plan, approval and execution result.
 
 Emergency changes follow an expedited but auditable path and require post-change review.
 
 ## Rollback
 
-Every production release/change must have a defined rollback or containment path.
+Every production release/change has a rollback or containment path.
 
-Schema/data migrations must account for backward compatibility and rollback limitations.
+Schema/data migrations account for backward compatibility and rollback limitations.
 
 ## Definition of Done
 
-Security-sensitive features require:
-
-- threat model;
-- backend;
-- UI where required;
-- server-side authorization;
-- audit;
-- observability;
-- tests;
-- failure handling;
-- runbook;
-- documentation.
+Security-sensitive features require threat model, backend, UI where required, server-side authorization, audit, observability, tests, failure handling, runbook and documentation.
