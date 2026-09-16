@@ -1,5 +1,13 @@
 # Contributing to Nullapart
 
+## Phase -1 security gate
+
+Nullapart implementation must follow the accepted [Security Program](docs/security/README.md).
+
+Before building a new subsystem or high-risk feature, confirm the applicable threat model, data classification, authorization/audit requirements, failure model, security tests and operational runbook expectations.
+
+A change that violates a mandatory security baseline requires an approved, time-limited security exception. Security cannot be deferred as post-implementation cleanup.
+
 ## Definition of Done
 
 If a feature requires a UI, its UI is implemented and tested at the same time as the backend capability.
