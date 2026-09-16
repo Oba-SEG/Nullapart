@@ -45,6 +45,21 @@ Tenant/customer isolation affected?
 
 Summarize code/config/schema/UI changes.
 
+## Application security
+
+- [ ] Tenant/user scope derives from authenticated server context, not client IDs
+- [ ] Object ownership/BOLA/IDOR checks exist for reads/writes/actions
+- [ ] Wrong-user / wrong-tenant / wrong-owner tests included
+- [ ] Client validation is backed by authoritative server validation
+- [ ] PostgreSQL RLS considered/applied where appropriate
+- [ ] RLS pooled-connection context tested where applicable
+- [ ] Retryable/destructive operations define idempotency
+- [ ] No auth/refresh credentials stored in Local Storage / Session Storage
+- [ ] CSRF considered for cookie-authenticated mutations
+- [ ] OAST/SSRF tests included if server-side outbound network access exists
+- [ ] Writable fields are allowlisted against mass assignment
+- [ ] Client-facing errors are safe and structured
+
 ## Authentication / authorization
 
 - [ ] No auth impact
