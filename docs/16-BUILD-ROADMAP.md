@@ -12,15 +12,16 @@ It is not a delivery-date estimate.
 
 Before starting any work:
 
-1. identify the current phase;
-2. read this document;
-3. read the detailed phase specification under `docs/phases/`;
-4. read all architecture/security documents referenced by that phase;
-5. confirm Phase -1 security controls applicable to the work;
-6. identify affected trust boundaries/data classes;
-7. implement backend and UI together where the capability has an administrative UI;
-8. add tests, audit, observability and documentation in the same change;
-9. satisfy the phase exit criteria before beginning work that depends on it.
+1. AI coding agents read root `AGENTS.md` first;
+2. identify the current phase;
+3. read this document;
+4. read the detailed phase specification under `docs/phases/`;
+5. read all architecture/security documents referenced by that phase;
+6. confirm Phase -1 security controls applicable to the work;
+7. identify affected trust boundaries/data classes/contracts;
+8. implement backend and UI together where the capability has an administrative UI;
+9. add tests, audit, observability and documentation in the same change;
+10. satisfy the phase exit criteria before beginning work that depends on it.
 
 AI agents must not infer missing architectural decisions from convenience. If a phase specification says a decision is not yet made, preserve the abstraction and do not silently lock the implementation.
 
@@ -67,14 +68,19 @@ Prefer module boundaries inside the Rust Mail Core or Control Backend before int
 - limiter backend failure has explicit safe behavior;
 - abuse-rate exemptions are scoped and audited.
 
-### Patching and dependency lifecycle
+### Patching, dependency lifecycle and compatibility
 
 - production dependencies/runtimes are pinned/reproducible;
 - lockfiles are committed;
 - automated update PRs are reviewed/tested;
 - unsupported/EOL critical runtimes require a time-limited exception;
 - containers are rebuilt rather than interactively patched;
-- mail nodes patch through safe drain/rolling procedures.
+- mail nodes patch through safe drain/rolling procedures;
+- package/runtime compatibility is validated as a stack, not package-by-package;
+- peer dependency/toolchain conflicts are not hidden with force flags;
+- frontend, Rust, container and ML dependency matrices are tested in CI.
+
+See `docs/26-PACKAGE-COMPATIBILITY.md`.
 
 ### Frontend architecture
 
@@ -84,6 +90,55 @@ Prefer module boundaries inside the Rust Mail Core or Control Backend before int
 - one typed API client boundary;
 - client validation does not replace server validation;
 - no raw JSON UI.
+
+### API compatibility and feature switches
+
+- initial Control Plane API follows `/api/v1` compatibility rules;
+- independently consumed events/scanner/config/AI contracts are versioned;
+- breaking changes require explicit version/migration strategy;
+- feature switches are server-authoritative versioned configuration, not authorization;
+- release/experiment flags have owner/removal lifecycle;
+- operational kill switches produce explicit safe degraded behavior;
+- new features define API/data/UI/audit/rate-limit/failure/rollback/compliance impact before implementation.
+
+See `docs/27-API-VERSIONING-FEATURE-FLAGS.md`.
+
+### TLS trust, mTLS and HMAC
+
+- public browser HTTPS uses normal modern PKI validation, HSTS and CAA;
+- HPKP/Public-Key-Pins is not used;
+- internal high-value service communication may use workload mTLS/private regional PKI;
+- TLS verification is never disabled for convenience;
+- any future non-browser pinning requires threat/rotation/recovery design;
+- HMAC-SHA-256 is the baseline Nullapart shared-secret integrity primitive where appropriate;
+- HMAC verification includes versioning, constant-time comparison, replay protection, key rotation and idempotency;
+- provider webhooks use provider-defined verification schemes.
+
+See:
+
+- `docs/security/25-CERTIFICATE-TRUST-PINNING.md`;
+- `docs/security/26-HMAC-SIGNING-WEBHOOKS.md`.
+
+### ML / LLM skills and tools
+
+- production AI capability is expressed as versioned skills;
+- each skill defines data classes, model requirements, input/output schema, tool allowlist, context/token limits, evaluation and rollback;
+- tools are server-authorized adapters, not raw infrastructure credentials;
+- read-only tools are preferred initially;
+- prompt/message/tool content is untrusted data;
+- models cannot self-authorize administrative/mail/remediation actions;
+- training eligibility is separately governed.
+
+See `docs/25-AI-LLM-SKILLS-TOOLS.md`.
+
+### Coding agents and context discipline
+
+- coding agents follow root `AGENTS.md` and `docs/ai/CODING-AGENT-OPERATING-MODEL.md`;
+- load the minimum authoritative task context rather than the whole repository by default;
+- reuse existing project abstractions before adding new ones;
+- token/context optimization never skips security, tenant isolation, audit or tests;
+- coding-agent permissions do not imply runtime Deep-AI permissions;
+- AI agents may prepare but never self-approve production releases.
 
 ### Container/network/firewall baseline
 
@@ -114,18 +169,23 @@ Prefer module boundaries inside the Rust Mail Core or Control Backend before int
 - writable fields are explicitly allowlisted against mass assignment;
 - wrong-user/wrong-tenant/wrong-owner tests are required.
 
-### Version control and CI/CD
+### Version control and GitHub Actions
 
-- `main` is protected and remains releasable.
+- `main` is protected and remains releasable;
 - normal changes use short-lived branches + reviewed pull requests;
 - security-critical paths require appropriate owner/security review;
 - CI security checks are mandatory and cannot be disabled to make a change pass;
+- workflow permissions are explicit/minimal;
+- third-party Actions are pinned to reviewed immutable commit SHAs where practical;
+- untrusted PR code receives no privileged production secrets;
 - CI uses short-lived workload/OIDC credentials rather than standing AWS deployment keys;
 - artifacts are built once, identified by immutable digest, and promoted between environments;
 - production deployment requires explicit target region/deployment and approval;
 - database migrations are version-controlled and immutable after production application;
 - release versions/tags follow the documented versioning contract;
 - AI agents may prepare releases but cannot self-approve production.
+
+See `docs/28-GITHUB-ACTIONS-ARCHITECTURE.md`.
 
 ### UI
 
@@ -157,14 +217,19 @@ Every material change should include, where applicable:
 
 - design/architecture reference;
 - threat-model update;
+- API/event/schema compatibility impact;
+- feature-switch/rollout decision;
 - code/config;
 - migrations;
 - backend authorization;
 - audit events;
 - UI;
+- package/toolchain compatibility evidence;
 - unit tests;
 - integration tests;
 - security tests;
+- HMAC/replay/contract tests where applicable;
+- ML skill/tool evaluation where applicable;
 - UI/E2E tests;
 - observability;
 - runbook/update notes;
@@ -215,7 +280,8 @@ Not allowed:
 - shipping a production subsystem whose prerequisites/gates have not passed;
 - bypassing Phase -1 controls because work is "prototype";
 - implementing customer-visible policy before authorization/audit contracts exist;
-- introducing a network service whose trust/security model is not documented.
+- introducing a network service whose trust/security model is not documented;
+- introducing unversioned contracts or ungoverned LLM tools as a shortcut.
 
 ## Production-readiness gate
 
@@ -236,6 +302,12 @@ Production readiness requires at minimum:
 - SQS/DLQ/outbox health visible;
 - scanner failure semantics verified;
 - regional data-residency controls verified;
+- API/event/schema compatibility verified for rolling deployment;
+- feature switches/kill switches reviewed and obsolete rollout flags removed/planned for removal;
+- dependency/toolchain/runtime compatibility and support status verified;
+- TLS/certificate rotation path verified;
+- HMAC/webhook verification/replay controls tested where used;
+- Deep-AI skill/tool permissions/evaluations verified where enabled;
 - rollback/containment tested;
 - external security testing completed as required.
 
