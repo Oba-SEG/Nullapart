@@ -1,0 +1,35 @@
+flowchart LR
+    System[System Admin]
+    Support[Support Admin]
+    Customer[Customer Admin]
+    UI[Neumorphic Admin UI]
+    Control[Control Backend / Modules]
+    Auth[Authorization]
+    AuditWriter[Audit Writer]
+    AuditDB[(Append-only Admin Audit Store)]
+    Streams[(Durable Event Stream)]
+    Seg[SegLumberjack\nSanitized correlation only]
+    Archive[(Immutable S3 Audit Archive / Checkpoints)]
+
+    System --> UI
+    Support --> UI
+    Customer --> UI
+    UI --> Control --> Auth
+
+    Auth -->|authorized mutation| AuditWriter
+    AuditWriter --> AuditDB
+    AuditWriter --> Streams
+    AuditWriter -->|sanitized event| Seg
+
+    AuditDB -. periodic integrity/archive .-> Archive
+
+    AuditDB -->|RBAC-scoped queries| Control
+    Control -->|tables / filters / detail drawer| UI
+
+    Note1[Support audit views never expose message body or attachment content]
+    Note2[Impersonation preserves real actor + acting-as subject]
+    Note3[Audit DB is authoritative; SegLumberjack is diagnostic]
+
+    AuditDB -.-> Note1
+    AuditWriter -.-> Note2
+    Seg -.-> Note3
