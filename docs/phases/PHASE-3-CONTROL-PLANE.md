@@ -146,11 +146,18 @@ Show:
 Every endpoint/action:
 
 - authenticated;
-- deployment/customer scoped;
+- deployment/customer scoped from authenticated principal context;
+- object ownership/BOLA/IDOR checked;
 - server-side authorized;
 - audit-aware;
 - no raw database IDs exposed as customer identity;
+- authoritative server-side input validation;
+- explicit writable-field allowlists;
+- safe structured errors with correlation IDs;
+- idempotency for retry-sensitive mutations;
 - no content leakage through errors/search/export.
+
+Tenant-scoped PostgreSQL tables use RLS where practical as defense in depth. Request handling must use transaction-safe tenant context under connection pooling and must not normally run with RLS-bypass privileges.
 
 ## UI standard
 
@@ -175,7 +182,13 @@ Do not sacrifice:
 - stored XSS from mail/customer fields;
 - audit bypass;
 - policy security-floor bypass;
-- export leakage.
+- export leakage;
+- wrong-owner direct-object access;
+- RLS bypass/pooled-connection context leakage;
+- mass assignment;
+- idempotency replay/duplicate side effects;
+- unsafe error disclosure;
+- browser token persistence/local-storage checks.
 
 ## Exit criteria
 
@@ -188,7 +201,12 @@ Do not sacrifice:
 - hostile message rendering isolated;
 - Support content restriction verified through API and artifact paths;
 - admin audit searchable and immutable checkpoints functioning;
-- runtime config revision/refresh operational.
+- runtime config revision/refresh operational;
+- wrong-user/wrong-tenant/wrong-owner API tests pass;
+- tenant RLS controls pass isolation tests where applied;
+- browser authentication uses the approved non-Local-Storage session model;
+- retry-sensitive actions demonstrate idempotency;
+- external error responses contain no stack traces/secrets/internal SQL/provider leakage.
 
 ## Not in this phase
 
