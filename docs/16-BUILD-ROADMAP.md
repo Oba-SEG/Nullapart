@@ -59,6 +59,19 @@ Create a new process/service/container only when justified by:
 
 Prefer module boundaries inside the Rust Mail Core or Control Backend before introducing a new network service.
 
+### Application-security invariants
+
+- derive data scope from authenticated principal, not client-provided IDs;
+- enforce server-side object ownership/BOLA/IDOR checks;
+- client validation is UX only; server validation is authoritative;
+- use PostgreSQL RLS where practical as defense in depth;
+- browser auth/refresh credentials are not stored in Local Storage/Session Storage;
+- retryable/destructive side effects define idempotency;
+- outbound-fetch features require SSRF protections and OAST coverage;
+- API errors are stable/safe and do not leak stack traces, secrets or tenant existence unnecessarily;
+- writable fields are explicitly allowlisted against mass assignment;
+- wrong-user/wrong-tenant/wrong-owner tests are required.
+
 ### Version control and CI/CD
 
 - `main` is protected and remains releasable.
