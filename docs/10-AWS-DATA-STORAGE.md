@@ -18,28 +18,60 @@ Stores include:
 - domains;
 - roles/permissions;
 - policy definitions/revisions;
-- message/security metadata;
+- SMTP transaction metadata;
+- tenant message/security metadata;
 - quarantine metadata;
 - DMARC/BIMI metadata;
 - configuration;
-- audit metadata;
+- append-only administrative audit records;
+- transactional outbox events;
 - model release metadata;
 - connector metadata.
 
 Mail content itself should not be stored as large database blobs by default.
 
-## Redis
+## Redis / Valkey
 
-Redis supports:
+Redis/Valkey supports low-latency runtime state such as:
 
 - policy/config caches;
 - greylisting;
 - rate/behaviour counters;
 - runtime acceleration;
-- durable streams/event consumers;
-- cache-revision state.
+- short-lived distributed coordination;
+- cache-revision state;
+- idempotency/deduplication acceleration where the authoritative record exists elsewhere.
 
-Redis is not the source of truth for policy/customer configuration.
+Redis/Valkey is not the source of truth for policy/customer configuration and a cache-oriented deployment is not automatically considered a durable event bus.
+
+## Durable events
+
+The preferred AWS baseline is:
+
+```text
+PostgreSQL transaction
+   |-- authoritative business/security change
+   |-- audit row when applicable
+   '-- transactional outbox row
+          |
+          v
+      outbox publisher
+          |
+          v
+       Amazon SQS
+          |
+          +--> notifications
+          +--> n8n / ClickUp workflows
+          +--> DMARC/reporting workers
+          +--> analytics
+          '-- other asynchronous consumers
+```
+
+Consumers assume at-least-once delivery and must be idempotent.
+
+If a different Redis-compatible durable backend is selected, its persistence, acknowledgement, replay, failover and data-loss semantics must be explicitly documented rather than inferred from the Redis protocol.
+
+See [Durable Event Architecture](20-EVENT-DURABILITY.md).
 
 ## ArtifactStore abstraction
 
@@ -65,7 +97,8 @@ Regional/deployment-specific buckets or strongly partitioned bucket strategy sto
 - attachment artifacts;
 - extracted analysis artifacts;
 - ML datasets/model artifacts where appropriate;
-- DMARC ingestion artifacts where needed.
+- DMARC ingestion artifacts where needed;
+- immutable/tamper-evident audit checkpoints/archives where configured.
 
 Recommended controls:
 
@@ -75,6 +108,7 @@ Recommended controls:
 - Block Public Access;
 - versioning where useful;
 - lifecycle/retention policies;
+- S3 Object Lock where immutable retention is required;
 - CloudTrail/audit where needed;
 - no default cross-region replication.
 
@@ -83,6 +117,8 @@ Recommended controls:
 Services exchange artifact references rather than base64 email/attachment blobs.
 
 A reference includes enough information to authorize and locate the artifact without exposing unrestricted bucket access.
+
+Do not expose reusable unrestricted S3 URLs to browsers. Content access uses permission checks and short-lived access.
 
 ## Temporary scanner storage
 
@@ -101,12 +137,13 @@ Requirements:
 
 Quarantine includes:
 
-- immutable message identity;
+- immutable tenant message identity;
+- parent SMTP transaction identity;
 - raw MIME/artifact reference;
 - findings;
 - policy decision;
 - customer;
-- recipients;
+- customer-scoped recipients;
 - retention deadline;
 - release/remediation audit.
 
@@ -128,7 +165,7 @@ Retention must be explicit by data class:
 - attachments;
 - quarantine;
 - DMARC reports;
-- audit logs;
+- administrative audit logs;
 - AI analysis;
 - model-training candidates.
 
@@ -143,6 +180,7 @@ Examples:
 - scanner can read only its assigned artifacts and write findings;
 - Deep AI can retrieve only authorized regional security artifacts;
 - Control Backend does not automatically receive unrestricted mail-artifact access;
+- artifact/download service receives narrowly scoped access;
 - backup/operations roles are separated.
 
 ## Encryption
@@ -156,7 +194,7 @@ Use:
 - isolated key policies by deployment.
 
 Key-management decisions remain region-specific and auditable.
+
 ## Data diagram
 
 See [Data and Storage Flow](diagrams/06-data-storage-flow.mmd).
-
