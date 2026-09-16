@@ -1,0 +1,57 @@
+flowchart LR
+    Internet((Internet))
+    CustomerMail[Customer Mail Systems]
+    Admins[System / Support / Customer Admins]
+
+    subgraph Deployment["Nullapart Regional Deployment"]
+        subgraph MailPlane["Mail Plane"]
+            Postfix[Postfix SMTP]
+            Rspamd[Rspamd]
+            MailCore[Rust Mail Core]
+            Scanners[Scanner Fabric]
+            InlineML[Inline ML]
+            Policy[Policy Runtime]
+            Quarantine[Quarantine]
+        end
+
+        subgraph ControlPlane["Control Plane"]
+            UI[Neumorphic Admin UI]
+            Control[Control Backend]
+            Identity[ZITADEL]
+            Config[(PostgreSQL)]
+            Cache[(Redis)]
+            Secrets[OpenBao]
+        end
+
+        subgraph Intelligence["Intelligence / Operations"]
+            DMARC[DMARC + BIMI]
+            DeepAI[Regional Deep AI]
+            Events[Durable Events]
+            N8N[n8n]
+            ClickUp[ClickUp]
+            Notify[Notifications]
+        end
+
+        Artifacts[(S3 Artifact Store)]
+    end
+
+    Internet --> Postfix
+    CustomerMail <--> Postfix
+    Postfix --> Rspamd --> MailCore
+    MailCore --> Scanners
+    MailCore --> InlineML
+    MailCore --> Policy
+    Policy --> Quarantine
+    MailCore --> Artifacts
+
+    Admins --> UI --> Control
+    Control --> Identity
+    Control --> Config
+    Control --> Cache
+    Control --> Secrets
+
+    MailCore --> Events
+    Events --> DMARC
+    Events --> DeepAI
+    Events --> N8N --> ClickUp
+    Events --> Notify
