@@ -10,8 +10,8 @@ flowchart LR
     Notify[Customer Notifications]
     N8N[n8n]
     ClickUp[ClickUp]
-    Sentry[Sentry]
-    Logs[SegLumberjack / CloudWatch]
+    Seg[SegLumberjack\nSentry-compatible app observability]
+    CW[CloudWatch\nAWS infrastructure telemetry]
     Analytics[Reporting / Analytics]
 
     Mail --> Streams
@@ -24,11 +24,10 @@ flowchart LR
     Streams --> N8N --> ClickUp
     Streams --> Analytics
 
-    Mail --> Sentry
-    Control --> Sentry
-    DeepAI --> Sentry
+    Mail -->|Sentry SDK / compatible telemetry| Seg
+    Control -->|Sentry SDK / compatible telemetry| Seg
+    DMARC -->|Sentry SDK / compatible telemetry| Seg
+    Outbound -->|Sentry SDK / compatible telemetry| Seg
+    DeepAI -->|Sentry SDK / compatible telemetry| Seg
 
-    Mail --> Logs
-    Control --> Logs
-    DMARC --> Logs
-    Outbound --> Logs
+    AWS[AWS Runtime / Managed Services] --> CW
