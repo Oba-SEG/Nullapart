@@ -50,6 +50,33 @@ Support may access operational metadata, routing, scanner outcomes, policy decis
 
 Customer Admin content access is controlled by customer RBAC.
 
+## Administrative audit
+
+Administrative audit is a first-class authoritative security record, separate from application observability.
+
+All security-relevant System Admin, Support and Customer Admin actions must generate server-side audit entries.
+
+Requirements include:
+
+- append-only application semantics;
+- real actor identity;
+- impersonated subject when applicable;
+- customer ID;
+- action/resource/result;
+- source/session context;
+- safe before/after change information;
+- reason for high-risk actions where required;
+- trace/correlation identifiers;
+- retention and integrity controls.
+
+Audit data must not contain secrets, message bodies, raw MIME or attachment contents.
+
+Support audit access must not bypass Support message-content restrictions.
+
+Audit-log access and export are themselves audited.
+
+See `docs/17-ADMIN-AUDIT-LOGGING.md`.
+
 ## Secrets
 
 Never store secrets in source code, Git, Docker images or frontend bundles.
