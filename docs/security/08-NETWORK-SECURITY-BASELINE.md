@@ -14,30 +14,13 @@ Separate at minimum:
 
 ## Exposure
 
-Publicly reachable services should be limited to what is required, primarily:
+Publicly reachable services should be limited to required SMTP ingress and HTTPS control/login endpoints.
 
-- SMTP ingress;
-- HTTPS control/login endpoints.
-
-Do not publicly expose:
-
-- PostgreSQL;
-- Redis/Valkey;
-- OpenBao;
-- ZITADEL management interfaces beyond required auth endpoints;
-- scanner APIs;
-- Deep AI;
-- n8n management;
-- metrics/debug endpoints.
+Do not publicly expose PostgreSQL, Redis/Valkey, OpenBao, scanner APIs, Deep AI, n8n management, metrics/debug endpoints or unnecessary identity-management interfaces.
 
 ## East-west traffic
 
-Use:
-
-- restrictive security groups;
-- workload identity/mTLS where practical;
-- explicit service allowlists;
-- no broad flat-network trust.
+Use restrictive security groups, workload identity/mTLS where practical and explicit service allowlists. Do not trust a flat private network.
 
 ## Egress
 
@@ -45,7 +28,7 @@ Control outbound network access.
 
 Scanners/parsers that do not require Internet access should have none.
 
-URL/threat-intelligence services should use explicit egress paths and SSRF protections.
+URL/threat-intelligence services use explicit egress paths and SSRF protections.
 
 ## Administration
 
@@ -55,20 +38,12 @@ Break-glass interactive host access is exceptional, audited and tightly restrict
 
 ## DNS
 
-Use controlled regional DNS and protect internal/private service naming.
-
-Monitor unauthorized DNS changes.
+Use controlled regional DNS and monitor unauthorized DNS changes.
 
 ## DDoS/resource protection
 
-Public endpoints need:
-
-- connection/rate controls;
-- SMTP abuse throttling;
-- web rate limiting/WAF where appropriate;
-- queue/resource alarms;
-- capacity protections.
+Public endpoints require connection/rate controls, SMTP abuse throttling, web rate limiting/WAF where appropriate, queue/resource alarms and capacity protections.
 
 ## IPv6
 
-IPv6 must not become an unmanaged bypass of IPv4 security controls. Enable only with equivalent policy, routing, logging and firewall coverage.
+IPv6 must not become an unmanaged bypass of IPv4 controls. Enable only with equivalent routing, logging and firewall policy.
