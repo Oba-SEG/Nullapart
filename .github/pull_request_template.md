@@ -106,6 +106,17 @@ Test evidence:
 - [ ] CloudWatch/infrastructure telemetry updated where required
 - [ ] Sensitive content/secrets are scrubbed
 
+## Business logic / abuse / dependency lifecycle
+
+- [ ] Business state/policy invariants reviewed
+- [ ] Stale/concurrent update behavior reviewed
+- [ ] Rate-limit/abuse impact reviewed
+- [ ] High-risk action limits added/updated where needed
+- [ ] Dependency/runtime versions remain pinned/supported
+- [ ] No unrelated broad dependency upgrade
+- [ ] Firewall/port/egress impact reviewed
+- [ ] Compliance/data-processing/third-party records updated where required
+
 ## CI/CD / release impact
 
 - [ ] No workflow/release impact
