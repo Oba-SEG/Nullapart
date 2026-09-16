@@ -32,6 +32,21 @@ Do not use a later-phase document as justification to bypass an earlier prerequi
 - [Phase 8 — Connectors and Remediation](PHASE-8-CONNECTORS-REMEDIATION.md)
 - [Phase 9 — Operational Automation and Production Hardening](PHASE-9-OPERATIONS-HARDENING.md)
 
+## Cross-cutting baselines every phase inherits
+
+Every phase inherits, as applicable:
+
+- [Application Security Control Baseline](../security/20-APPLICATION-SECURITY-CONTROLS.md)
+- [Rate Limiting and Abuse Protection](../security/22-RATE-LIMITING-ABUSE-PROTECTION.md)
+- [Patching and Dependency Version Management](../security/23-PATCHING-DEPENDENCY-VERSIONS.md)
+- [Business Logic and Policy Security](../security/24-BUSINESS-LOGIC-POLICY-SECURITY.md)
+- [Version Control, CI/CD and Release Security](../security/19-VERSION-CONTROL-CICD.md)
+- [Compliance Assurance](../security/21-COMPLIANCE-ASSURANCE.md)
+- [Frontend Architecture](../23-FRONTEND-ARCHITECTURE.md)
+- [Container/Network Architecture](../24-CONTAINER-LOADBALANCING-NETWORK.md)
+
+Later phases do not get to redefine these controls casually.
+
 ## Cross-phase rule
 
 A phase is an ownership/dependency boundary, not a reason to duplicate infrastructure.
