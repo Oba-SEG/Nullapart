@@ -1,8 +1,30 @@
 # AWS Infrastructure
 
-Future infrastructure-as-code for regional Nullapart deployments.
+Infrastructure-as-code for regional Nullapart deployments.
 
-Primary domain: nullapart.com.
-Additional protected domains: nullapart.io, nullapart.co, nullapart.co.za.
+Primary domain: `nullapart.com`.
+Additional protected domains: `nullapart.io`, `nullapart.co`, `nullapart.co.za`.
 
-See docs/15-AWS-DEPLOYMENT.md.
+## Baseline
+
+- Route 53 for regional/product DNS;
+- public ALB + WAF for Control Plane HTTPS;
+- direct commissioned Postfix MX/public mail identities as the SMTP baseline;
+- Amazon ECS for ordinary application/container orchestration;
+- Fargate and/or ECS EC2 capacity providers selected by workload;
+- dedicated mail EC2 nodes where stable SMTP identity/durable spool requires it;
+- private PostgreSQL/RDS;
+- private Redis/Valkey;
+- S3 + KMS;
+- SQS;
+- OpenBao/ZITADEL/SegLumberjack according to regional deployment design;
+- CloudWatch infrastructure telemetry;
+- Systems Manager rather than public SSH.
+
+See:
+
+- `docs/15-AWS-DEPLOYMENT.md`
+- `docs/24-CONTAINER-LOADBALANCING-NETWORK.md`
+- `infrastructure/aws/PORTS.md`
+
+IaC must not create a public database/cache/secrets/AI endpoint.
