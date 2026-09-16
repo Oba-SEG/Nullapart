@@ -146,3 +146,7 @@ Sentry routing and SegLumberjack/CloudWatch logging must respect the deployment'
 - HTTPS redirect to canonical product destinations unless assigned another explicit purpose;
 - no accidental secondary authentication realm;
 - monitored certificate/DNS expiry.
+## Deployment diagram
+
+See [Regional AWS Topology](diagrams/03-regional-aws-topology.mmd).
+
