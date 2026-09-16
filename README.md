@@ -108,12 +108,13 @@ Start with:
 16. [Notifications and remediation](docs/14-NOTIFICATIONS-REMEDIATION.md)
 17. [AWS deployment topology](docs/15-AWS-DEPLOYMENT.md)
 18. [Build roadmap](docs/16-BUILD-ROADMAP.md)
-19. [Administrative audit logging](docs/17-ADMIN-AUDIT-LOGGING.md)
-20. [SMTP transaction and tenant message contract](docs/18-MESSAGE-TRANSACTION-CONTRACT.md)
-21. [Secure message rendering and artifact access](docs/19-SECURE-MESSAGE-RENDERING.md)
-22. [Durable event architecture](docs/20-EVENT-DURABILITY.md)
-23. [AWS SMTP deployment commissioning](docs/21-AWS-SMTP-COMMISSIONING.md)
-24. [NexusSEG reference principles](docs/99-NEXUSSEG-REFERENCE.md)
+19. [Detailed Phase Specifications](docs/phases/README.md)
+20. [Administrative audit logging](docs/17-ADMIN-AUDIT-LOGGING.md)
+21. [SMTP transaction and tenant message contract](docs/18-MESSAGE-TRANSACTION-CONTRACT.md)
+22. [Secure message rendering and artifact access](docs/19-SECURE-MESSAGE-RENDERING.md)
+23. [Durable event architecture](docs/20-EVENT-DURABILITY.md)
+24. [AWS SMTP deployment commissioning](docs/21-AWS-SMTP-COMMISSIONING.md)
+25. [NexusSEG reference principles](docs/99-NEXUSSEG-REFERENCE.md)
 
 ## Security posture
 
