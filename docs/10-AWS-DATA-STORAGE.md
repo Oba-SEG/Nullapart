@@ -30,6 +30,23 @@ Stores include:
 
 Mail content itself should not be stored as large database blobs by default.
 
+## PostgreSQL Row-Level Security
+
+Tenant/customer-scoped tables should use PostgreSQL Row-Level Security where practical as defense in depth against application query mistakes.
+
+Requirements:
+
+- explicit deployment/customer ownership columns or equivalent internal keys;
+- normal request-handling DB role does not bypass RLS;
+- tenant scope derived from authenticated server context;
+- transaction-scoped database context compatible with pooled connections;
+- no long-lived tenant session variable that can leak between pooled requests;
+- migrations/maintenance use separate privileged roles;
+- automated wrong-tenant SELECT/UPDATE/DELETE tests;
+- application authorization remains mandatory above RLS.
+
+Tables and operations that legitimately cross tenants require explicit System/Support service paths and narrowly scoped authorization rather than disabling RLS globally.
+
 ## Redis / Valkey
 
 Redis/Valkey supports low-latency runtime state such as:
