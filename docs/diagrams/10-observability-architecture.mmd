@@ -1,0 +1,56 @@
+flowchart LR
+    subgraph Apps["Nullapart Application Components"]
+        Frontend[Frontend]
+        MailCore[Rust Mail Core]
+        Control[Control Backend]
+        Scanners[Scanner Nodes]
+        Workers[DMARC / Outbound / Workers]
+        DeepAI[Deep AI]
+    end
+
+    SDK[Sentry-compatible SDK / Protocol]
+    Scrub[Telemetry Scrubbing / Enrichment]
+    Seg[Regional SegLumberjack\nApplication Observability]
+
+    subgraph AWS["AWS Infrastructure / Managed Services"]
+        Compute[EC2 / ECS / Containers]
+        LB[Load Balancers]
+        DB[RDS / PostgreSQL]
+        Cache[Redis / Cache]
+        Storage[S3]
+        Network[VPC / Network]
+    end
+
+    CW[CloudWatch\nInfrastructure Telemetry]
+
+    Audit[(Authoritative Audit / Product DB)]
+    Streams[(Durable Event Stream)]
+
+    Frontend --> SDK
+    MailCore --> SDK
+    Control --> SDK
+    Scanners --> SDK
+    Workers --> SDK
+    DeepAI --> SDK
+
+    SDK --> Scrub --> Seg
+
+    Compute --> CW
+    LB --> CW
+    DB --> CW
+    Cache --> CW
+    Storage --> CW
+    Network --> CW
+
+    Control --> Audit
+    MailCore --> Streams
+    Workers --> Streams
+
+    Note1[SegLumberjack is the app-observability backend]
+    Note2[CloudWatch is complementary AWS infrastructure telemetry]
+    Note3[Audit/event stores remain authoritative records]
+
+    Seg -.-> Note1
+    CW -.-> Note2
+    Audit -.-> Note3
+    Streams -.-> Note3
