@@ -38,3 +38,7 @@ Audit security-relevant administration such as impersonation, policy/domain chan
 ## Secure failure semantics
 
 Unknown or failed scanner state is never treated as clean. Required-pipeline failure should defer/hold rather than silently bypass security. Optional enrichment failure becomes unknown. Deep AI failure does not stop ordinary mail.
+## Security diagram
+
+See [Security Trust Boundaries](diagrams/09-trust-boundaries.mmd) and the rendered [Architecture Diagrams](diagrams/README.md).
+
