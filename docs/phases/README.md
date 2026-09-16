@@ -8,13 +8,14 @@ They are written for both human engineers and AI coding agents.
 
 For any implementation task:
 
-1. identify the owning phase;
-2. read that phase specification completely;
-3. read its referenced architecture/security documents;
-4. list affected contracts/trust boundaries before coding;
-5. preserve global architecture rules;
-6. implement security/audit/UI/tests with the feature;
-7. verify the phase exit criteria affected by the change.
+1. if an AI coding agent is used, read root `AGENTS.md` first;
+2. identify the owning phase;
+3. read that phase specification completely;
+4. read its referenced architecture/security documents;
+5. list affected contracts/trust boundaries before coding;
+6. preserve global architecture rules;
+7. implement security/audit/UI/tests with the feature;
+8. verify the phase exit criteria affected by the change.
 
 Do not use a later-phase document as justification to bypass an earlier prerequisite.
 
@@ -40,10 +41,17 @@ Every phase inherits, as applicable:
 - [Rate Limiting and Abuse Protection](../security/22-RATE-LIMITING-ABUSE-PROTECTION.md)
 - [Patching and Dependency Version Management](../security/23-PATCHING-DEPENDENCY-VERSIONS.md)
 - [Business Logic and Policy Security](../security/24-BUSINESS-LOGIC-POLICY-SECURITY.md)
+- [Certificate Trust, mTLS and Pinning](../security/25-CERTIFICATE-TRUST-PINNING.md)
+- [HMAC Signing and Webhook Security](../security/26-HMAC-SIGNING-WEBHOOKS.md)
 - [Version Control, CI/CD and Release Security](../security/19-VERSION-CONTROL-CICD.md)
+- [GitHub Actions Architecture](../28-GITHUB-ACTIONS-ARCHITECTURE.md)
 - [Compliance Assurance](../security/21-COMPLIANCE-ASSURANCE.md)
 - [Frontend Architecture](../23-FRONTEND-ARCHITECTURE.md)
 - [Container/Network Architecture](../24-CONTAINER-LOADBALANCING-NETWORK.md)
+- [Package Compatibility and Upgrade Matrix](../26-PACKAGE-COMPATIBILITY.md)
+- [API Versioning, Feature Flags and Feature Addition Governance](../27-API-VERSIONING-FEATURE-FLAGS.md)
+- [ML / LLM Skills and Tool Governance](../25-AI-LLM-SKILLS-TOOLS.md) for ML/AI work;
+- [Coding Agent Operating Model](../ai/CODING-AGENT-OPERATING-MODEL.md) for AI-assisted development.
 
 Later phases do not get to redefine these controls casually.
 
@@ -57,6 +65,9 @@ Examples:
 - scanner contracts belong in Phase 0/2 and are reused by later scanners;
 - durable events are one architecture reused by DMARC, notifications, AI and operations;
 - one Admin Audit subsystem records later-phase administrative actions;
+- one API-versioning convention is reused rather than invented per module;
+- feature switches live in the versioned configuration architecture rather than a separate service;
+- one HMAC/signature contract is reused where Nullapart-owned shared-secret signing is appropriate;
 - one design system is extended, not reinvented per feature.
 
 ## When documentation and code disagree
