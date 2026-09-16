@@ -58,7 +58,7 @@ Do not describe CloudWatch as an interchangeable replacement for SegLumberjack a
 
 Observability data is not the authoritative audit record.
 
-Security/product events such as impersonation, policy changes, quarantine release, remediation and tenant-state changes must be persisted in the appropriate Nullapart database/audit/event stores even if a correlated event is also sent to SegLumberjack.
+Security/product events such as impersonation, policy changes, quarantine release, remediation and tenant-state changes must be persisted in the dedicated Admin Audit Store and/or authoritative product/event stores even if a correlated event is also sent to SegLumberjack.
 
 A useful mental model is:
 
@@ -162,5 +162,5 @@ Support/System Admin can trigger audited cache/config refreshes.
 The UI exposes node revision status so operators can see stale runtime configuration.
 ## Event and operations diagram
 
-See [Observability Architecture](diagrams/10-observability-architecture.mmd) and [Event and Operations Flow](diagrams/07-event-operations-flow.mmd).
+See [Observability Architecture](diagrams/10-observability-architecture.mmd), [Admin Audit Architecture](diagrams/11-admin-audit-architecture.mmd), and [Event and Operations Flow](diagrams/07-event-operations-flow.mmd).
 
