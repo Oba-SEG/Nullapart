@@ -1,0 +1,34 @@
+flowchart LR
+    Mail[Mail Plane]
+    Control[Control Plane]
+    DMARC[DMARC / BIMI]
+    Outbound[Outbound Intelligence]
+    DeepAI[Deep AI]
+
+    Streams[(Durable Event Stream)]
+
+    Notify[Customer Notifications]
+    N8N[n8n]
+    ClickUp[ClickUp]
+    Sentry[Sentry]
+    Logs[SegLumberjack / CloudWatch]
+    Analytics[Reporting / Analytics]
+
+    Mail --> Streams
+    Control --> Streams
+    DMARC --> Streams
+    Outbound --> Streams
+    DeepAI --> Streams
+
+    Streams --> Notify
+    Streams --> N8N --> ClickUp
+    Streams --> Analytics
+
+    Mail --> Sentry
+    Control --> Sentry
+    DeepAI --> Sentry
+
+    Mail --> Logs
+    Control --> Logs
+    DMARC --> Logs
+    Outbound --> Logs
