@@ -114,6 +114,30 @@ Create:
 
 Prefer compile-time types over loosely structured maps.
 
+## Application-security foundation
+
+Implement reusable primitives from `docs/security/20-APPLICATION-SECURITY-CONTROLS.md` before feature endpoints proliferate.
+
+Required foundations:
+
+- authenticated Principal/RequestContext carrying deployment, actor, impersonation and customer scope;
+- centralized authorization API/helper that checks action + resource ownership, not role alone;
+- tenant/customer query helpers that require explicit scoped context;
+- PostgreSQL RLS policy pattern for tenant-scoped tables;
+- transaction-scoped RLS context compatible with connection pooling;
+- normal application DB role without `BYPASSRLS`;
+- privileged migration/maintenance roles separated from request handling;
+- request validation framework with typed server validators;
+- database constraints for core invariants;
+- idempotency-key/result storage abstraction for retry-sensitive actions;
+- standard safe API error envelope with stable code + correlation ID;
+- CSRF/session middleware;
+- security headers;
+- SSRF-safe outbound HTTP client/policy for future URL fetchers;
+- test helpers for wrong-user/wrong-tenant/object-owner cases.
+
+Browser authentication/session design must not store auth/refresh tokens in Local Storage, Session Storage or other JavaScript-readable persistent storage.
+
 ## Control/backend foundation
 
 Establish a modular-monolith control backend boundary with:
@@ -124,7 +148,10 @@ Establish a modular-monolith control backend boundary with:
 - database access conventions;
 - error model;
 - Sentry-compatible instrumentation;
-- no public customer API.
+- no public customer API;
+- safe centralized error mapping;
+- ownership-scoped repository/query conventions;
+- authoritative server-side validation.
 
 ## UI foundation
 
@@ -142,6 +169,22 @@ Build the actual application shell:
 No raw JSON inspector/editor.
 
 ## Test foundation
+
+### Application-security test baseline
+
+Every resource endpoint test pattern must support:
+
+- unauthenticated;
+- unauthorized role;
+- wrong tenant;
+- wrong owner;
+- valid owner;
+- malformed/boundary input;
+- safe error response;
+- idempotent retry where applicable;
+- RLS isolation where applicable.
+
+Establish controlled OAST test capability for later features that perform server-side DNS/HTTP/network access. OAST test infrastructure must not use customer production data.
 
 Create:
 
@@ -282,7 +325,11 @@ Phase 0 is complete when:
 - immutable build/release identity is established;
 - CI AWS access uses scoped OIDC roles rather than long-lived deployment keys;
 - observability context/scrubbing exists;
-- architecture docs and contracts match implementation.
+- architecture docs and contracts match implementation;
+- tenant-scoped database tables selected for RLS have policies and bypass tests;
+- browser auth does not use Local Storage/Session Storage for credentials;
+- standardized server validation/error/idempotency patterns are implemented;
+- wrong-owner/wrong-tenant security test helpers pass.
 
 ## Must not be built yet
 
