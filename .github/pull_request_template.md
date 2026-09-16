@@ -65,6 +65,38 @@ Summarize code/config/schema/UI changes.
 - [ ] No auth impact
 - [ ] Server-side authorization reviewed
 - [ ] New privileged action includes step-up/permission handling where required
+- [ ] No bearer/session/API secrets introduced in URLs
+- [ ] TLS/mTLS/certificate trust assumptions reviewed where applicable
+- [ ] No browser HPKP/Public-Key-Pins introduced
+
+## API / schema / feature flags
+
+- [ ] No API/event/schema compatibility impact
+- [ ] API v1 compatibility reviewed
+- [ ] Event/scanner/config/AI schema version updated where needed
+- [ ] Breaking change uses explicit migration/version strategy
+- [ ] Feature switch required for safe rollout/kill behavior
+- [ ] Feature switch is server-authoritative, audited and has owner/removal lifecycle
+- [ ] Feature flag is not being used as authorization
+
+## HMAC / webhook integrity
+
+- [ ] Not applicable
+- [ ] Existing provider verification scheme followed
+- [ ] Nullapart HMAC helper/contract reused where applicable
+- [ ] Replay protection/idempotency tested
+- [ ] Key rotation/key ID considered
+- [ ] Constant-time verification used
+
+## ML / LLM skills and tools
+
+- [ ] No runtime ML/LLM impact
+- [ ] Skill/input/output schema updated
+- [ ] Allowed data classes reviewed
+- [ ] Tool permissions/tenant/region scope reviewed
+- [ ] Prompt-injection/tool-result handling tested
+- [ ] Context/token limits defined
+- [ ] Model/tool cannot directly self-authorize state changes
 
 ## Audit
 
@@ -78,6 +110,7 @@ Summarize code/config/schema/UI changes.
 - [ ] No raw JSON exposed
 - [ ] Accessibility/loading/empty/error states covered
 - [ ] Support message-content restrictions verified where applicable
+- [ ] Feature-disabled/unavailable states designed where applicable
 
 Screenshots/evidence:
 
@@ -96,6 +129,8 @@ Screenshots/evidence:
 - [ ] UI/E2E where applicable
 - [ ] Tenant isolation where applicable
 - [ ] Failure-path tests
+- [ ] API/schema compatibility tests where applicable
+- [ ] Feature flag/idempotency/replay tests where applicable
 
 Test evidence:
 
@@ -113,17 +148,22 @@ Test evidence:
 - [ ] Rate-limit/abuse impact reviewed
 - [ ] High-risk action limits added/updated where needed
 - [ ] Dependency/runtime versions remain pinned/supported
+- [ ] Package/toolchain peer compatibility verified
+- [ ] Frozen lockfiles remain reproducible
 - [ ] No unrelated broad dependency upgrade
 - [ ] Firewall/port/egress impact reviewed
 - [ ] Compliance/data-processing/third-party records updated where required
 
-## CI/CD / release impact
+## CI/CD / GitHub Actions / release impact
 
 - [ ] No workflow/release impact
 - [ ] CI workflow permissions reviewed
+- [ ] Third-party Actions remain pinned to reviewed immutable SHAs where practical
+- [ ] Untrusted PR code receives no privileged secrets
 - [ ] No long-lived cloud credentials introduced
 - [ ] Artifact/version compatibility considered
 - [ ] Production target/rollout implications documented
+- [ ] AI/automation does not self-approve production
 
 ## Security findings / exceptions
 
@@ -139,6 +179,7 @@ Describe how this change can be rolled back or safely contained.
 
 - [ ] Architecture/docs updated where behaviour changed
 - [ ] Runbook/help text updated where required
+- [ ] Coding-agent/project instructions updated where needed
 - [ ] Documentation and implementation agree
 
 ## Reviewer checklist
