@@ -47,6 +47,9 @@ If rendered SVG/PNG/embedded Markdown diagrams are added later, they should be g
 13. [Security program gate](12-security-program-gate.mmd)
     - Phase -1 governance/process controls that must be accepted before Phase 0 implementation, plus production-readiness and continuous-improvement feedback.
 
+14. [CI/CD and release flow](13-cicd-release-flow.mmd)
+    - Short-lived branch -> PR/review/security CI -> protected main -> immutable artifact -> same-digest environment promotion -> approved production deployment.
+
 ## Diagram rules
 
 - Update the relevant `.mmd` file whenever its architecture changes.
