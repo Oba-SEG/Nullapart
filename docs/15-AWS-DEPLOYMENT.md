@@ -135,7 +135,22 @@ AI servers have scoped access to eligible security artifacts only.
 
 ## Observability
 
-Sentry routing and SegLumberjack/CloudWatch logging must respect the deployment's regional data rules.
+Application observability uses Sentry-compatible SDK instrumentation routed to the deployment's regional SegLumberjack instance/service.
+
+CloudWatch remains separate and complementary for AWS infrastructure and managed-service telemetry.
+
+```text
+Applications
+  -> Sentry SDK / compatible protocol
+  -> SegLumberjack (regional application observability)
+
+AWS infrastructure / managed services
+  -> CloudWatch (regional infrastructure telemetry)
+```
+
+SegLumberjack must receive deployment/node/release/trace context while message content and secrets are scrubbed before ingestion.
+
+Both SegLumberjack and CloudWatch placement/retention must respect regional data rules.
 
 ## Alternate product domains
 
