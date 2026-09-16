@@ -1,0 +1,45 @@
+flowchart LR
+    MailCore[Rust Mail Core]
+    Orchestrator[Scanner Orchestration]
+
+    subgraph ScannerFabric["Expandable Scanner Fabric"]
+        Malware[Malware]
+        Static[Static / YARA]
+        URL[URL / Domain]
+        Archive[Archive]
+        PDF[PDF]
+        Office[Office / Document]
+        Type[File Type Verification]
+        OCR[OCR]
+        QR[QR / Image]
+        Future[Future Sandbox / TI]
+    end
+
+    Findings[SecurityFinding Aggregator]
+    ML[Inline ML]
+    Policy[Policy Runtime]
+
+    MailCore --> Orchestrator
+    Orchestrator --> Malware
+    Orchestrator --> Static
+    Orchestrator --> URL
+    Orchestrator --> Archive
+    Orchestrator --> PDF
+    Orchestrator --> Office
+    Orchestrator --> Type
+    Orchestrator --> OCR
+    Orchestrator --> QR
+    Orchestrator -. optional .-> Future
+
+    Malware --> Findings
+    Static --> Findings
+    URL --> Findings
+    Archive --> Findings
+    PDF --> Findings
+    Office --> Findings
+    Type --> Findings
+    OCR --> Findings
+    QR --> Findings
+    Future --> Findings
+
+    Findings --> ML --> Policy
