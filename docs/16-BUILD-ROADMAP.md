@@ -59,6 +59,19 @@ Create a new process/service/container only when justified by:
 
 Prefer module boundaries inside the Rust Mail Core or Control Backend before introducing a new network service.
 
+### Version control and CI/CD
+
+- `main` is protected and remains releasable.
+- normal changes use short-lived branches + reviewed pull requests;
+- security-critical paths require appropriate owner/security review;
+- CI security checks are mandatory and cannot be disabled to make a change pass;
+- CI uses short-lived workload/OIDC credentials rather than standing AWS deployment keys;
+- artifacts are built once, identified by immutable digest, and promoted between environments;
+- production deployment requires explicit target region/deployment and approval;
+- database migrations are version-controlled and immutable after production application;
+- release versions/tags follow the documented versioning contract;
+- AI agents may prepare releases but cannot self-approve production.
+
 ### UI
 
 If a feature is visible/manageable by an administrator, its UI is implemented at the same time as the backend.
