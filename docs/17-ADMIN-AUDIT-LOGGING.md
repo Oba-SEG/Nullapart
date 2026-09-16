@@ -39,7 +39,6 @@ Examples include:
 - manual cache refresh;
 - quarantine release/delete;
 - retroactive remediation;
-- message-content access where policy requires auditing;
 - connector creation/permission changes;
 - notification-contact changes;
 - VIP changes;
@@ -50,6 +49,22 @@ Examples include:
 - service enable/disable;
 - export actions;
 - audit-log export itself.
+
+## Mandatory message-content access audit
+
+The following access events are mandatory audit events, not optional policy choices:
+
+- full message/body view opened;
+- raw MIME viewed or downloaded;
+- attachment preview/download;
+- raw sensitive headers viewed where classified as restricted;
+- remote email resources deliberately loaded by an administrator;
+- quarantine release;
+- retroactive remediation.
+
+The audit record states that access occurred but never stores the message body, raw MIME or attachment content.
+
+Support must never gain content access through the audit subsystem.
 
 ## Audit record
 
@@ -106,22 +121,37 @@ Sensitive values are represented as:
 - secret identifier/version;
 - cryptographic fingerprint where useful.
 
-## Message-related administrative access
+## Transactional correctness
 
-Viewing message content can itself be security-sensitive.
+Where the administrative resource and audit record are stored in PostgreSQL, the mutation, audit event and transactional outbox event should commit atomically.
 
-System policy may require audit events for:
+Preferred pattern:
 
-- full message view opened;
-- raw headers viewed;
-- raw MIME downloaded;
-- attachment downloaded;
-- quarantine release;
-- remediation action.
+```text
+BEGIN
+  authorize operation
+  mutate resource
+  INSERT admin_audit_event
+  INSERT outbox_event
+COMMIT
+```
 
-Support must never gain content access through the audit subsystem.
+This prevents:
 
-The audit record may state that content was viewed, but must not contain the content.
+- resource changed but audit record missing;
+- audit record says success but resource mutation rolled back;
+- event published before the authoritative transaction committed.
+
+The asynchronous outbox publisher runs only after commit.
+
+For a high-risk mutation, failure to persist the required audit record must fail the administrative mutation closed.
+
+For actions against external systems that cannot be part of the same database transaction, record:
+
+1. requested/authorized action;
+2. external attempt identity;
+3. success/failure completion event;
+4. provider correlation ID where available.
 
 ## Impersonation
 
@@ -161,24 +191,32 @@ No audit view may collapse the actor and impersonated subject into one identity.
 
 The Admin Audit Store is authoritative and append-only from the application perspective.
 
-Recommended initial design:
+Initial design:
 
 - dedicated PostgreSQL audit schema/tables;
 - no UPDATE/DELETE permission for normal application roles;
-- inserts only through an audit writer/service/module;
+- inserts only through an audit writer/module or transaction helper;
 - strong database privileges;
 - immutable event identifiers;
 - timestamps generated/validated server-side;
+- indexed search fields;
 - periodic integrity checkpoints.
 
-For stronger tamper evidence, support:
+## Tamper evidence
+
+Tamper-evident archiving is part of the target architecture, not merely an optional future enhancement.
+
+Use one or more mechanisms such as:
 
 - hash chaining or signed audit batches;
-- periodic export/checkpoint to an immutable S3 location;
-- S3 Object Lock/WORM retention where required;
+- periodic signed integrity manifests;
+- periodic export/checkpoint to a region-local immutable S3 bucket;
+- S3 Object Lock/WORM retention;
 - KMS signing/encryption where appropriate.
 
-Exact mechanism will be selected during implementation, but ordinary administrators must not be able to edit or delete history.
+The online PostgreSQL audit store remains searchable; immutable checkpoints provide independent tamper evidence and long-retention protection.
+
+Ordinary administrators must not be able to alter or delete audit history or immutable checkpoints.
 
 ## Retention
 
@@ -191,13 +229,12 @@ Deletion/expiration must be:
 - policy-controlled;
 - region-bound;
 - auditable;
-- performed only by a restricted lifecycle mechanism.
+- performed only by a restricted lifecycle mechanism;
+- compatible with any active Object Lock/retention obligation.
 
 ## UI: Admin Audit
 
-Audit logging must have a dedicated UI surface.
-
-Suggested navigation:
+Audit logging has a dedicated UI surface.
 
 ### System Admin
 
@@ -323,12 +360,11 @@ A sanitized copy of selected audit events may be sent to SegLumberjack for opera
 That copy is not authoritative.
 
 ```text
-Admin action
+Admin transaction
    |
    +--> Admin Audit Store  <-- authoritative
-   |
-   +--> Durable event stream
-   |
+   +--> transactional outbox
+   |       '--> SQS / async consumers
    '--> sanitized Sentry-compatible event --> SegLumberjack
 ```
 
@@ -336,9 +372,10 @@ Admin action
 
 - server-side audit generation;
 - client cannot supply actor identity;
-- audit write failure handling must be explicit;
-- high-risk control-plane mutations should fail closed if the required audit record cannot be committed;
+- audit write failure handling is explicit;
+- high-risk mutations fail closed if the required audit record cannot be committed;
 - audit reads require explicit RBAC;
 - audit UI cannot bypass underlying data/content permissions;
 - exports are audited;
-- audit subsystem administration is itself audited.
+- audit subsystem administration is itself audited;
+- immutable audit archive/checkpoint access uses separate least-privilege credentials.
