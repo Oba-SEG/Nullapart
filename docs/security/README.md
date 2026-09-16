@@ -28,7 +28,8 @@ The following must exist before Phase 0 implementation:
 16. security-exception process;
 17. mail-security trust/failure model;
 18. security runbooks;
-19. security metrics/KPIs.
+19. security metrics/KPIs;
+20. version-control, CI/CD, artifact-provenance and release controls.
 
 No subsystem is exempt because it is "internal", "temporary", "development-only" or "not customer-facing".
 
@@ -84,3 +85,4 @@ Examples:
 - [Security Metrics](16-SECURITY-METRICS.md)
 - [Privacy, Retention and Deletion](17-PRIVACY-RETENTION-DELETION.md)
 - [Security Governance and Risk Ownership](18-SECURITY-GOVERNANCE.md)
+- [Version Control, CI/CD and Release Security](19-VERSION-CONTROL-CICD.md)
