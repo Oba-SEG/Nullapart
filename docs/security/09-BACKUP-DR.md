@@ -18,7 +18,7 @@ Define backup/recovery for:
 - model/config artifacts;
 - signing/PKI material according to key-custody rules.
 
-Redis/Valkey cache is normally rebuildable and is not treated as authoritative configuration storage.
+Redis/Valkey cache is normally rebuildable and is not authoritative configuration storage.
 
 ## RPO/RTO
 
@@ -28,34 +28,15 @@ Mail queue recovery requirements differ from analytics/reporting and must be doc
 
 ## Regionality
 
-Backups must respect residency requirements.
-
-Cross-region backup/replication is not enabled by convenience when it violates customer/regulatory constraints.
+Backups respect residency. Cross-region replication is not enabled by convenience where it violates customer/regulatory constraints.
 
 ## Restore testing
 
-Perform scheduled restore exercises covering:
-
-- database point-in-time restore;
-- application/config reconstruction;
-- audit availability/integrity;
-- S3 artifact recovery;
-- OpenBao recovery;
-- identity recovery;
-- DNS/mail commissioning recovery.
+Perform scheduled restore exercises covering database point-in-time restore, application/config reconstruction, audit integrity, S3 artifact recovery, OpenBao recovery, identity recovery and DNS/mail commissioning recovery.
 
 ## Disaster scenarios
 
-Runbooks should cover:
-
-- node loss;
-- AZ loss;
-- database failure;
-- regional service degradation;
-- credential/key loss;
-- S3 accidental deletion/exposure;
-- control-plane loss;
-- mail-plane partial outage.
+Cover node loss, AZ loss, database failure, regional service degradation, credential/key loss, S3 accidental deletion/exposure, control-plane loss and mail-plane partial outage.
 
 ## Evidence
 
