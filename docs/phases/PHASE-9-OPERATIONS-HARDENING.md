@@ -69,6 +69,44 @@ Define actionable alerts with:
 
 Avoid alerting on every individual malicious message.
 
+## Patching and dependency lifecycle
+
+Production readiness verifies:
+
+- supported runtime/framework versions;
+- dependency/security update process operating;
+- host/container patch process exercised;
+- mail-node rolling patch/drain process;
+- scanner signature/ruleset freshness;
+- no unsupported/EOL critical platform without formal exception.
+
+## Network/firewall/load-balancer validation
+
+Verify:
+
+- Security Group/port registry matches deployed reality;
+- no unauthorized public listeners;
+- ALB/WAF TLS/security/rate settings;
+- SMTP public node source-IP/reputation behavior;
+- no public SSH;
+- scanner egress restrictions;
+- private database/cache/secrets/AI;
+- load/failover behavior under target capacity.
+
+## Compliance evidence gate
+
+Populate/review `docs/compliance/` records for the actual production scope:
+
+- scope/applicability;
+- control register;
+- evidence catalog;
+- data-processing register;
+- third parties;
+- risks/exceptions;
+- production-readiness evidence.
+
+Do not convert internal readiness into an unverified certification claim.
+
 ## Backup/DR validation
 
 Execute:
@@ -143,7 +181,11 @@ Must verify:
 - data residency tested;
 - secrets/cert rotation paths tested;
 - scanner failure semantics validated;
-- customer content rendering isolation tested.
+- customer content rendering isolation tested;
+- rate-limit failure/abuse behavior tested;
+- supported-version/patch status verified;
+- firewall/port registry verified;
+- compliance evidence records populated for launch scope.
 
 ## AI-agent instructions
 
