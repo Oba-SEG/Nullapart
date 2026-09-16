@@ -141,7 +141,8 @@ Across every phase:
 
 - authenticated APIs;
 - per-service identity;
-- Sentry;
+- Sentry-compatible instrumentation routed to SegLumberjack;
+- CloudWatch for AWS infrastructure telemetry;
 - audit;
 - regional isolation;
 - UI with feature;
