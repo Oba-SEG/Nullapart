@@ -9,9 +9,28 @@ The catalogue is informed by established SMTP/enhanced-status semantics and oper
 Reference:
 - https://mimecastsupport.zendesk.com/hc/en-us/articles/34000709564691-Policies-Mimecast-SMTP-Error-Codes
 
+## SMTP responsibility boundary
+
+The catalogue distinguishes **pre-accept SMTP responses** from **post-accept delivery/security outcomes**.
+
+Before Nullapart/Postfix returns `250` for the message transaction, an SMTP-stage policy may return a standards-compatible temporary or permanent SMTP reply.
+
+After `250`, the original SMTP transaction is complete and Nullapart owns responsibility. Later scanner/policy/internal failures do not become retroactive SMTP replies to that original session.
+
+Post-accept failures use:
+
+- internal Nullapart reason codes;
+- delivery-state transitions;
+- retry/queue semantics;
+- downstream SMTP replies where delivery is attempted;
+- DSN/NDR only where safe and appropriate;
+- customer/internal notifications where configured.
+
+Avoid backscatter to forged/untrusted envelope senders.
+
 ## Response record
 
-Each Nullapart response definition contains:
+Each pre-accept Nullapart SMTP response definition contains:
 
 - internal reason code;
 - SMTP stage;
@@ -24,6 +43,8 @@ Each Nullapart response definition contains:
 - retry behaviour;
 - notification/escalation behaviour;
 - policy family.
+
+Post-accept reason definitions use the same stable internal reason-code system but do not require an original-session SMTP reply code.
 
 ## Example
 
@@ -83,6 +104,8 @@ The catalogue must cover:
 - required scanner failure;
 - policy/configuration failure.
 
+Each category declares whether it can occur at a pre-accept SMTP stage, post-accept only, or both.
+
 ## Safe disclosure
 
 Remote senders receive only enough information to understand SMTP disposition and normal remediation.
@@ -111,7 +134,8 @@ When Nullapart attempts delivery to a destination MTA:
 - preserve the destination SMTP code/text internally;
 - classify/normalize it for product UI;
 - keep full transmission trace for authorized operations;
-- use destination retry semantics correctly.
+- use destination retry semantics correctly;
+- associate the attempt with the relevant Tenant Message Instance, not a cross-tenant parent recipient set.
 
 ## UI
 
