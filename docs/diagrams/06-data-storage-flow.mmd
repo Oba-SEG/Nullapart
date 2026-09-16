@@ -1,0 +1,39 @@
+flowchart TB
+    Control[Control Backend]
+    MailCore[Mail Core]
+    Scanners[Scanner Nodes]
+    DeepAI[Deep AI]
+    DMARC[DMARC / BIMI]
+    Events[Event Consumers]
+
+    PG[(PostgreSQL
+Source of Truth)]
+    Redis[(Redis
+Cache / Streams / Counters)]
+    S3[(Amazon S3
+Artifacts / Quarantine)]
+    Queue[(Postfix Queue)]
+    KMS[AWS KMS]
+    Bao[OpenBao]
+
+    Control --> PG
+    Control --> Redis
+
+    MailCore --> PG
+    MailCore --> Redis
+    MailCore --> Queue
+    MailCore --> S3
+
+    Scanners --> S3
+    Scanners --> Redis
+
+    DeepAI -->|scoped eligible artifacts| S3
+    DMARC --> PG
+    Events --> Redis
+
+    KMS --> S3
+    KMS --> PG
+    Bao --> Control
+    Bao --> MailCore
+    Bao --> Scanners
+    Bao --> DeepAI
