@@ -2,6 +2,36 @@
 
 The roadmap is architectural sequencing, not a delivery-date promise.
 
+## Phase -1 — security program gate
+
+**No Phase 0 implementation starts until this gate is accepted.**
+
+Required before implementation:
+
+- security governance and named ownership;
+- threat-modeling process;
+- secure SDLC/change-control rules;
+- vulnerability-management process and remediation SLAs;
+- incident-response process;
+- privileged-access governance;
+- data-classification matrix;
+- privacy/retention/deletion policy;
+- cryptographic standards;
+- network-security baseline;
+- backup/restore/DR policy and restore-test plan;
+- software supply-chain controls;
+- penetration/security-testing strategy;
+- abuse/misuse response;
+- third-party risk process;
+- security-exception process;
+- mail trust/failure model;
+- required security runbooks;
+- security metrics/control-health requirements.
+
+See [Security Program](security/README.md).
+
+Phase -1 completion means the processes, ownership, evidence expectations and security gates are documented and accepted. Operational exercises such as restore tests, penetration tests and production runbook drills occur at the appropriate pre-production/production-readiness gates.
+
 ## Phase 0 — contracts, security and UI foundation
 
 Define and test:
