@@ -35,7 +35,9 @@ PostgreSQL transaction
           '-- other async consumers
 ```
 
-SQS is the preferred baseline because Nullapart is AWS-hosted and it avoids forcing Redis to serve both cache and durable-bus roles.
+SQS is the preferred baseline because Nullapart is AWS-hosted and it avoids forcing Redis to serve both cache and durable-bus roles or introducing another self-managed stateful cluster into the first deployment.
+
+Open-source durable queue options such as NATS JetStream or RabbitMQ remain valid alternatives if future requirements justify them. The choice should be revisited only when their operational/control benefits outweigh the additional stateful platform component.
 
 ## Redis / Valkey role
 
@@ -83,11 +85,15 @@ Do not put raw MIME, attachment bytes or secrets into the event bus.
 
 Large/sensitive artifacts are referenced through authorized ArtifactStore references.
 
-## Delivery semantics
+## Delivery and ordering semantics
 
 Assume at-least-once delivery unless a selected technology explicitly guarantees otherwise.
 
 Consumers must therefore be idempotent.
+
+Do not rely on global event ordering. Versioned resources such as policy/config snapshots carry explicit revision numbers, and consumers ignore stale/out-of-order revisions.
+
+Where a workflow truly requires ordered processing for one entity, use an explicit per-entity ordering mechanism such as an SQS FIFO message group or equivalent design rather than assuming ordering from the general event bus.
 
 A consumer records or derives an idempotency key so replay does not create duplicate customer notifications, ClickUp tasks, remediation attempts or DMARC records.
 
