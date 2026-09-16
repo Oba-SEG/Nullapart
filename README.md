@@ -22,20 +22,26 @@ The architecture treats `nullapart.com` as the canonical product/control domain.
 
 - AWS-hosted regional deployments.
 - Rust for the custom mail core.
-- Postfix as the containerized MTA.
-- Rspamd at SMTP restriction and Milter stages.
+- Postfix as the containerized Internet-facing MTA and durable mail queue.
+- Rspamd at bounded SMTP restriction/Milter stages.
+- Explicit Postfix after-queue filter handoff and trusted reinjection path.
+- One SMTP transaction may split into multiple customer-scoped Tenant Message Instances.
 - ClamAV plus an expandable scanner fabric from day one.
-- PostgreSQL as the source of truth; Redis for cache, streams and runtime acceleration.
+- PostgreSQL as the source of truth and transactional-outbox store.
+- Redis/Valkey for cache, greylisting, counters and runtime acceleration—not assumed durable messaging.
+- Amazon SQS as the preferred AWS durable asynchronous event path.
 - Local last-known-good policy/configuration snapshots on mail nodes.
 - Lightweight inline ML for fast classification.
 - Separate regional Deep AI over an authenticated OpenAI-compatible API.
-- ZITADEL is the leading identity candidate.
-- OpenBao is the leading open-source secrets/workload-identity candidate.
+- Qwen3.8-27B is a leading Deep-AI candidate under regional capacity evaluation, not a locked dependency.
+- ZITADEL is the leading identity candidate subject to security/license validation.
+- OpenBao is the leading open-source secrets/workload-identity candidate with HA/bootstrap design required before production.
 - Amazon S3 is the expected production artifact backend behind a storage abstraction.
 - n8n remains for internal orchestration and ClickUp workflows.
 - SegLumberjack is the regional Sentry-compatible application observability platform; CloudWatch covers AWS infrastructure telemetry.
-- Administrative actions are recorded in a first-class append-only Admin Audit subsystem with RBAC-scoped UI views.
-- DMARC and BIMI are first-class product capabilities.
+- Administrative actions are recorded in a first-class append-only/tamper-evident Admin Audit subsystem with RBAC-scoped UI views.
+- Received message content is treated as hostile and rendered in an isolated/sanitized UI path.
+- DMARC and BIMI are first-class product capabilities using the current DMARC RFC 9989/9990/9991 model.
 - No public customer API in the initial implementation.
 - No end-user portal; administrative access only.
 - No billing subsystem in Nullapart.
@@ -44,8 +50,10 @@ The architecture treats `nullapart.com` as the canonical product/control domain.
 ## Administrative levels
 
 1. **System Admin** — regional platform administration, complete policy visibility and audited impersonation.
-2. **Support** — RBAC-restricted customer administration, Support policy access and audited Customer Admin impersonation.
+2. **Support** — RBAC-restricted customer administration, Support policy access and audited Customer Admin impersonation. No message body/raw MIME/attachment access.
 3. **Customer Admin** — tenant-level RBAC. Customer owners decide which tenant roles may access sensitive message/header/quarantine functions.
+
+All administrative accounts require MFA; high-risk actions may require step-up authentication.
 
 ## Regional identity
 
@@ -64,7 +72,7 @@ Each deployment has its own URL, DNS, mail infrastructure, databases, caches, ar
 - `mail/` — Postfix and Rspamd configuration.
 - `scanners/` — scanner fabric and analyzer adapters.
 - `ml/` — inline ML and Deep AI lifecycle.
-- `control/` — control-plane backend and identity integration.
+- `control/` — control-plane backend, identity and audit modules.
 - `frontend/` — neumorphic administration UI.
 - `workflows/` — n8n internal operational workflows.
 - `infrastructure/` — AWS, container, secrets and observability definitions.
@@ -92,14 +100,18 @@ Start with:
 16. [AWS deployment topology](docs/15-AWS-DEPLOYMENT.md)
 17. [Build roadmap](docs/16-BUILD-ROADMAP.md)
 18. [Administrative audit logging](docs/17-ADMIN-AUDIT-LOGGING.md)
-19. [NexusSEG reference principles](docs/99-NEXUSSEG-REFERENCE.md)
+19. [SMTP transaction and tenant message contract](docs/18-MESSAGE-TRANSACTION-CONTRACT.md)
+20. [Secure message rendering and artifact access](docs/19-SECURE-MESSAGE-RENDERING.md)
+21. [Durable event architecture](docs/20-EVENT-DURABILITY.md)
+22. [AWS SMTP deployment commissioning](docs/21-AWS-SMTP-COMMISSIONING.md)
+23. [NexusSEG reference principles](docs/99-NEXUSSEG-REFERENCE.md)
 
 ## Security posture
 
 Nullapart is a security product. Security controls are designed into every feature rather than applied afterward. Every network API is authenticated, administrative operations are audited, service identities are unique, message content is tightly access-controlled, regional boundaries are explicit, and untrusted email data is never treated as trusted instructions.
 
 See [SECURITY.md](SECURITY.md).
+
 ## Architecture diagrams
 
-See the [rendered architecture diagram set](docs/diagrams/README.md) for system context, inbound/outbound mail flow, regional AWS topology, RBAC, scanner fabric, data/storage, events, Deep AI, observability, admin audit and trust boundaries.
-
+See the [architecture diagram source index](docs/diagrams/README.md) for system context, inbound/outbound mail flow, regional AWS topology, RBAC, scanner fabric, data/storage, events, Deep AI, observability, admin audit and trust boundaries.
