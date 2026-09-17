@@ -4,323 +4,360 @@
 
 **Status:** authoritative implementation sequencing document.
 
-This roadmap defines **what must exist before implementation, what each phase is allowed to change, what each phase must deliver, and the evidence required before moving forward**.
+This roadmap defines **what must exist before implementation, what each phase may change, what each phase must deliver, and the evidence required before moving forward**.
 
 It is not a delivery-date estimate.
 
 ## How to use this roadmap
 
-Before starting any work:
+Before starting work:
 
 1. AI coding agents read root `AGENTS.md` first;
-2. identify the current phase;
-3. read this document;
+2. identify the current/owning phase;
+3. read this roadmap;
 4. read the detailed phase specification under `docs/phases/`;
-5. read all architecture/security documents referenced by that phase;
-6. confirm Phase -1 security controls applicable to the work;
-7. identify affected trust boundaries/data classes/contracts;
-8. implement backend and UI together where the capability has an administrative UI;
-9. add tests, audit, observability and documentation in the same change;
-10. satisfy the phase exit criteria before beginning work that depends on it.
+5. read `docs/engineering/CODE-STANDARDS.md`;
+6. read only architecture/security documents relevant to the task;
+7. confirm applicable Phase -1 controls;
+8. identify affected tenant/deployment scope, trust boundaries, data classes and contracts;
+9. implement backend/UI/security/audit/tests/observability/docs together where applicable;
+10. satisfy phase exit criteria before dependent work proceeds.
 
-AI agents must not infer missing architectural decisions from convenience. If a phase specification says a decision is not yet made, preserve the abstraction and do not silently lock the implementation.
+AI agents do not infer missing architecture from convenience. Preserve undecided abstractions until intentionally reviewed.
 
-Human developers should treat phase exit criteria as release gates, not suggestions.
+Human developers treat phase exit criteria as gates, not suggestions.
 
-## Global implementation rules
+# Global implementation rules
 
-These rules apply to every phase.
+## Security
 
-### Security
-
-- Security Program Phase -1 controls are mandatory.
-- Every network API is authenticated.
-- Authorization is server-side.
+- Phase -1 controls are mandatory.
+- Every network API is authenticated unless an explicitly designed protocol trust model applies.
+- Authorization/ownership are server-side.
 - No shared global service secret.
 - Secrets never enter source control/frontend bundles.
-- Message content is treated as hostile.
-- Support never receives message body/raw MIME/attachment content.
-- Administrative changes are audited.
-- Customer/tenant boundaries are enforced in storage, queries, APIs and UI.
-- Unknown/failed security analysis never silently becomes CLEAN.
+- Message content is hostile.
+- Support never receives message body/raw MIME/attachments.
+- Administrative/security changes are audited.
+- Tenant boundaries are enforced in request context, storage, RLS, queries, APIs, caches, jobs/events and UI.
+- UNKNOWN/failed security analysis never silently becomes CLEAN.
 - New trust boundaries require threat-model review.
 
-### Architecture restraint
+## Architecture restraint
 
-Do not recreate NexusSEG-style synchronous microservice chains.
+Do not recreate NexusSEG-style service-per-feature synchronous HTTP chains.
 
-Create a new process/service/container only when justified by:
+Create a process/service/container only when isolation, failure domain, independent scaling, resource profile, incompatible runtime/dependency or security boundary justifies it.
 
-- isolation;
-- failure-domain separation;
-- independently different scaling;
-- resource profile;
-- incompatible dependencies/runtime;
-- security boundary.
+Prefer module boundaries in Mail Core/Control Backend first.
 
-Prefer module boundaries inside the Rust Mail Core or Control Backend before introducing a new network service.
+## Tenant-aware routing and feature overrides
 
-### Rate limiting and abuse controls
+Canonical design: `docs/29-TENANT-FEATURE-ROUTING.md`.
 
-- use layered edge + application + SMTP limits;
-- authenticated API limits key on actor/customer/action, not only IP;
-- high-risk actions have dedicated stricter limits;
-- limiter backend failure has explicit safe behavior;
-- abuse-rate exemptions are scoped and audited.
+Rules:
 
-### Patching, dependency lifecycle and compatibility
+- regional/deployment boundary is established before tenant context;
+- authenticated server/session state resolves `TenantContext`;
+- client tenant/customer IDs never prove authorization;
+- System/Support cross-customer work uses explicit platform permission + specific customer scope;
+- tenant scope travels with background jobs/events/caches;
+- PostgreSQL RLS context is transaction-scoped and pool-safe;
+- feature precedence is System emergency/security floor -> deployment -> tenant -> default;
+- tenant override cannot weaken a System security floor/kill switch;
+- overrides have owner/reason/revision/expiry/audit.
 
-- production dependencies/runtimes are pinned/reproducible;
-- lockfiles are committed;
-- automated update PRs are reviewed/tested;
-- unsupported/EOL critical runtimes require a time-limited exception;
-- containers are rebuilt rather than interactively patched;
-- mail nodes patch through safe drain/rolling procedures;
-- package/runtime compatibility is validated as a stack, not package-by-package;
-- peer dependency/toolchain conflicts are not hidden with force flags;
-- frontend, Rust, container and ML dependency matrices are tested in CI.
+## Tier-3 reliability / SRE
 
-See `docs/26-PACKAGE-COMPATIBILITY.md`.
+Canonical design: `docs/30-RELIABILITY-SLO-ERROR-BUDGETS.md`.
 
-### Frontend architecture
+Tier 3 is an internal Nullapart reliability class, not an external certification claim.
 
-- React/TypeScript/Vite baseline from `docs/23-FRONTEND-ARCHITECTURE.md`;
+Production-critical capabilities require:
+
+- SLI/SLO;
+- error budget;
+- burn-rate alerting;
+- RTO/RPO;
+- redundancy/failure-domain analysis;
+- backpressure/load shedding;
+- capacity thresholds;
+- runbook/owner;
+- failure/restore exercises.
+
+Baseline burn alerts:
+
+- fast: 14.4x on 1h + 5m;
+- sustained: 6x on 6h + 30m;
+- calibrated slow-burn ticket path.
+
+Error budget never means accepted-mail loss/security-policy bypass is acceptable.
+
+## Rate limiting and abuse
+
+- layered edge + application + SMTP limits;
+- authenticated API limits use actor/customer/action, not only IP;
+- high-risk actions have stricter limits;
+- limiter outage has explicit safe fallback;
+- exemptions are scoped/audited.
+
+## Patching / compatibility / zero-day
+
+Canonical references:
+
+- `docs/security/23-PATCHING-DEPENDENCY-VERSIONS.md`;
+- `docs/26-PACKAGE-COMPATIBILITY.md`;
+- `docs/security/27-ZERO-DAY-INTELLIGENCE-RESPONSE.md`.
+
+Rules:
+
+- dependencies/runtimes are pinned/reproducible;
+- lockfiles committed;
+- automated update PRs reviewed/tested;
+- EOL critical runtime requires time-limited exception;
+- containers rebuilt, not interactively patched;
+- mail nodes use safe drain/rolling patching;
+- package/runtime compatibility is tested as a stack;
+- no peer/toolchain conflict hidden with force flags;
+- credible zero-day/active exploitation uses accelerated intake/containment/patch/hunt process;
+- do not wait for finalized CVE/CVSS before containment when evidence warrants action;
+- vulnerable security/parser paths can be kill-switched/held/deferred safely;
+- emergency patches still use branch/PR/review/CI, never direct `main` push.
+
+## Frontend architecture
+
+From `docs/23-FRONTEND-ARCHITECTURE.md`:
+
+- React/TypeScript/Vite baseline;
 - pnpm lockfile;
-- no auth tokens in browser persistent storage;
-- one typed API client boundary;
+- no auth/refresh tokens in browser persistent storage;
+- one typed API client;
 - client validation does not replace server validation;
-- no raw JSON UI.
+- no raw JSON UI;
+- accessibility and hostile-message isolation are mandatory.
 
-### API compatibility and feature switches
+## API compatibility and feature switches
 
-- initial Control Plane API follows `/api/v1` compatibility rules;
-- independently consumed events/scanner/config/AI contracts are versioned;
-- breaking changes require explicit version/migration strategy;
-- feature switches are server-authoritative versioned configuration, not authorization;
+From `docs/27-API-VERSIONING-FEATURE-FLAGS.md`:
+
+- initial Control Plane `/api/v1` compatibility contract;
+- independently consumed events/scanner/config/AI contracts versioned;
+- breaking changes need version/migration strategy;
+- feature switches server-authoritative, not authorization;
+- tenant overrides follow canonical precedence;
 - release/experiment flags have owner/removal lifecycle;
-- operational kill switches produce explicit safe degraded behavior;
-- new features define API/data/UI/audit/rate-limit/failure/rollback/compliance impact before implementation.
+- kill switches cause explicit safe degraded behavior;
+- new feature defines API/data/tenant/UI/audit/rate/failure/SLO/rollback/compliance/patchability impact before implementation.
 
-See `docs/27-API-VERSIONING-FEATURE-FLAGS.md`.
+## TLS / mTLS / HMAC
 
-### TLS trust, mTLS and HMAC
-
-- public browser HTTPS uses normal modern PKI validation, HSTS and CAA;
-- HPKP/Public-Key-Pins is not used;
-- internal high-value service communication may use workload mTLS/private regional PKI;
+- public browser HTTPS uses modern PKI, HSTS and CAA;
+- HPKP not used;
+- internal high-value communication may use workload mTLS/private PKI;
 - TLS verification is never disabled for convenience;
-- any future non-browser pinning requires threat/rotation/recovery design;
-- HMAC-SHA-256 is the baseline Nullapart shared-secret integrity primitive where appropriate;
-- HMAC verification includes versioning, constant-time comparison, replay protection, key rotation and idempotency;
-- provider webhooks use provider-defined verification schemes.
+- non-browser pinning requires explicit threat/rotation/recovery design;
+- HMAC-SHA-256 is baseline Nullapart shared-secret integrity primitive where appropriate;
+- verification includes version, constant-time compare, replay protection, rotation and idempotency;
+- provider webhooks use provider verification scheme.
 
-See:
+References:
 
 - `docs/security/25-CERTIFICATE-TRUST-PINNING.md`;
 - `docs/security/26-HMAC-SIGNING-WEBHOOKS.md`.
 
-### ML / LLM skills and tools
+## ML / LLM skills/tools
 
-- production AI capability is expressed as versioned skills;
-- each skill defines data classes, model requirements, input/output schema, tool allowlist, context/token limits, evaluation and rollback;
-- tools are server-authorized adapters, not raw infrastructure credentials;
-- read-only tools are preferred initially;
-- prompt/message/tool content is untrusted data;
-- models cannot self-authorize administrative/mail/remediation actions;
-- training eligibility is separately governed.
+- production AI capabilities are versioned skills;
+- skill defines data classes, model/input/output, tool allowlist, context/token limits, eval and rollback;
+- tools are server-authorized adapters, never ambient infra credentials;
+- read-only tools preferred initially;
+- prompt/message/tool content is untrusted;
+- model cannot self-authorize admin/mail/remediation action;
+- training eligibility separately governed.
 
-See `docs/25-AI-LLM-SKILLS-TOOLS.md`.
+Reference: `docs/25-AI-LLM-SKILLS-TOOLS.md`.
 
-### Coding agents and context discipline
+## Coding agents / instruction discovery
 
-- coding agents follow root `AGENTS.md` and `docs/ai/CODING-AGENT-OPERATING-MODEL.md`;
-- load the minimum authoritative task context rather than the whole repository by default;
-- reuse existing project abstractions before adding new ones;
-- token/context optimization never skips security, tenant isolation, audit or tests;
-- coding-agent permissions do not imply runtime Deep-AI permissions;
-- AI agents may prepare but never self-approve production releases.
+Canonical rules:
 
-### Container/network/firewall baseline
+- `AGENTS.md`;
+- `docs/ai/CODING-AGENT-OPERATING-MODEL.md`;
+- `docs/ai/AGENT-DISCOVERY.md`.
 
-- ECS is the ordinary container baseline;
-- dedicated mail EC2 nodes are the stable-MTA exception;
+OpenAI Codex and OpenCode use root `AGENTS.md` directly. Copilot/Claude/Gemini/Cursor use thin adapters pointing to the canonical rules.
+
+Agents load minimum authoritative context, but token optimization never skips security/tenant/audit/tests.
+
+Agent instructions are guidance; enforcement remains compiler/types, RLS, tests, CI, reviews, protected `main` and production approvals.
+
+## Container/network/firewall
+
+- ECS ordinary container baseline;
+- dedicated mail EC2 stable-MTA exception;
 - ALB/WAF for HTTPS;
-- direct MX/Postfix baseline for SMTP;
-- Security Groups are primary workload firewall;
+- direct commissioned Postfix MX baseline for SMTP;
+- Security Groups primary workload firewall;
 - no public SSH/database/cache/secrets/AI;
-- authoritative port registry must match IaC.
+- authoritative port registry matches IaC.
 
-### Compliance documentation
+## Compliance documentation
 
-- maintain `docs/compliance/` scope/control/evidence/data-processing/third-party/risk records;
-- architecture changes with data/security impact require compliance-impact review;
-- do not claim certification without verified audit/legal basis.
+Maintain `docs/compliance/` scope/control/evidence/data-processing/third-party/risk/readiness records.
 
-### Application-security invariants
+Architecture changes affecting data/security require compliance-impact review.
 
-- derive data scope from authenticated principal, not client-provided IDs;
-- enforce server-side object ownership/BOLA/IDOR checks;
-- client validation is UX only; server validation is authoritative;
-- use PostgreSQL RLS where practical as defense in depth;
-- browser auth/refresh credentials are not stored in Local Storage/Session Storage;
-- retryable/destructive side effects define idempotency;
-- outbound-fetch features require SSRF protections and OAST coverage;
-- API errors are stable/safe and do not leak stack traces, secrets or tenant existence unnecessarily;
-- writable fields are explicitly allowlisted against mass assignment;
-- wrong-user/wrong-tenant/wrong-owner tests are required.
+Never claim certification without verified legal/audit basis.
 
-### Version control and GitHub Actions
+## Application-security invariants
 
-- `main` is protected and remains releasable;
-- normal changes use short-lived branches + reviewed pull requests;
-- security-critical paths require appropriate owner/security review;
-- CI security checks are mandatory and cannot be disabled to make a change pass;
-- workflow permissions are explicit/minimal;
-- third-party Actions are pinned to reviewed immutable commit SHAs where practical;
-- untrusted PR code receives no privileged production secrets;
-- CI uses short-lived workload/OIDC credentials rather than standing AWS deployment keys;
-- artifacts are built once, identified by immutable digest, and promoted between environments;
-- production deployment requires explicit target region/deployment and approval;
-- database migrations are version-controlled and immutable after production application;
-- release versions/tags follow the documented versioning contract;
-- AI agents may prepare releases but cannot self-approve production.
+- derive scope from authenticated principal, not client IDs;
+- server-side ownership/BOLA/IDOR checks;
+- server validation authoritative;
+- RLS defense in depth;
+- no browser Local/Session Storage credentials;
+- retryable/destructive effects are idempotent;
+- outbound fetch gets SSRF + OAST coverage;
+- errors safe/stable;
+- writable fields allowlisted;
+- wrong-user/wrong-tenant/wrong-owner tests required.
 
-See `docs/28-GITHUB-ACTIONS-ARCHITECTURE.md`.
+## Version control / GitHub Actions
 
-### UI
+`main` is protected and remains releasable.
 
-If a feature is visible/manageable by an administrator, its UI is implemented at the same time as the backend.
+**No direct pushes to `main`, including routine administrator changes.**
+
+Normal and emergency changes use reviewed PRs; emergency flow may be expedited but still preserves traceability/checks.
+
+Additional rules:
+
+- short-lived branches;
+- required review/checks;
+- no force push/deletion;
+- security-critical paths get owner/security review;
+- CI checks cannot be disabled to make work pass;
+- minimum workflow permissions;
+- third-party Actions SHA-pinned where practical;
+- untrusted PR receives no production secrets;
+- OIDC short-lived AWS roles;
+- immutable build once/promote same digest;
+- explicit deployment/region target + production approval;
+- migrations immutable after production use;
+- AI agents cannot self-approve production.
+
+References:
+
+- `docs/security/19-VERSION-CONTROL-CICD.md`;
+- `docs/28-GITHUB-ACTIONS-ARCHITECTURE.md`.
+
+## Code standards
+
+Canonical standard: `docs/engineering/CODE-STANDARDS.md`.
+
+Formatter/linter/type/static checks are automated merge gates; reviewers focus on correctness/security/architecture rather than whitespace.
+
+## UI
+
+If an administrative capability needs UI, implement/test UI with backend.
 
 No raw JSON UI.
 
-Use the Nullapart neumorphic design system while preserving dense, accessible operational tables and timelines.
+Use Nullapart neumorphism while preserving dense accessible operational tables/timelines.
 
-### Observability
+## Observability
 
-- Application SDK telemetry -> regional SegLumberjack via Sentry-compatible protocol.
-- Native Postfix/Rspamd/ClamAV telemetry -> regional collector -> appropriate observability path.
-- AWS infrastructure telemetry -> CloudWatch.
-- Admin Audit is authoritative and separate from observability.
-- Sensitive message content/secrets are scrubbed.
+- application SDK -> Sentry-compatible protocol -> regional SegLumberjack;
+- native daemons -> regional collector -> appropriate observability;
+- AWS infra -> CloudWatch;
+- Admin Audit is authoritative/separate;
+- Restricted content/secrets scrubbed;
+- Tier-3 SLIs/error-budget/burn-rate telemetry are first-class operational metrics.
 
-### Data
+## Data
 
-- PostgreSQL is authoritative.
-- Redis/Valkey is cache/runtime acceleration, not authoritative durable events.
-- PostgreSQL transactional outbox + SQS is the preferred durable async path.
-- S3 is the production artifact backend behind ArtifactStore.
-- Customer content remains region/deployment bound unless explicitly approved otherwise.
+- PostgreSQL authoritative;
+- Redis/Valkey cache/runtime acceleration, not durable event authority;
+- PostgreSQL outbox + SQS durable async baseline;
+- S3 production ArtifactStore backend;
+- customer content stays region/deployment bound absent explicit approved design.
 
-### Required change evidence
+## Required change evidence
 
-Every material change should include, where applicable:
+Material changes include as applicable:
 
-- design/architecture reference;
-- threat-model update;
-- API/event/schema compatibility impact;
-- feature-switch/rollout decision;
-- code/config;
-- migrations;
-- backend authorization;
-- audit events;
-- UI;
-- package/toolchain compatibility evidence;
-- unit tests;
-- integration tests;
-- security tests;
-- HMAC/replay/contract tests where applicable;
-- ML skill/tool evaluation where applicable;
-- UI/E2E tests;
+- architecture/threat reference;
+- tenant/routing/feature-override impact;
+- API/event/schema compatibility;
+- reliability/SLO impact;
+- code/config/migrations;
+- auth/audit/UI;
+- package/toolchain/zero-day exposure implications;
+- unit/integration/security/UI tests;
+- HMAC/replay/contract tests;
+- ML skill/tool eval;
 - observability;
-- runbook/update notes;
-- rollback/containment plan.
+- runbook/rollback/containment;
+- docs.
 
-## Phase sequence
+# Phase sequence
 
 | Phase | Name | Primary outcome |
 |---|---|---|
-| -1 | Security Program Gate | Security governance/processes exist before code |
-| 0 | Contracts and Foundations | Stable contracts, schemas, UI shell, testing/CI foundations |
-| 1 | SMTP and Mail Foundation | Safe bidirectional mail movement without advanced scanners/AI |
-| 2 | Scanner Fabric and Quarantine | Parallel security analysis, quarantine/hold and scanner UI |
-| 3 | Control Plane and Administration | Identity, RBAC, tenants, policies, trace, audit and operations UI |
+| -1 | Security Program Gate | Governance/security/reliability/developer rules accepted before code |
+| 0 | Contracts and Foundations | Contracts, tenant context, CI/repo controls, UI/testing/instrumentation foundations |
+| 1 | SMTP and Mail Foundation | Safe bidirectional mail without advanced scanner/AI depth |
+| 2 | Scanner Fabric and Quarantine | Parallel bounded analysis + quarantine/hold |
+| 3 | Control Plane and Administration | Identity/RBAC/tenants/policies/trace/audit/operations UI |
 | 4 | Inline ML | Low-latency ML evidence integrated safely into policy |
-| 5 | DMARC / BIMI / Domain Security | Report ingestion, telemetry, dashboards and domain-security monitoring |
-| 6 | Outbound Intelligence | Bulk controls, behavioural detection and compromised-sender response |
-| 7 | Regional Deep AI | Controlled deep analysis and model lifecycle outside normal mail hot path |
-| 8 | Connectors and Remediation | M365/Google/directory/mailbox integration and retro-remediation |
-| 9 | Operational Automation and Production Hardening | n8n/ClickUp workflows, production gates, resilience and operational maturity |
+| 5 | DMARC / BIMI / Domain Security | Reporting/telemetry/domain-security monitoring |
+| 6 | Outbound Intelligence | Bulk/behaviour/compromised-sender controls |
+| 7 | Regional Deep AI | Controlled regional deep analysis outside normal hot path |
+| 8 | Connectors and Remediation | Directory/mailbox integration + retro-remediation |
+| 9 | Operational Automation and Production Hardening | Tier-3 SLOs, resilience, automation, production evidence |
 
-Detailed specifications:
+Detailed phase specs live in `docs/phases/`.
 
-- [Phase -1 — Security Program Gate](phases/PHASE--1-SECURITY-GATE.md)
-- [Phase 0 — Contracts and Foundations](phases/PHASE-0-CONTRACTS-FOUNDATIONS.md)
-- [Phase 1 — SMTP and Mail Foundation](phases/PHASE-1-MAIL-FOUNDATION.md)
-- [Phase 2 — Scanner Fabric and Quarantine](phases/PHASE-2-SCANNER-FABRIC.md)
-- [Phase 3 — Control Plane and Administration](phases/PHASE-3-CONTROL-PLANE.md)
-- [Phase 4 — Inline ML](phases/PHASE-4-INLINE-ML.md)
-- [Phase 5 — DMARC/BIMI/Domain Security](phases/PHASE-5-DMARC-BIMI.md)
-- [Phase 6 — Outbound Intelligence](phases/PHASE-6-OUTBOUND-INTELLIGENCE.md)
-- [Phase 7 — Regional Deep AI](phases/PHASE-7-DEEP-AI.md)
-- [Phase 8 — Connectors and Remediation](phases/PHASE-8-CONNECTORS-REMEDIATION.md)
-- [Phase 9 — Operational Automation and Production Hardening](phases/PHASE-9-OPERATIONS-HARDENING.md)
+# Dependency rules
 
-## Dependency rules
+Preparatory research may run ahead (e.g. AI benchmarks, UI prototypes, DMARC research), but production capability cannot bypass prerequisite phase/security gates.
 
-Phases express logical dependency, not necessarily a prohibition on preparatory research.
+Never ship:
 
-Allowed examples:
+- production subsystem before prerequisite gates;
+- customer-visible policy before authorization/audit foundation;
+- new network service without trust/security model;
+- unversioned contracts;
+- ungoverned LLM tools;
+- tenant routing outside canonical boundary;
+- Tier-3 production service without SLO/failure/runbook model.
 
-- benchmark Deep-AI candidates before Phase 7;
-- prototype UI components before Phase 3;
-- research DMARC parsing before Phase 5.
-
-Not allowed:
-
-- shipping a production subsystem whose prerequisites/gates have not passed;
-- bypassing Phase -1 controls because work is "prototype";
-- implementing customer-visible policy before authorization/audit contracts exist;
-- introducing a network service whose trust/security model is not documented;
-- introducing unversioned contracts or ungoverned LLM tools as a shortcut.
-
-## Production-readiness gate
+# Production-readiness gate
 
 No deployment is production-ready merely because Phase 9 code exists.
 
-Production readiness requires at minimum:
+At minimum:
 
-- Phase -1 security program accepted;
-- implemented subsystem threat models reviewed;
+- Phase -1 accepted/current;
+- protected `main` active with no direct pushes;
+- CI/reviews/agent enforcement controls active;
+- subsystem threat models reviewed;
 - MFA/admin audit operational;
-- tenant isolation tests passing;
-- backup/restore tested;
-- required runbooks exercised;
+- tenant context/RLS/feature override tests pass;
+- Tier-3 SLO/error-budget/burn-rate alerts active;
+- backup/restore/failure exercises pass;
+- zero-day process/tabletop evidence exists;
 - SMTP commissioning complete;
-- no unresolved Critical security finding;
-- High findings resolved or formally time-limited with compensating controls;
-- observability/alerting active;
-- SQS/DLQ/outbox health visible;
+- no unresolved Critical vulnerability;
+- High risks resolved or time-limited formal exception;
+- observability/alerting/SQS/DLQ/outbox health visible;
 - scanner failure semantics verified;
-- regional data-residency controls verified;
-- API/event/schema compatibility verified for rolling deployment;
-- feature switches/kill switches reviewed and obsolete rollout flags removed/planned for removal;
-- dependency/toolchain/runtime compatibility and support status verified;
-- TLS/certificate rotation path verified;
-- HMAC/webhook verification/replay controls tested where used;
-- Deep-AI skill/tool permissions/evaluations verified where enabled;
+- residency/API compatibility/feature-switch/dependency/TLS/HMAC/AI permissions verified as applicable;
 - rollback/containment tested;
 - external security testing completed as required.
 
-## Definition of complete
+# Definition of complete
 
-A phase is complete only when:
+A phase is complete only when deliverables exist, tests pass, docs match implementation, security/reliability evidence exists, UI/backend behavior agrees, failure modes are observable and phase exit criteria are approved.
 
-1. its required deliverables exist;
-2. acceptance tests pass;
-3. documentation matches implementation;
-4. security evidence exists;
-5. UI/backend behaviour is consistent;
-6. operational failure modes are observable;
-7. exit criteria in the phase document are approved.
-
-"Code works on a developer machine" is never sufficient phase completion.
+"Code works on a developer machine" is never sufficient.
