@@ -36,7 +36,9 @@ The following must exist before Phase 0 implementation:
 24. patching and dependency-version management;
 25. business-logic and policy-security invariants;
 26. certificate trust/mTLS/pinning policy;
-27. HMAC/webhook integrity and replay protection.
+27. HMAC/webhook integrity and replay protection;
+28. ML/LLM skill/tool governance, context limits and prompt-injection controls;
+29. coding-agent operating rules, skill boundaries and context/token discipline.
 
 No subsystem is exempt because it is "internal", "temporary", "development-only" or "not customer-facing".
 
@@ -100,3 +102,5 @@ Examples:
 - [Business Logic and Policy Security](24-BUSINESS-LOGIC-POLICY-SECURITY.md)
 - [Certificate Trust, mTLS and Pinning](25-CERTIFICATE-TRUST-PINNING.md)
 - [HMAC Signing and Webhook Security](26-HMAC-SIGNING-WEBHOOKS.md)
+- [ML / LLM Skills and Tool Governance](../25-AI-LLM-SKILLS-TOOLS.md)
+- [Coding Agent Operating Model](../ai/CODING-AGENT-OPERATING-MODEL.md)
