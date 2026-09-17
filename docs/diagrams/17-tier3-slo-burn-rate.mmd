@@ -1,0 +1,26 @@
+flowchart TB
+    Service[Tier-3 Capability]
+    Telemetry[SLI Telemetry]
+    SLO[SLO / Error Budget]
+    Fast[Fast Burn\n14.4x: 1h + 5m]
+    Sustained[Sustained Burn\n6x: 6h + 30m]
+    Slow[Slow Burn\nTicket / Planned Response]
+    Page[On-call Page]
+    Ticket[Maintenance / Reliability Work]
+    Runbook[Runbook / Containment]
+    Deploy[Rollback / Kill Switch / Capacity / Fix]
+    Verify[Verify SLO Recovery]
+
+    Service --> Telemetry --> SLO
+    SLO --> Fast
+    SLO --> Sustained
+    SLO --> Slow
+    Fast --> Page
+    Sustained --> Page
+    Slow --> Ticket
+    Page --> Runbook --> Deploy --> Verify
+    Ticket --> Deploy
+    Verify --> Telemetry
+
+    Note1[Accepted-mail durability and security invariants are not spendable error budget]
+    SLO -.-> Note1
