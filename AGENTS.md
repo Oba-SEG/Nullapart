@@ -7,8 +7,9 @@ Before modifying implementation:
 1. read `SECURITY.md`;
 2. read `docs/16-BUILD-ROADMAP.md`;
 3. identify and read the owning phase under `docs/phases/`;
-4. read only the architecture/security documents directly relevant to the task;
-5. inspect existing abstractions before creating new ones.
+4. read `docs/engineering/CODE-STANDARDS.md` for implementation/formatting rules;
+5. read only the architecture/security documents directly relevant to the task;
+6. inspect existing abstractions before creating new ones.
 
 Detailed AI-agent operating rules: `docs/ai/CODING-AGENT-OPERATING-MODEL.md`.
 
@@ -32,6 +33,9 @@ Detailed AI-agent operating rules: `docs/ai/CODING-AGENT-OPERATING-MODEL.md`.
 - No raw JSON admin UI.
 - No public database/cache/secrets/scanner/Deep-AI management endpoints.
 - Do not disable CI/security controls to complete a task.
+- Follow `docs/engineering/CODE-STANDARDS.md`; do not suppress format/lint/type errors simply to make a change pass.
+- Run/apply canonical formatters instead of manually imitating style.
+- Do not introduce broad lint-disable directives or unrelated formatting churn.
 - Third-party GitHub Actions use reviewed immutable full commit SHAs where practical; do not replace them with floating branches/tags casually.
 - Do not introduce long-lived AWS deployment credentials; use scoped OIDC/workload identity.
 - Package/runtime upgrades must respect `docs/26-PACKAGE-COMPATIBILITY.md` and lockfiles; do not force incompatible peer/toolchain combinations.
@@ -78,6 +82,7 @@ without checking whether the architecture explicitly allows it.
 For a feature, include as applicable:
 
 - implementation;
+- canonical formatting/lint/typecheck compliance;
 - backend authorization/ownership;
 - validation;
 - persistence/RLS;
