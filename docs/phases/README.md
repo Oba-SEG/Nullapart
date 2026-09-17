@@ -43,6 +43,7 @@ Every phase inherits, as applicable:
 - [Business Logic and Policy Security](../security/24-BUSINESS-LOGIC-POLICY-SECURITY.md)
 - [Certificate Trust, mTLS and Pinning](../security/25-CERTIFICATE-TRUST-PINNING.md)
 - [HMAC Signing and Webhook Security](../security/26-HMAC-SIGNING-WEBHOOKS.md)
+- [Zero-Day Intelligence and Emergency Response](../security/27-ZERO-DAY-INTELLIGENCE-RESPONSE.md)
 - [Version Control, CI/CD and Release Security](../security/19-VERSION-CONTROL-CICD.md)
 - [GitHub Actions Architecture](../28-GITHUB-ACTIONS-ARCHITECTURE.md)
 - [Compliance Assurance](../security/21-COMPLIANCE-ASSURANCE.md)
@@ -50,8 +51,11 @@ Every phase inherits, as applicable:
 - [Container/Network Architecture](../24-CONTAINER-LOADBALANCING-NETWORK.md)
 - [Package Compatibility and Upgrade Matrix](../26-PACKAGE-COMPATIBILITY.md)
 - [API Versioning, Feature Flags and Feature Addition Governance](../27-API-VERSIONING-FEATURE-FLAGS.md)
+- [Tenant Context, Feature Overrides and Routing](../29-TENANT-FEATURE-ROUTING.md)
+- [Tier-3 Reliability, SLOs and Error Budgets](../30-RELIABILITY-SLO-ERROR-BUDGETS.md)
+- [Code Standards and Formatting](../engineering/CODE-STANDARDS.md)
 - [ML / LLM Skills and Tool Governance](../25-AI-LLM-SKILLS-TOOLS.md) for ML/AI work;
-- [Coding Agent Operating Model](../ai/CODING-AGENT-OPERATING-MODEL.md) for AI-assisted development.
+- [Coding Agent Operating Model](../ai/CODING-AGENT-OPERATING-MODEL.md) and [Agent Discovery](../ai/AGENT-DISCOVERY.md) for AI-assisted development.
 
 Later phases do not get to redefine these controls casually.
 
@@ -62,13 +66,26 @@ A phase is an ownership/dependency boundary, not a reason to duplicate infrastru
 Examples:
 
 - authorization primitives belong in Phase 0/3 and are reused later;
+- tenant context is resolved once at the trusted application boundary rather than reinvented per feature;
 - scanner contracts belong in Phase 0/2 and are reused by later scanners;
 - durable events are one architecture reused by DMARC, notifications, AI and operations;
 - one Admin Audit subsystem records later-phase administrative actions;
 - one API-versioning convention is reused rather than invented per module;
-- feature switches live in the versioned configuration architecture rather than a separate service;
+- feature switches/tenant overrides live in the versioned configuration architecture rather than a separate service;
 - one HMAC/signature contract is reused where Nullapart-owned shared-secret signing is appropriate;
+- one reliability/SLO model governs Tier-3 services;
 - one design system is extended, not reinvented per feature.
+
+## Enforcement principle
+
+Agent/human instructions describe required behavior. Enforcement must exist in code/tests/CI/repository controls.
+
+In particular:
+
+- protected `main` with no direct pushes is a hard Phase 0 gate;
+- formatting/lint/type/security checks are merge gates;
+- RLS/authorization/tests enforce tenant isolation;
+- production approval prevents autonomous deployment.
 
 ## When documentation and code disagree
 
