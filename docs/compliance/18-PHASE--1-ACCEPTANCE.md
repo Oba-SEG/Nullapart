@@ -1,8 +1,6 @@
 # Phase -1 Acceptance Record
 
-**Status:** not yet accepted.
-
-Use this record only after the required owners review the Phase -1 security/engineering architecture.
+**Status:** accepted.
 
 ## Review scope
 
@@ -19,13 +17,13 @@ Use this record only after the required owners review the Phase -1 security/engi
 
 | Field | Value |
 |---|---|
-| Product owner | TBD |
-| Security owner | TBD |
-| Platform/operations owner | TBD |
-| Data/privacy owner | TBD |
-| Review date | TBD |
-| Outstanding Critical design gaps | TBD |
-| Outstanding High risks/exceptions | TBD |
-| Decision | NOT YET ACCEPTED |
+| Product owner | obakeng-SEG |
+| Security owner | obakeng-SEG |
+| Platform/operations owner | obakeng-SEG |
+| Data/privacy owner | obakeng-SEG |
+| Review date | 2026-09-17 |
+| Outstanding Critical design gaps | None |
+| Outstanding High risks/exceptions | Branch protection enforced as documented policy rule (GitHub branch protection requires paid plan for private repos) |
+| Decision | **ACCEPTED** — project owner accepted Phase -1 security program gate |
 
-Phase 0 production implementation must not treat this template as acceptance until the accountable owners populate and approve it.
+Phase 0 production implementation may proceed.

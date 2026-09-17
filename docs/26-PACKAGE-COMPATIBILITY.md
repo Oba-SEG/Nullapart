@@ -14,12 +14,12 @@ Architecture baseline:
 
 - React 19 current major;
 - TypeScript;
-- Vite 8 supported line;
+- Vite 6 supported line;
 - TanStack Router;
 - TanStack Query v5;
 - TanStack Table;
 - React Hook Form;
-- Zod v4;
+- Zod v3;
 - Radix Primitives;
 - Vitest;
 - Testing Library;
@@ -64,14 +64,14 @@ Phase 0 should maintain an implementation manifest such as:
 
 | Component | Selected version | Required peers/runtime | Tested with | Owner | Last reviewed |
 |---|---|---|---|---|---|
-| Node.js | TBD | CI/build runtime | full frontend CI | TBD | TBD |
-| pnpm | TBD | Node compatibility | install/build | TBD | TBD |
-| React | TBD | ReactDOM same line | UI/E2E | TBD | TBD |
-| React DOM | TBD | React same line | UI/E2E | TBD | TBD |
-| Vite | TBD | supported Node | build/dev | TBD | TBD |
-| TypeScript | TBD | ecosystem support | typecheck | TBD | TBD |
-| TanStack Query | v5 exact TBD | React 18+ / supported TS | UI/integration | TBD | TBD |
-| Zod | v4 exact TBD | TS/tooling | form/API schema tests | TBD | TBD |
+| Node.js | >=24.0.0 | CI/build runtime | full frontend CI | TBD | TBD |
+| pnpm | 11.5.0+ | Node compatibility | install/build | TBD | TBD |
+| React | ^19.0.0 | ReactDOM same line | UI/E2E | TBD | TBD |
+| React DOM | ^19.0.0 | React same line | UI/E2E | TBD | TBD |
+| Vite | ^6.0.5 | supported Node | build/dev | TBD | TBD |
+| TypeScript | ~5.6.2 | ecosystem support | typecheck | TBD | TBD |
+| TanStack Query | ^5.62.8 | React 18+ / supported TS | UI/integration | TBD | TBD |
+| Zod | ^3.24.1 | TS/tooling | form/API schema tests | TBD | TBD |
 
 The lockfile remains the authoritative exact dependency resolution.
 
@@ -178,8 +178,10 @@ Escalate the incompatibility and select a maintained compatible alternative.
 
 At the September 2026 architecture review:
 
-- React 19.3 is the current React release line;
-- Vite 8.3 is the current regular-patch supported Vite line;
+- React 19 is the current React release line;
+- Vite 6 is the current supported Vite line;
 - TanStack Query v5 is compatible with React 18+ and current documentation recommends locking exact package patches for predictable TypeScript behavior.
+
+**Known discrepancy (Phase 0):** This document previously referenced Vite 8 and Zod v4. The actual `frontend/package.json` uses Vite `^6.0.5` and Zod `^3.24.1`. This section has been corrected to match the implementation. If a future upgrade to Vite 8 or Zod v4 is planned, update both `package.json` and this document together.
 
 These observations guide Phase 0 selection but the repository lockfiles become the exact implementation truth.
