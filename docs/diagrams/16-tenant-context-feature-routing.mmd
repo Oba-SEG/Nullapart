@@ -1,0 +1,30 @@
+flowchart LR
+    Browser[Admin Browser]
+    Edge[Regional ALB / WAF]
+    BFF[Regional Control Backend / BFF]
+    Session[Authenticated Session]
+    Tenant[TenantContext Resolver]
+    Feature[Server Feature Evaluator]
+    Authz[Authorization / Ownership]
+    Logic[Business Logic]
+    DBTX[PostgreSQL Transaction]
+    RLS[RLS Context]
+    Data[(Tenant Data)]
+    Audit[(Admin Audit)]
+    Outbox[(Outbox)]
+
+    Browser --> Edge --> BFF --> Session --> Tenant
+    Tenant --> Feature --> Authz --> Logic --> DBTX
+    DBTX --> RLS --> Data
+    DBTX --> Audit
+    DBTX --> Outbox
+
+    Global[System Kill / Security Floor] --> Feature
+    Deploy[Deployment Override] --> Feature
+    TenantOverride[Tenant Override] --> Feature
+    Default[Feature Default] --> Feature
+
+    Note1[Client tenant IDs are navigation inputs only]
+    Note2[Precedence: System security > deployment > tenant > default]
+    Tenant -.-> Note1
+    Feature -.-> Note2
