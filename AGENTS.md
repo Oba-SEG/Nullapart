@@ -32,6 +32,14 @@ Detailed AI-agent operating rules: `docs/ai/CODING-AGENT-OPERATING-MODEL.md`.
 - No raw JSON admin UI.
 - No public database/cache/secrets/scanner/Deep-AI management endpoints.
 - Do not disable CI/security controls to complete a task.
+- Third-party GitHub Actions use reviewed immutable full commit SHAs where practical; do not replace them with floating branches/tags casually.
+- Do not introduce long-lived AWS deployment credentials; use scoped OIDC/workload identity.
+- Package/runtime upgrades must respect `docs/26-PACKAGE-COMPATIBILITY.md` and lockfiles; do not force incompatible peer/toolchain combinations.
+- Feature switches are server-authoritative configuration, never authorization or a shortcut around incomplete security work.
+- Independently consumed API/event/scanner/config/AI contracts follow `docs/27-API-VERSIONING-FEATURE-FLAGS.md`.
+- Reuse the reviewed HMAC/webhook contract instead of inventing per-endpoint signing schemes.
+- Do not disable TLS validation or add browser certificate pinning/HPKP; follow the certificate trust policy.
+- ML/LLM skills use explicit data/tool/context/output contracts and models do not receive ambient shell/browser/cloud authority.
 - Do not claim compliance/certification without verified evidence/audit basis.
 
 ## Architecture defaults
@@ -77,6 +85,10 @@ For a feature, include as applicable:
 - rate limiting;
 - idempotency;
 - safe errors;
+- API/event/schema compatibility;
+- feature-switch/rollout behavior;
+- package/toolchain compatibility;
+- cryptographic signing/verification tests where applicable;
 - UI;
 - observability;
 - tests;
