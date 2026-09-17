@@ -1,5 +1,7 @@
-# scanner-sdk
+# Nullapart Scanner SDK
 
-Future scanner adapter contract/SDK.
+SDK for integrating scanners with Nullapart SEG.
 
-Scanners must expose normalized statuses/findings, node identity, timing, ruleset/engine metadata internally, timeouts and failure semantics.
+## License
+
+Proprietary - Nullapart

@@ -1,26 +1,66 @@
+# Nullapart Editor Configuration
+# https://editorconfig.org
+
 root = true
 
+# All files
 [*]
 charset = utf-8
 end_of_line = lf
 insert_final_newline = true
 trim_trailing_whitespace = true
+
+# Markdown
+[*.md]
+trim_trailing_whitespace = false
+
+# YAML
+[*.{yml,yaml}]
 indent_style = space
+indent_size = 2
 
+# JSON
+[*.json]
+indent_style = space
+indent_size = 2
+
+# TOML
+[*.toml]
+indent_style = space
+indent_size = 4
+
+# Rust
 [*.rs]
+indent_style = space
 indent_size = 4
+max_line_length = 100
 
-[*.{ts,tsx,js,jsx,json,yml,yaml,css,scss,md,toml}]
+# TypeScript/JavaScript
+[*.{ts,tsx,js,jsx}]
+indent_style = space
+indent_size = 2
+max_line_length = 100
+
+# CSS
+[*.css]
+indent_style = space
 indent_size = 2
 
-[*.py]
-indent_size = 4
-
-[*.sql]
-indent_size = 2
-
-[*.sh]
-indent_size = 2
-
+# Makefile
 [Makefile]
 indent_style = tab
+
+# Shell
+[*.sh]
+indent_style = space
+indent_size = 2
+
+# SQL
+[*.sql]
+indent_style = space
+indent_size = 4
+
+# Dockerfile
+[Dockerfile*]
+indent_style = space
+indent_size = 4

@@ -1,21 +1,25 @@
-# mail-contracts
+# Nullapart Mail Contracts
 
-Future Rust contracts shared by Mail Core and scanner adapters.
+Core domain types and contracts for the mail system.
 
-Planned contracts include:
+## Contracts
 
-- SMTP Transaction;
-- Tenant Message Instance;
-- transaction/tenant-message/trace/Postfix queue identities;
-- artifact references;
-- SecurityFinding with transaction-vs-tenant scope;
-- scanner result/status/resource-limit reason;
-- policy disposition;
-- delivery attempt/downstream SMTP result;
-- stable node identity + observed runtime identity/IP;
-- durable event envelope;
-- idempotency metadata.
+- SMTP Transaction
+- Tenant Message Instance
+- Security Finding
+- Policy and Configuration
+- Artifact
+- Event
+- Audit
+- API Error
 
-One SMTP transaction may map to multiple customer-scoped Tenant Message Instances. Contracts must not assume one accepted `DATA` transaction equals one customer.
+## Usage
 
-See `docs/18-MESSAGE-TRANSACTION-CONTRACT.md`.
+```toml
+[dependencies]
+nullapart-mail-contracts = { path = "../crates/mail-contracts" }
+```
+
+## License
+
+Proprietary - Nullapart
