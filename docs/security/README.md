@@ -38,7 +38,10 @@ The following must exist before Phase 0 implementation:
 26. certificate trust/mTLS/pinning policy;
 27. HMAC/webhook integrity and replay protection;
 28. ML/LLM skill/tool governance, context limits and prompt-injection controls;
-29. coding-agent operating rules, skill boundaries and context/token discipline.
+29. coding-agent operating rules, skill boundaries and context/token discipline;
+30. tenant-aware routing and per-tenant feature/configuration override rules;
+31. Tier-3 reliability, SLO/error-budget and burn-rate alerting policy;
+32. zero-day intelligence, containment and emergency vulnerability handling.
 
 No subsystem is exempt because it is "internal", "temporary", "development-only" or "not customer-facing".
 
@@ -67,6 +70,8 @@ Examples:
 - access-review records;
 - dependency/SBOM records;
 - vulnerability remediation history;
+- zero-day triage/containment evidence;
+- SLO/error-budget/burn-rate evidence;
 - audit logs;
 - restore-test evidence;
 - penetration-test findings;
@@ -102,5 +107,9 @@ Examples:
 - [Business Logic and Policy Security](24-BUSINESS-LOGIC-POLICY-SECURITY.md)
 - [Certificate Trust, mTLS and Pinning](25-CERTIFICATE-TRUST-PINNING.md)
 - [HMAC Signing and Webhook Security](26-HMAC-SIGNING-WEBHOOKS.md)
+- [Zero-Day Intelligence and Emergency Response](27-ZERO-DAY-INTELLIGENCE-RESPONSE.md)
 - [ML / LLM Skills and Tool Governance](../25-AI-LLM-SKILLS-TOOLS.md)
 - [Coding Agent Operating Model](../ai/CODING-AGENT-OPERATING-MODEL.md)
+- [Coding Agent Instruction Discovery](../ai/AGENT-DISCOVERY.md)
+- [Tenant Context, Feature Overrides and Routing](../29-TENANT-FEATURE-ROUTING.md)
+- [Tier-3 Reliability, SLOs and Error Budgets](../30-RELIABILITY-SLO-ERROR-BUDGETS.md)
