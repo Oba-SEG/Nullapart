@@ -1,0 +1,5 @@
+# Nullapart Postfix header_checks - Loop prevention
+# Ensures reinjected messages cannot re-enter the content filter pipeline.
+
+/^X-Nullapart-Loop: /  IGNORE
+/^X-Nullapart-Reinjected: /  IGNORE

@@ -1,0 +1,132 @@
+# Nullapart Postfix main.cf - Hardened inbound SMTP baseline
+# Follows: docs/phases/PHASE-1-EXECUTION-PLAN.md Work Package 2
+
+# ==============================================================================
+# General
+# ==============================================================================
+smtpd_banner = $myhostname ESMTP Nullapart
+mailbox_command =
+mailbox_transport =
+myhostname = mail.nullapart.com
+mydomain = nullapart.com
+myorigin = $mydomain
+mydestination = $myhostname, localhost.$mydomain, localhost
+mynetworks = 127.0.0.0/8 [::1]/128
+
+# ==============================================================================
+# Relay restrictions (default deny)
+# ==============================================================================
+smtpd_relay_restrictions =
+    permit_mynetworks,
+    reject_unauth_destination
+
+# ==============================================================================
+# Recipient/domain lookup interface
+# ==============================================================================
+# Phase 1: static lookup. Later: policyd-weight / custom SQL.
+local_recipient_maps =
+relay_domains =
+transport_maps =
+
+# ==============================================================================
+# Connection/resource limits
+# ==============================================================================
+smtpd_client_connection_rate_limit = 50
+smtpd_client_message_rate_limit = 200
+smtpd_client_recipient_rate_limit = 500
+smtpd_client_auth_rate_limit = 10
+
+smtpd_recipient_limit = 500
+smtpd_message_size_limit = 52428800  # 50MB
+
+# Timeouts
+smtpd_timeout = 300
+smtp_timeout = 300
+mail_timeout = 600
+
+# ==============================================================================
+# HELO restrictions
+# ==============================================================================
+smtpd_helo_restrictions =
+    permit_mynetworks,
+    reject_invalid_helo_hostname,
+    reject_non_fqdn_helo_hostname,
+    reject_unknown_helo_hostname
+
+# ==============================================================================
+# Sender restrictions
+# ==============================================================================
+smtpd_sender_restrictions =
+    permit_mynetworks,
+    reject_non_fqdn_sender,
+    reject_unknown_sender_domain
+
+# ==============================================================================
+# Recipient restrictions
+# ==============================================================================
+smtpd_recipient_restrictions =
+    permit_mynetworks,
+    reject_unauth_destination,
+    reject_non_fqdn_recipient,
+    reject_unknown_recipient_domain
+
+# ==============================================================================
+# RBL/DNSBL integration
+# ==============================================================================
+# Enable after DNSBL selection is validated.
+# smtpd_recipient_restrictions =
+#     permit_mynetworks,
+#     reject_unauth_destination,
+#     reject_rbl_client zen.spamhaus.org,
+#     reject_rbl_client bl.spamcop.net,
+#     reject_non_fqdn_recipient,
+#     reject_unknown_recipient_domain
+
+# ==============================================================================
+# TLS configuration
+# ==============================================================================
+smtpd_tls_cert_file = /etc/pki/tls/certs/mail.nullapart.com.pem
+smtpd_tls_key_file = /etc/pki/tls/private/mail.nullapart.com.key
+smtpd_tls_security_level = may
+smtpd_tls_auth_only = yes
+smtpd_tls_protocols = !SSLv2, !SSLv3, !TLSv1, !TLSv1.1
+smtpd_tls_ciphers = high
+smtpd_tls_mandatory_protocols = !SSLv2, !SSLv3, !TLSv1, !TLSv1.1
+smtpd_tls_mandatory_ciphers = high
+
+smtp_tls_security_level = may
+smtp_tls_protocols = !SSLv2, !SSLv3, !TLSv1, !TLSv1.1
+smtp_tls_ciphers = high
+
+# ==============================================================================
+# Milter configuration (Rspamd)
+# ==============================================================================
+milter_default_action = accept
+milter_protocol = 6
+smtpd_milters = inet:localhost:11332
+non_smtpd_milters = inet:localhost:11332
+
+# ==============================================================================
+# Queue durability
+# ==============================================================================
+minimal_backoff_time = 300s
+maximal_backoff_time = 14400s
+maximal_queue_lifetime = 5d
+bounce_queue_lifetime = 5d
+maximal_triage_time = 0s
+
+# ==============================================================================
+# Queue cleanup
+# ==============================================================================
+maximal_queue_lifetime = 5d
+bounce_queue_lifetime = 5d
+maximal_tries = 10
+
+# ==============================================================================
+# After-queue content filter route
+# ==============================================================================
+# Content filter handoff to Mail Core after queue acceptance.
+content_filter = mailcore:dummy
+
+# Reinjection listener (trusted, private only)
+# See master.cf for the reinjection port (10026).

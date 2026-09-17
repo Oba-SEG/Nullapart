@@ -1,0 +1,66 @@
+# Nullapart Postfix master.cf - Service definitions
+# Follows: docs/phases/PHASE-1-EXECUTION-PLAN.md Work Package 2
+
+# ==============================================================================
+# Inbound SMTP listener (public, TCP 25)
+# ==============================================================================
+smtp      inet  n       -       n       -       -       smtpd
+  -o content_filter=mailcore:dummy
+  -o smtpd_relay_restrictions=permit_mynetworks,reject_unauth_destination
+  -o smtpd_recipient_restrictions=permit_mynetworks,reject_unauth_destination
+  -o receive_override_options=no_unknown_recipient_checks,no_header_body_checks
+  -o smtp_helo_timeout=300
+  -o smtp_client_timeout=300
+  -o smtp_bind_address=0.0.0.0
+
+# ==============================================================================
+# Reinjection listener (private, 127.0.0.1:10026)
+# Accepts only Mail Core reinjection. Loop prevention header checked.
+# ==============================================================================
+127.0.0.1:10026 inet  n       -       n       -       -       smtpd
+  -o content_filter=
+  -o receive_override_options=no_unknown_recipient_checks,no_header_body_checks
+  -o smtpd_relay_restrictions=permit_mynetworks,reject
+  -o smtpd_recipient_restrictions=permit_mynetworks,reject
+  -o mynetworks=127.0.0.0/8
+  -o smtpd_client_restrictions=permit_mynetworks,reject
+  -o header_checks=regexp:/etc/postfix/header_checks_nullapart
+
+# ==============================================================================
+# Outbound SMTP (private, used by Mail Core for delivery)
+# ==============================================================================
+127.0.0.1:10027 inet  n       -       n       -       -       smtpd
+  -o content_filter=
+  -o receive_override_options=no_unknown_recipient_checks,no_header_body_checks
+  -o smtpd_relay_restrictions=permit_mynetworks,reject
+  -o smtpd_recipient_restrictions=permit_mynetworks,reject
+  -o mynetworks=127.0.0.0/8
+
+# ==============================================================================
+# Mail Core after-queue content filter
+# ==============================================================================
+mailcore unix  -       n       n       -       10      pipe
+  flags=Rq user=nullapart nullapart_certificate=
+  argv=/usr/libexec/nullapart/mailcore-filter -f ${sender} -- ${recipient}
+
+# ==============================================================================
+# Queue runner
+# ==============================================================================
+pickup    unix  n       -       n       60      1       pickup
+cleanup   unix  n       -       n       -       0       cleanup
+qmgr      unix  n       -       n       300     1       qmgr
+tlsmgr    unix  -       -       n       1000?   1       tlsmgr
+rewrite   unix  -       -       n       -       -       trivial-rewrite
+bounce    unix  -       -       n       -       0       bounce
+defer     unix  -       -       n       -       0       bounce
+trace     unix  -       -       n       -       0       bounce
+verify    unix  -       -       n       -       1       verify
+flush     unix  n       -       n       1000?   0       flush
+proxymap  unix  -       -       n       -       -       proxymap
+proxywrite unix -       -       n       -       1       proxymap
+
+# ==============================================================================
+# Local delivery (disabled - relay only)
+# ==============================================================================
+local     unix  -       n       n       -       -       local
+virtual   unix  -       n       n       -       -       virtual
