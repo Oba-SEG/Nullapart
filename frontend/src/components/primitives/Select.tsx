@@ -1,0 +1,60 @@
+/**
+ * Nullapart accessible Select primitive
+ *
+ * Wraps native select with neumorphic styling and proper ARIA.
+ */
+
+import { forwardRef, type SelectHTMLAttributes, useId } from "react";
+
+export interface SelectOption {
+  value: string;
+  label: string;
+  disabled?: boolean;
+}
+
+export interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
+  label: string;
+  options: SelectOption[];
+  placeholder?: string;
+  error?: string;
+}
+
+export const Select = forwardRef<HTMLSelectElement, SelectProps>(
+  ({ label, options, placeholder, error, id: idProp, className, ...props }, ref) => {
+    const autoId = useId();
+    const id = idProp ?? autoId;
+    const errorId = `${id}-error`;
+
+    return (
+      <div className="select-group">
+        <label htmlFor={id} className="select-label">
+          {label}
+        </label>
+        <select
+          ref={ref}
+          id={id}
+          className={`select ${error ? "select-error" : ""} ${className ?? ""}`}
+          aria-invalid={!!error}
+          aria-describedby={error ? errorId : undefined}
+          {...props}
+        >
+          {placeholder && (
+            <option value="" disabled>
+              {placeholder}
+            </option>
+          )}
+          {options.map((opt) => (
+            <option key={opt.value} value={opt.value} disabled={opt.disabled}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
+        {error && (
+          <p id={errorId} className="select-error-message" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
+    );
+  },
+);

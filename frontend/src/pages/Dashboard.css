@@ -1,0 +1,136 @@
+.dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-6);
+}
+
+.page-title {
+  font-size: var(--font-size-3xl);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-primary);
+}
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--spacing-4);
+}
+
+.metric-card {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-4);
+  padding: var(--spacing-5);
+  background-color: var(--color-bg-secondary);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+}
+
+.metric-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-md);
+  background-color: var(--color-bg-tertiary);
+  color: var(--color-brand-500);
+}
+
+.metric-icon.warning {
+  color: var(--color-warning);
+}
+
+.metric-icon.success {
+  color: var(--color-success);
+}
+
+.metric-content {
+  display: flex;
+  flex-direction: column;
+}
+
+.metric-value {
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-primary);
+}
+
+.metric-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.dashboard-sections {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  gap: var(--spacing-4);
+}
+
+.section-title {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  margin-bottom: var(--spacing-4);
+  padding-bottom: var(--spacing-2);
+  border-bottom: 1px solid var(--color-bg-tertiary);
+}
+
+.activity-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+
+.activity-item {
+  display: flex;
+  gap: var(--spacing-3);
+  font-size: var(--font-size-sm);
+}
+
+.activity-time {
+  flex-shrink: 0;
+  color: var(--color-text-tertiary);
+  min-width: 70px;
+}
+
+.activity-text {
+  color: var(--color-text-secondary);
+}
+
+.health-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.health-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  padding: var(--spacing-2);
+  font-size: var(--font-size-sm);
+}
+
+.health-status {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+}
+
+.health-status.healthy {
+  background-color: var(--color-success);
+}
+
+.health-status.degraded {
+  background-color: var(--color-warning);
+}
+
+.health-status.unhealthy {
+  background-color: var(--color-error);
+}
+
+.health-detail {
+  margin-left: auto;
+  color: var(--color-text-tertiary);
+}
