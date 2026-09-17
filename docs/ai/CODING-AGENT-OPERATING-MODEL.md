@@ -8,6 +8,20 @@ AI agents must work from Nullapart's architecture/security contracts without con
 
 The goal is **high signal per token/context unit**, not maximum file ingestion.
 
+## Discovery
+
+Root `AGENTS.md` is the canonical coding-agent instruction source.
+
+Supported environments are described in `docs/ai/AGENT-DISCOVERY.md`.
+
+Important current behavior:
+
+- OpenAI Codex uses `AGENTS.md` directly;
+- OpenCode uses `AGENTS.md` directly;
+- Copilot/Claude/Gemini/Cursor adapters point back to the same canonical rules.
+
+Do not create separate policy copies per agent vendor.
+
 ## Required context order
 
 Before coding, load context in this order:
@@ -16,22 +30,27 @@ Before coding, load context in this order:
 2. `SECURITY.md`;
 3. `docs/16-BUILD-ROADMAP.md`;
 4. owning detailed phase document under `docs/phases/`;
-5. only the architecture/security docs directly relevant to the task;
-6. only the implementation files being changed plus their nearby tests/contracts.
+5. `docs/engineering/CODE-STANDARDS.md`;
+6. only architecture/security docs directly relevant to the task;
+7. implementation files being changed plus nearby tests/contracts.
 
 Do not dump/read the entire repository unless a task genuinely requires a global audit.
 
 ## Task context manifest
 
-At the start of a material task, the agent should establish a compact internal/task manifest:
+At the start of a material task, establish a compact internal/task manifest:
 
 - objective;
 - owning phase;
 - files/modules likely affected;
 - contracts involved;
-- tenant/data classes involved;
+- tenant/deployment scope;
+- data classes involved;
 - auth/RBAC/audit implications;
+- feature-switch/override impact;
 - failure/idempotency requirements;
+- reliability/SLO impact where applicable;
+- dependency/zero-day exposure impact for new parsers/packages;
 - tests required;
 - docs to update.
 
@@ -52,8 +71,9 @@ Avoid repeatedly loading large files whose relevant rule is already known.
 Before creating code, search for existing:
 
 - ID types;
-- request context/principal;
+- `TenantContext` / request context / principal;
 - authorization helpers;
+- feature evaluator/tenant override patterns;
 - error types;
 - audit helpers;
 - DB/RLS patterns;
@@ -63,7 +83,7 @@ Before creating code, search for existing:
 - design-system components;
 - API client utilities;
 - rate-limiter/idempotency utilities;
-- feature-flag/config patterns.
+- reliability/SLI instrumentation helpers.
 
 Do not solve the same problem with a parallel abstraction.
 
@@ -93,6 +113,18 @@ Required abilities:
 - OAST/SSRF;
 - safe errors;
 - audit/rate-limit checks.
+
+### `nullapart.tenant-routing`
+
+Required abilities:
+
+- resolve trusted `TenantContext` at application boundary;
+- never authorize from client tenant IDs;
+- preserve deployment/tenant scope in jobs/events/caches;
+- implement feature override precedence;
+- prevent tenant overrides weakening System security floors.
+
+Canonical reference: `docs/29-TENANT-FEATURE-ROUTING.md`.
 
 ### `nullapart.mail-pipeline`
 
@@ -159,6 +191,20 @@ Required abilities:
 - IAM/OIDC/KMS/S3/SQS/RDS;
 - no public sensitive services.
 
+### `nullapart.reliability-sre`
+
+Required abilities:
+
+- Tier-3 capability classification;
+- SLI/SLO/error-budget design;
+- multi-window burn-rate alerting;
+- backpressure/load shedding;
+- RTO/RPO;
+- failure testing/runbooks;
+- no accepted-mail durability/security tradeoff for latency.
+
+Canonical reference: `docs/30-RELIABILITY-SLO-ERROR-BUDGETS.md`.
+
 ### `nullapart.testing-security`
 
 Required abilities:
@@ -170,6 +216,19 @@ Required abilities:
 - parser/fuzz/resource exhaustion;
 - failure semantics;
 - E2E role/session flows.
+
+### `nullapart.zero-day-response`
+
+Required abilities:
+
+- advisory/SBOM/version correlation;
+- exposure state tracking;
+- emergency mitigation selection;
+- focused patch/regression testing;
+- retrospective hunt planning;
+- no autonomous production patch/key rotation.
+
+Canonical reference: `docs/security/27-ZERO-DAY-INTELLIGENCE-RESPONSE.md`.
 
 ### `nullapart.ml-llm`
 
@@ -187,6 +246,7 @@ Required abilities:
 Required abilities:
 
 - GitHub Actions minimum permissions;
+- protected `main` / no direct pushes;
 - locked dependencies;
 - action SHA pinning;
 - OIDC AWS deployment;
@@ -212,6 +272,7 @@ Example:
 Task: add quarantine release API/UI
 Skills:
 - nullapart.control-plane
+- nullapart.tenant-routing
 - nullapart.appsec-review
 - nullapart.frontend
 - nullapart.database-security
@@ -240,25 +301,18 @@ Do not paste large external docs into project context.
 
 ### Keep outputs structured
 
-Use compact checklists/tables for:
-
-- affected files;
-- controls;
-- test matrix;
-- compatibility decisions.
-
-This reduces ambiguity and repeated narrative.
+Use compact checklists/tables for affected files, controls, tests and compatibility decisions.
 
 ### Do not optimize away security
 
 Token/context optimization must never skip:
 
 - authorization/ownership;
-- tenant isolation;
+- tenant isolation/routing;
 - audit;
 - validation;
 - failure semantics;
-- tests;
+- required reliability/security tests;
 - required threat-model review.
 
 ## Bounded change principle
@@ -277,14 +331,35 @@ Stop and surface an architecture decision before coding if the task requires:
 - a new persistent datastore;
 - a new network service;
 - cross-region customer data movement;
-- new LLM action/tool permissions;
+- a new tenant-routing model;
+- tenant override capable of weakening a System floor;
+- a new LLM action/tool permission;
 - weakening a System security floor;
 - changing customer ID semantics;
 - changing SMTP responsibility/acceptance semantics;
 - bypassing RLS/auth/audit;
 - incompatible API/event/schema change;
 - introducing Kubernetes/EKS;
-- sending Restricted data to a new third party.
+- sending Restricted data to a new third party;
+- changing Tier-3 SLO/error-budget semantics;
+- bypassing protected `main` or required CI checks.
+
+## Enforcement
+
+Instruction compliance is not trusted as the only control.
+
+Repository/process enforcement must include, where applicable:
+
+- types/compiler;
+- RLS/database constraints;
+- security/integration tests;
+- formatter/linter/type checks;
+- CI scans;
+- required PR review;
+- branch protection;
+- production approvals.
+
+An agent cannot self-approve production or disable enforcement to make a task pass.
 
 ## Completion report
 
@@ -293,6 +368,7 @@ When a coding agent completes a material task, report concisely:
 - what changed;
 - tests run/results;
 - security controls exercised;
+- tenant/feature/reliability impact;
 - migrations/config/feature flags;
 - docs updated;
 - known limitations/follow-ups.
