@@ -6,6 +6,16 @@ Produce a robust bidirectional Secure Email Gateway mail path using Postfix + Rs
 
 At the end of this phase Nullapart must safely accept, queue, partition, evaluate basic policy and deliver mail in both directions.
 
+## Execution plan
+
+The authoritative implementation work breakdown is:
+
+- `docs/phases/PHASE-1-EXECUTION-PLAN.md`
+
+This phase specification defines scope and acceptance intent. The execution plan defines ordered work packages, dependencies, test gates and issue-sized deliverables.
+
+Do not start production Phase 1 implementation until the Phase 0 exit criteria are satisfied.
+
 ## Prerequisites
 
 - Phase 0 contracts accepted.
@@ -13,6 +23,7 @@ At the end of this phase Nullapart must safely accept, queue, partition, evaluat
 - policy snapshot/cache contract stable.
 - Admin Audit/event/reason-code contracts usable.
 - AWS SMTP commissioning design accepted.
+- protected `main` and required CI gates active.
 
 ## Inbound deliverables
 
@@ -159,6 +170,21 @@ For public mail nodes:
 
 If an NLB is introduced, client-IP preservation/STARTTLS/timeout/rate-limit behavior must be proven before acceptance.
 
+## Reliability obligations
+
+Mail-critical Phase 1 paths follow `docs/30-RELIABILITY-SLO-ERROR-BUDGETS.md`.
+
+At minimum instrument:
+
+- SMTP acceptance availability;
+- accepted-message durability;
+- queue age/backlog;
+- Mail Core processing latency;
+- reinjection/delivery failure;
+- downstream delivery latency.
+
+Burn-rate alert inputs must exist before production readiness.
+
 ## Operational evidence
 
 Expose:
@@ -193,6 +219,7 @@ For first target deployment:
 - queue/reinjection loops are impossible under tested paths;
 - delivery retries/DSNs behave correctly;
 - trace UI accurately represents receipt and delivery;
+- Tier-3 mail SLIs and operational alerts are implemented;
 - SMTP production commissioning can be repeated from documentation.
 
 ## Not in this phase
