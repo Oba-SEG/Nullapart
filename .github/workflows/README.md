@@ -6,6 +6,7 @@ Production workflow files are introduced during Phase 0 according to:
 - `docs/22-VERSIONING-RELEASE-MANAGEMENT.md`
 - `docs/26-PACKAGE-COMPATIBILITY.md`
 - `docs/28-GITHUB-ACTIONS-ARCHITECTURE.md`
+- `docs/engineering/CODE-STANDARDS.md`
 - `docs/phases/PHASE-0-CONTRACTS-FOUNDATIONS.md`
 
 ## Planned workflow classes
@@ -15,7 +16,9 @@ Production workflow files are introduced during Phase 0 according to:
 Expected responsibilities:
 
 - changed-path classification;
-- format/lint/typecheck;
+- canonical format checks;
+- lint/static analysis;
+- TypeScript/Python type checks where applicable;
 - Rust/frontend compile/build;
 - unit/integration/security/UI tests as applicable;
 - API compatibility tests;
@@ -27,6 +30,19 @@ Expected responsibilities:
 - IaC/container scanning when applicable;
 - SBOM generation/checks;
 - documentation/link consistency checks.
+
+Code-format/lint/type failures are merge-blocking. They are fixed in source/configuration, not bypassed in CI.
+
+Expected tool classes include, as applicable:
+
+- Rust: `cargo fmt --check`, Clippy, compiler;
+- TypeScript/React: Prettier, ESLint, `tsc --noEmit`;
+- CSS: Prettier + Stylelint where configured;
+- Python/ML: Ruff + project type checker;
+- shell: shfmt + ShellCheck;
+- Dockerfile: Hadolint/equivalent;
+- IaC: native formatter/validator + security scan;
+- Markdown/YAML/JSON/SQL: deterministic formatter/lint/schema checks selected by Phase 0.
 
 PR workflows must not receive production deployment credentials.
 
@@ -103,7 +119,10 @@ Do not:
 - use long-lived AWS access keys for normal deployments;
 - run untrusted PR code with production secrets;
 - grant broad default workflow permissions;
-- disable required security checks to force a release through;
+- disable required formatting/lint/type/security checks to force a release through;
 - let automation self-approve sensitive production changes.
 
-See `docs/28-GITHUB-ACTIONS-ARCHITECTURE.md` for the complete workflow contract.
+See:
+
+- `docs/28-GITHUB-ACTIONS-ARCHITECTURE.md` for the complete workflow contract;
+- `docs/engineering/CODE-STANDARDS.md` for canonical language/style/lint rules.
