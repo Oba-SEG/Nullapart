@@ -2,9 +2,7 @@
 
 Mermaid `.mmd` files in this directory are the **canonical architecture diagram sources**.
 
-Do not duplicate Mermaid bodies manually in this README. That previously allowed the rendered index to drift from the actual source files.
-
-If rendered SVG/PNG/embedded Markdown diagrams are added later, they should be generated automatically from these sources in CI and never maintained by hand.
+Do not duplicate Mermaid bodies manually in this README. If rendered SVG/PNG/embedded diagrams are added later, generate them automatically from these sources in CI.
 
 ## Diagram index
 
@@ -39,28 +37,35 @@ If rendered SVG/PNG/embedded Markdown diagrams are added later, they should be g
     - Public edge, private application/data/AI boundaries and external operational integrations.
 
 11. [Observability architecture](10-observability-architecture.mmd)
-    - Sentry-compatible application telemetry -> SegLumberjack, native daemon collector path, CloudWatch infrastructure telemetry, and authoritative audit/outbox separation.
+    - Sentry-compatible application telemetry -> SegLumberjack, native daemon collector, CloudWatch infrastructure telemetry and authoritative audit/outbox separation.
 
 12. [Administrative audit architecture](11-admin-audit-architecture.mmd)
     - Atomic mutation/audit/outbox pattern, RBAC-scoped UI, immutable audit checkpoints and diagnostic SegLumberjack correlation.
 
 13. [Security program gate](12-security-program-gate.mmd)
-    - Phase -1 governance/process controls that must be accepted before Phase 0 implementation, plus production-readiness and continuous-improvement feedback.
+    - Phase -1 governance/process controls before Phase 0, plus production-readiness/continuous-improvement feedback.
 
 14. [CI/CD and release flow](13-cicd-release-flow.mmd)
     - Short-lived branch -> PR/review/security CI -> protected main -> immutable artifact -> same-digest environment promotion -> approved production deployment.
 
 15. [Control-plane request security](14-control-plane-request-security.mmd)
-    - HTTPS/session -> layered rate limit -> validation -> ownership authorization -> business logic -> RLS-protected transaction/audit/outbox -> safe error handling.
+    - HTTPS/session -> layered rate limit -> validation -> ownership authorization -> business logic -> RLS transaction/audit/outbox -> safe errors.
 
 16. [Container/network topology](15-container-network-topology.mmd)
     - ALB/WAF web edge, direct Postfix MX nodes, ECS private workloads, private data/security services and controlled AI/network boundaries.
 
+17. [Tenant context and feature routing](16-tenant-context-feature-routing.mmd)
+    - Trusted TenantContext resolution, server-side feature evaluation, System/deployment/tenant/default precedence, authorization and RLS-protected data access.
+
+18. [Tier-3 SLO and burn-rate flow](17-tier3-slo-burn-rate.mmd)
+    - SLI -> SLO/error budget -> fast/sustained/slow burn alert paths -> runbook/containment -> recovery verification.
+
 ## Diagram rules
 
-- Update the relevant `.mmd` file whenever its architecture changes.
-- Treat the source diagram as part of the architecture contract, not presentation-only documentation.
-- Do not add a second hand-maintained copy of a diagram.
-- Security/trust-boundary diagrams must be reviewed whenever adding a new integration, public endpoint, scanner type, data store, artifact-access path or cross-region flow.
-- AWS-specific implementation details can evolve without changing the logical context diagram unless they change a trust/data boundary or product contract.
-- Product-facing diagrams may hide unnecessary implementation/engine names, while internal architecture diagrams may name them for engineering clarity.
+- Update the relevant `.mmd` whenever architecture changes.
+- Treat diagram source as architecture contract, not presentation-only docs.
+- Do not add a second hand-maintained copy.
+- Review security/trust diagrams when adding integration, public endpoint, scanner, datastore, artifact access, tenant-routing change or cross-region flow.
+- Review reliability diagram when changing Tier-3/SLO/error-budget semantics.
+- AWS implementation details may evolve without logical diagram change unless they alter trust/data/reliability contracts.
+- Product-facing diagrams may hide unnecessary engine names; internal diagrams may name them for engineering clarity.
