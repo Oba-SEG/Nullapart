@@ -2,37 +2,45 @@
 
 ## Objective
 
-Create the stable contracts, schemas, build tooling, testing foundations and UI/security primitives required so later implementation does not invent incompatible models independently.
+Create the stable contracts, schemas, repository controls, build tooling, tenant-context primitives, testing foundations and UI/security/reliability primitives required so later phases do not invent incompatible models independently.
 
-Phase 0 minimizes rework by fixing interfaces before feature depth.
+Phase 0 fixes the implementation foundations before feature depth.
 
 ## Prerequisites
 
-- Phase -1 accepted.
+- Phase -1 explicitly accepted.
 - Architecture review complete enough to define contracts.
 - No unresolved Critical design issue around tenancy, identity, mail responsibility or content access.
+- Repository administrators available to activate protected `main`.
 
 ## Required reading
 
 - `AGENTS.md`
+- `docs/ai/AGENT-DISCOVERY.md`
+- `docs/ai/CODING-AGENT-OPERATING-MODEL.md`
+- `docs/engineering/CODE-STANDARDS.md`
 - `docs/18-MESSAGE-TRANSACTION-CONTRACT.md`
 - `docs/05-SCANNER-FABRIC.md`
 - `docs/06-POLICY-MODEL.md`
 - `docs/17-ADMIN-AUDIT-LOGGING.md`
 - `docs/19-SECURE-MESSAGE-RENDERING.md`
 - `docs/20-EVENT-DURABILITY.md`
-- `docs/12-UI-DESIGN-SYSTEM.md`
 - `docs/11-OBSERVABILITY-SECRETS.md`
 - `docs/23-FRONTEND-ARCHITECTURE.md`
 - `docs/26-PACKAGE-COMPATIBILITY.md`
 - `docs/27-API-VERSIONING-FEATURE-FLAGS.md`
 - `docs/28-GITHUB-ACTIONS-ARCHITECTURE.md`
+- `docs/29-TENANT-FEATURE-ROUTING.md`
+- `docs/30-RELIABILITY-SLO-ERROR-BUDGETS.md`
+- `docs/security/19-VERSION-CONTROL-CICD.md`
+- `docs/security/20-APPLICATION-SECURITY-CONTROLS.md`
 - `docs/security/25-CERTIFICATE-TRUST-PINNING.md`
 - `docs/security/26-HMAC-SIGNING-WEBHOOKS.md`
+- `docs/security/27-ZERO-DAY-INTELLIGENCE-RESPONSE.md`
 
-## Core contracts to implement
+# Core contracts
 
-### Mail contracts
+## Mail
 
 Rust types/contracts for:
 
@@ -43,24 +51,25 @@ Rust types/contracts for:
 - trace/correlation identity;
 - Postfix queue correlation.
 
-### Security contracts
+## Security findings
 
 - `SecurityFinding`;
 - finding scope: transaction/content/tenant/recipient;
-- scanner result/status;
-- scanner failure reason/resource-limit state;
+- scanner status/result;
+- explicit failure/resource-limit state;
 - normalized severity/confidence.
 
-### Policy contracts
+## Policy/configuration
 
 - policy revision;
 - effective-policy snapshot;
 - hierarchy/scope;
 - disposition;
 - stable reason code;
-- configuration freshness/staleness state.
+- freshness/staleness;
+- versioned feature/tenant override metadata.
 
-### Artifact contract
+## Artifact
 
 - artifact ID;
 - region/deployment/customer scope;
@@ -68,95 +77,125 @@ Rust types/contracts for:
 - storage reference;
 - retention class;
 - encryption/access metadata;
-- eligibility for scanner/AI access.
+- scanner/AI eligibility.
 
-Never expose raw S3 location as product identity.
+Raw S3 locations are never product identity.
 
-### Event contract
+## Event
+
+Every independently consumed event has:
 
 - event ID/type/version;
-- region/deployment/customer;
+- deployment/region/customer where applicable;
 - trace/transaction/tenant-message IDs;
 - idempotency key;
-- classification;
+- data classification;
 - safe payload/artifact reference.
 
-All independently consumed events include schema/version identity.
+## Audit
 
-### Audit contract
-
-- actor;
+- real actor;
 - impersonated subject;
 - customer;
-- permission context;
-- action/resource/result;
-- before/after redacted changes;
+- permission/action/resource/result;
+- safe before/after changes;
 - source/session/trace;
 - transactional semantics.
 
-### API compatibility contract
+## API
 
-Implement the initial Control Plane API namespace and compatibility rules from `docs/27-API-VERSIONING-FEATURE-FLAGS.md`.
+Initial Control Plane namespace:
 
-Baseline:
+- `/api/v1/...`.
 
-- `/api/v1/...` for normal Control Plane API resources;
-- stable structured error codes;
-- additive compatible changes within v1;
-- explicit major-version/coordinated migration for breaking changes;
-- API schema tests and compatibility notes.
+Implement stable structured errors, additive-compatible v1 rules, API schema/compatibility tests and explicit breaking-change migration/version rules.
 
-### Feature-switch contract
+## HMAC
 
-Implement feature switches inside the existing versioned configuration architecture rather than a new feature-flag microservice.
-
-Support metadata for:
-
-- flag ID/class;
-- System/deployment/customer scope;
-- owner;
-- default;
-- security impact;
-- expiry/removal target;
-- audit;
-- revision/distribution.
-
-Feature flags are never authorization.
-
-### HMAC contract
-
-Provide one reviewed HMAC-SHA-256 helper/contract for future Nullapart-signed webhook/event use rather than allowing each integration to invent a signature format.
-
-The helper must support:
+Provide one reviewed HMAC-SHA-256 contract/helper for applicable Nullapart-signed webhook/event use supporting:
 
 - versioned signature format;
-- raw-body based deterministic canonicalization;
-- timestamp;
-- event ID;
+- deterministic raw-body canonicalization;
+- timestamp/event ID;
 - key ID/rotation;
 - constant-time verification;
 - replay/idempotency integration.
 
-Provider-specific webhook verification remains in provider adapters.
+Provider-specific verification remains in provider adapters.
 
-## Database foundation
+# TenantContext and feature override foundation
+
+Implement `docs/29-TENANT-FEATURE-ROUTING.md` before proliferating tenant endpoints.
+
+Create a typed server-owned `TenantContext` containing at least:
+
+- deployment/region;
+- authenticated real actor;
+- impersonation context;
+- active authorized customer;
+- internal tenant/customer key;
+- effective roles/permissions;
+- authentication/step-up state;
+- configuration/feature revision;
+- trace identity.
+
+Rules:
+
+- client-provided tenant/customer IDs cannot construct/authorize context;
+- active tenant selection is validated against server-known permissions;
+- tenant switch clears/isolate tenant-sensitive caches;
+- background events/jobs carry explicit deployment/customer scope;
+- caches include deployment/customer scope;
+- RLS tenant state is transaction-scoped and pool-safe.
+
+## Feature evaluator
+
+Implement server-authoritative feature evaluation inside the versioned configuration system.
+
+Precedence:
+
+```text
+System emergency/kill disable
+  -> System mandatory security floor
+  -> deployment override
+  -> tenant override
+  -> default
+```
+
+Override model supports `INHERIT`, `ENABLED`, `DISABLED` and typed values where needed.
+
+Return internal effective-value explanation: value, winning scope, revision and higher-level suppression where applicable.
+
+Feature enabled never equals actor authorized.
+
+# Database foundation
 
 Create initial migrations/schema boundaries for:
 
 - customer/deployment identity;
 - domains;
 - transaction/tenant-message metadata;
-- policy revisions;
-- feature-switch/versioned configuration metadata;
-- admin audit;
+- policy/config revisions;
+- feature definition/override metadata;
+- Admin Audit;
 - outbox;
 - artifact metadata;
-- idempotency records where authoritative persistence is required;
+- authoritative idempotency records where required;
 - node/runtime identity.
 
 Do not over-model future features.
 
-## Rust workspace foundation
+## RLS
+
+Establish tenant-scoped RLS patterns:
+
+- normal request role does not bypass RLS;
+- transaction-scoped tenant context;
+- no tenant leakage through pooled connections;
+- privileged migration/maintenance role separated;
+- explicit reviewed cross-tenant platform query paths.
+
+# Rust workspace foundation
 
 Create:
 
@@ -165,165 +204,171 @@ Create:
 - `mail-core`;
 - `policy`;
 - `scanner-sdk`;
-- shared error/reason-code approach;
+- typed error/reason-code conventions;
 - serialization/versioning rules;
-- shared cryptographic/HMAC utility boundary where appropriate.
+- shared HMAC/crypto utility boundary where appropriate.
 
-Prefer compile-time types over loosely structured maps.
+Prefer compile-time domain types over generic JSON/maps.
 
-## Application-security foundation
+# Application-security foundation
 
-Implement reusable primitives from `docs/security/20-APPLICATION-SECURITY-CONTROLS.md` before feature endpoints proliferate.
+Implement reusable primitives from `docs/security/20-APPLICATION-SECURITY-CONTROLS.md`:
 
-Required foundations:
-
-- authenticated Principal/RequestContext carrying deployment, actor, impersonation and customer scope;
-- centralized authorization API/helper that checks action + resource ownership, not role alone;
-- tenant/customer query helpers that require explicit scoped context;
-- PostgreSQL RLS policy pattern for tenant-scoped tables;
-- transaction-scoped RLS context compatible with connection pooling;
-- normal application DB role without `BYPASSRLS`;
-- privileged migration/maintenance roles separated from request handling;
-- request validation framework with typed server validators;
-- database constraints for core invariants;
-- idempotency-key/result storage abstraction for retry-sensitive actions;
-- standard safe API error envelope with stable code + correlation ID;
+- authenticated principal/request context;
+- action + resource ownership authorization helper;
+- tenant-scoped query/repository conventions;
+- server validation framework;
+- DB constraints for invariants;
+- idempotency storage/helper;
+- safe API error envelope + correlation ID;
 - CSRF/session middleware;
 - security headers;
-- SSRF-safe outbound HTTP client/policy for future URL fetchers;
-- test helpers for wrong-user/wrong-tenant/object-owner cases.
+- SSRF-safe outbound HTTP policy/client;
+- wrong-user/wrong-tenant/wrong-owner test helpers.
 
-Browser authentication/session design must not store auth/refresh tokens in Local Storage, Session Storage or other JavaScript-readable persistent storage.
+Browser authentication/refresh credentials never use Local Storage, Session Storage or other JavaScript-readable persistent storage.
 
-## TLS / trust foundation
+# TLS / trust foundation
 
-Implement certificate trust according to `docs/security/25-CERTIFICATE-TRUST-PINNING.md`.
+Implement:
 
-Requirements:
-
-- normal PKI validation for public/browser HTTPS;
-- HSTS/CAA/renewal/monitoring strategy;
+- normal public PKI validation;
+- HSTS/CAA/renewal/monitoring;
 - no HPKP;
-- no disabled certificate verification;
-- private mTLS/workload PKI patterns where justified;
-- no leaf-certificate hardcoding without an approved pinning threat/rotation design.
+- no disabled verification;
+- private workload mTLS/PKI where justified;
+- no hardcoded leaf pin without reviewed rotation/recovery threat model.
 
-## Control/backend foundation
+# Control/backend foundation
 
-Establish a modular-monolith control backend boundary with:
+Establish a modular-monolith Control Backend with:
 
-- authentication adapter interface;
-- authorization middleware/service;
+- authentication adapter;
+- `TenantContext` resolver;
+- authorization service;
+- feature evaluator;
 - audit transaction helper;
-- database access conventions;
-- versioned `/api/v1` routing/contract boundary;
-- error model;
-- Sentry-compatible instrumentation;
-- no public customer API;
-- safe centralized error mapping;
-- ownership-scoped repository/query conventions;
-- authoritative server-side validation;
-- feature-switch evaluation helper;
-- idempotency/HMAC primitives as applicable.
+- scoped DB access conventions;
+- `/api/v1` routing/contract boundary;
+- centralized safe error mapping;
+- authoritative validation;
+- idempotency/HMAC primitives;
+- Sentry-compatible instrumentation.
 
-## Frontend implementation baseline
+No public customer API.
 
-Implement the stack and security architecture in `docs/23-FRONTEND-ARCHITECTURE.md`.
+# Frontend foundation
 
-Baseline:
+Implement `docs/23-FRONTEND-ARCHITECTURE.md` baseline:
 
 - React + TypeScript;
 - Vite;
 - TanStack Router/Query/Table;
 - React Hook Form + Zod;
 - Radix Primitives;
-- custom CSS-token/CSS-Module neumorphic design system;
+- Nullapart CSS-token/CSS-Module design system;
 - pnpm lockfile;
 - Vitest/Testing Library/Playwright;
 - Sentry-compatible browser SDK -> regional SegLumberjack.
 
-Use Node.js LTS for CI/build.
+Build application shell with:
 
-No browser Local Storage/Session Storage authentication tokens.
+- login/deployment selection;
+- active tenant selector/context;
+- navigation;
+- typography/spacing/elevation tokens;
+- accessible tables/forms/modal/drawer primitives;
+- status/severity components;
+- permission-aware routing/components;
+- feature disabled/unavailable states;
+- loading/empty/error states.
 
-Frontend feature switches affect UX only; security-sensitive capability decisions are re-evaluated by the backend.
+Route guards/feature flags are UX only; server re-evaluates authorization/feature state.
 
-## Package compatibility foundation
+No raw JSON UI.
 
-Implement `docs/26-PACKAGE-COMPATIBILITY.md`.
+# Code standards / package compatibility
 
-Phase 0 must establish:
+Implement:
 
-- pinned Node.js/toolchain/package-manager versions;
-- exact `pnpm-lock.yaml`;
-- exact `Cargo.lock`;
-- React/ReactDOM compatibility;
-- Vite/Node compatibility;
-- TypeScript/library compatibility;
-- peer-dependency checks;
-- frozen CI installs;
-- compatibility manifest;
-- grouped automated dependency upgrades;
-- reproducible ML environment approach for later phases.
+- `docs/engineering/CODE-STANDARDS.md`;
+- `docs/26-PACKAGE-COMPATIBILITY.md`;
+- `docs/security/23-PATCHING-DEPENDENCY-VERSIONS.md`.
 
-Do not bypass peer incompatibilities with force flags as the default solution.
+Establish actual pinned tooling/configuration for languages introduced:
 
-## Infrastructure/container/network baseline
+- `.editorconfig` / `.gitattributes`;
+- Rustfmt/Clippy;
+- ESLint/Prettier/TypeScript;
+- Stylelint where used;
+- Ruff/type checker if Python introduced;
+- ShellCheck/shfmt;
+- SQL/IaC format/validate tools.
 
-Establish the IaC foundation described in `docs/24-CONTAINER-LOADBALANCING-NETWORK.md`:
+Create one obvious repository validation interface such as `format`, `format-check`, `lint`, `typecheck`, `test`, `security-check`, `check-all`.
 
-- ECS baseline for normal containers;
+Establish exact lockfiles/toolchains, frozen CI installs, peer compatibility checks, compatibility manifest and automated reviewed dependency update PRs.
+
+# Infrastructure/network foundation
+
+Represent `docs/24-CONTAINER-LOADBALANCING-NETWORK.md` in IaC:
+
+- ECS ordinary container baseline;
 - dedicated mail-node exception;
-- public ALB/WAF for HTTPS Control Plane;
+- public ALB/WAF for HTTPS;
 - direct MX/Postfix baseline for SMTP;
 - deny-by-default Security Groups;
 - explicit port registry;
-- no public SSH/databases/cache/secrets/AI.
+- no public SSH/database/cache/secrets/AI.
 
-## Rate limiting foundation
+# Rate limiting foundation
 
-Create reusable application rate-limiter primitives with:
+Create reusable limiter primitives:
 
 - principal/customer/action keys;
 - Redis/Valkey distributed counters where appropriate;
-- safe fallback/failure behavior;
-- standard 429/error response;
+- safe outage/fallback behavior;
+- standard 429/error model;
 - test helpers.
 
-Do not rely only on WAF/IP limiting.
+Do not rely only on WAF/IP limits.
 
-## Dependency/patching foundation
+# Reliability instrumentation foundation
 
-Implement version policy from `docs/security/23-PATCHING-DEPENDENCY-VERSIONS.md`:
+Phase 0 does not prove production Tier-3 SLOs, but it establishes the telemetry/contracts required later.
 
-- lockfiles;
-- automated dependency update PR mechanism;
-- base-image pinning;
-- action/IaC pinning;
-- SBOM/version inventory;
-- EOL monitoring process.
+Implement conventions for:
 
-## UI foundation
+- service/capability SLI metrics;
+- success/failure event counting;
+- latency histograms;
+- queue/backlog/oldest-age metrics;
+- dependency outcome tagging;
+- deployment/release/config revision dimensions;
+- safe tenant/customer dimensions only where cardinality/privacy is acceptable;
+- alert/runbook metadata conventions.
 
-Build the actual application shell:
+Do not hardwire one vague global uptime metric.
 
-- login/deployment-selection design;
-- navigation;
-- typography/spacing/elevation tokens;
-- tables/forms/modal/drawer primitives;
-- status/severity components;
-- permission-aware route/component pattern;
-- feature-disabled/unavailable states;
-- accessibility baseline;
-- loading/empty/error states.
+Production Tier-3 SLO/burn-rate activation is Phase 9.
 
-No raw JSON inspector/editor.
+# Zero-day / inventory foundation
 
-## Test foundation
+Phase 0 establishes enough inventory/provenance to answer "are we affected?":
 
-### Application-security test baseline
+- SBOM by release;
+- exact package/base-image/action versions;
+- image/artifact digests;
+- release/deployment mapping;
+- scanner/parser version telemetry;
+- dependency update/zero-day emergency PR path;
+- kill-switch capability for risky optional features as they are introduced.
 
-Every resource endpoint test pattern must support:
+Do not wait until an incident to discover deployed component versions.
+
+# Test foundation
+
+Every resource endpoint pattern supports:
 
 - unauthenticated;
 - unauthorized role;
@@ -331,197 +376,166 @@ Every resource endpoint test pattern must support:
 - wrong owner;
 - valid owner;
 - malformed/boundary input;
-- safe error response;
+- safe errors;
 - idempotent retry where applicable;
 - RLS isolation where applicable.
 
-Establish controlled OAST test capability for later features that perform server-side DNS/HTTP/network access. OAST test infrastructure must not use customer production data.
+Add foundation tests for:
 
-Create:
+- unauthorized tenant selection;
+- spoofed client tenant header/body/query;
+- tenant switch cache isolation;
+- RLS pooled-connection leakage;
+- feature precedence/System floor;
+- expired tenant override;
+- API v1 compatibility;
+- HMAC verification/replay;
+- frontend session/no-local-storage behavior;
+- controlled OAST harness;
+- MIME/contract fuzz placeholders.
 
-- Rust unit/integration structure;
-- SMTP integration harness;
-- PostgreSQL test strategy;
-- Redis/Valkey test strategy;
-- S3-compatible test storage;
-- authorization/tenant-isolation fixtures;
-- API v1 contract/compatibility tests;
-- feature-switch server-authority tests;
-- HMAC verification/replay tests;
-- frontend component/E2E framework;
-- security regression test location;
-- fuzzing harness placeholders for MIME/contracts.
-
-## Version-control and CI/CD foundation
+# Version control and GitHub Actions — hard activation gate
 
 Implement:
 
 - `docs/security/19-VERSION-CONTROL-CICD.md`;
 - `docs/28-GITHUB-ACTIONS-ARCHITECTURE.md`.
 
-### Repository controls
+## Protected `main`
 
-Establish:
-
-- protected `main`;
-- pull-request-only normal changes;
-- required checks;
-- required reviews;
-- force-push protection;
-- CODEOWNERS once actual owners are known;
-- PR template;
-- release/tag naming;
-- GitHub environment structure.
-
-### Repository-control activation gate
-
-Before normal implementation PRs begin, activate and verify the repository controls permitted by the GitHub plan/organization:
+Before normal implementation PRs begin, an authorized GitHub repository/organization administrator must activate and verify:
 
 - protected `main`;
-- no normal direct pushes;
+- **no direct pushes**;
 - no force pushes;
-- required PR review;
-- required CI checks;
-- security-owner/CODEOWNERS review once maintainers are assigned;
-- protected release-tag/ruleset controls where available.
+- no branch deletion;
+- PR required;
+- required review;
+- required status checks;
+- stale approval/conversation controls where supported;
+- CODEOWNERS/security review once real owners are assigned.
 
-If the current GitHub plan cannot provide a desired control, record the limitation and implement the strongest available compensating process rather than silently assuming protection exists.
+There is **no documentation-only compensating-control fallback for direct pushes to `main`**.
 
-The current ChatGPT GitHub integration cannot administer these repository settings, so activation is an explicit human/organization administration task.
+If the repository cannot enforce this, normal implementation does not proceed until an enforceable mechanism is available.
 
-### Pull-request CI
+The current ChatGPT GitHub integration cannot administer/verify these settings. Follow `docs/compliance/13-BRANCH-PROTECTION-ACTIVATION-RUNBOOK.md` and record evidence.
 
-At minimum:
+## Pull-request CI
 
-- formatting/lint/typecheck;
+Implement at minimum:
+
+- format/lint/typecheck;
 - compile/build;
-- locked/frozen dependency installation;
-- unit tests;
-- relevant integration/security/UI tests;
-- API compatibility tests;
+- frozen/locked dependency installs;
+- unit + relevant integration/security/UI tests;
+- tenant/RLS/feature tests for affected paths;
+- API compatibility;
 - dependency/SCA;
 - secret scan;
 - SAST where selected;
-- SBOM generation/validation;
+- SBOM;
 - license checks;
 - migration validation;
-- IaC scan when infrastructure exists;
-- container build/scan when image definitions exist;
-- documentation/link consistency.
+- IaC/container scan where applicable;
+- docs/link consistency.
 
-Third-party Actions should be pinned to reviewed full commit SHAs where practical.
+Use minimal workflow permissions and SHA-pinned third-party Actions where practical.
 
-Workflow permissions must be explicit/minimal.
+Untrusted PRs receive no production secrets/roles.
 
-Untrusted PR workflows do not receive production secrets/roles.
-
-### Main/release build
+## Main/release/deploy
 
 Establish:
 
-- immutable artifact/image creation;
+- immutable artifact/image creation once;
 - Git SHA + semantic version metadata;
-- registry publishing;
-- SBOM/provenance association;
-- artifact signing/attestation where selected;
-- no production deployment by mutable `latest`.
+- SBOM/provenance;
+- same-digest environment promotion;
+- GitHub OIDC -> scoped AWS roles;
+- separate dev/staging/prod/region environments;
+- production human approval;
+- migration approval/rollback metadata;
+- no mutable `latest` production identity.
 
-### AWS deployment identity
+# Coding-agent foundation
 
-Prepare GitHub Actions OIDC trust with scoped AWS roles.
+Canonical instruction source:
 
-Do not introduce long-lived AWS access keys for routine deployment.
+- root `AGENTS.md`.
 
-Roles/environments must separate development/staging/production and deployment regions.
+Operating/discovery docs:
 
-### Environment promotion
+- `docs/ai/CODING-AGENT-OPERATING-MODEL.md`;
+- `docs/ai/AGENT-DISCOVERY.md`.
 
-The pipeline promotes the same immutable digest from lower environments to production. Environment configuration/secrets remain external.
+Adapters:
 
-### Migration/release controls
+- `.github/copilot-instructions.md`;
+- `CLAUDE.md`;
+- `GEMINI.md`;
+- `.cursor/rules/nullapart.mdc`.
 
-Implement:
+Codex and OpenCode use root `AGENTS.md` directly.
 
-- immutable migration files after use;
-- migration validation;
-- production migration approval;
-- release notes/changelog mechanism;
-- rollback/containment metadata.
+Verify selected coding-agent environments actually load the canonical rules using `docs/compliance/14-AGENT-DISCOVERY-VERIFICATION.md`.
 
-Detailed policy: `docs/security/19-VERSION-CONTROL-CICD.md`.
-Version contract: `docs/22-VERSIONING-RELEASE-MANAGEMENT.md`.
+Agent prose is not enforcement; CI/review/branch protection remains authoritative.
 
-## Coding-agent foundation
+# Observability foundation
 
-Repository coding agents follow:
+Standard safe context fields include:
 
-- root `AGENTS.md`;
-- `docs/ai/CODING-AGENT-OPERATING-MODEL.md`.
-
-Phase 0 should keep project instructions compact and discoverable so agents do not need to ingest the whole repository for routine tasks.
-
-Agents use the minimum relevant skill/context set and do not optimize away required security context.
-
-## Observability foundation
-
-Standard context fields:
-
-- region;
-- deployment;
-- stable node ID;
-- runtime identity/IP;
+- region/deployment;
+- node/runtime identity;
 - release;
 - trace ID;
-- transaction/tenant-message/customer ID where appropriate.
+- transaction/tenant-message/customer where appropriate and privacy/cardinality safe;
+- config revision.
 
-Configure scrubbing before SegLumberjack ingestion.
+Configure scrubbing before SegLumberjack.
 
-## AI-agent instructions
+# AI-agent implementation rules
 
-AI agents must use the contracts rather than creating parallel schemas.
+AI agents must use project contracts rather than parallel schemas.
 
-Do not:
+They must not:
 
-- create a new ID type casually;
-- replace structured contracts with generic JSON;
-- expose internal database IDs to UI;
-- introduce new network services without architecture justification;
-- bypass auth/audit because the endpoint is "internal";
-- invent an API/feature-flag/HMAC scheme locally;
-- broaden context/tool permissions just to simplify an implementation task.
+- invent tenant-routing/feature/HMAC/API schemes locally;
+- create generic JSON in place of typed contracts;
+- expose internal DB IDs as customer identity;
+- introduce network services without architecture justification;
+- bypass auth/audit/RLS because a path is internal;
+- broaden agent/tool permissions for convenience;
+- bypass protected `main`/required CI;
+- weaken reliability/security instrumentation to make tests pass.
 
-## Exit criteria
+# Exit criteria
 
-Phase 0 is complete when:
+Phase 0 is complete only when:
 
-- core Rust contracts compile and are tested;
-- database foundations/migrations exist;
-- policy/event/audit/artifact contracts are versioned;
-- API v1/event/scanner/config versioning conventions exist;
-- server-authoritative feature-switch foundation exists;
-- UI shell/design tokens exist and pass accessibility baseline;
-- authorization/audit infrastructure patterns are established;
-- repository protection has been activated/verified (or a documented compensating control exists for unavailable plan features);
-- GitHub Actions PR/main/release/deploy architecture is implemented sufficiently for safe development;
-- CI security gates run;
-- immutable build/release identity is established;
-- CI AWS access uses scoped OIDC roles rather than long-lived deployment keys;
-- observability context/scrubbing exists;
-- architecture docs and contracts match implementation;
-- frontend stack/package manager/lockfile baseline exists;
-- package compatibility manifest/gates exist;
-- rate-limiter primitives and safe failure tests exist;
-- HMAC helper/replay test foundation exists;
-- TLS trust/pinning policy is represented in implementation/config;
-- infrastructure port/firewall/container baseline is represented in IaC;
-- dependency-update and patch/version inventory process is active;
-- tenant-scoped database tables selected for RLS have policies and bypass tests;
-- browser auth does not use Local Storage/Session Storage for credentials;
-- standardized server validation/error/idempotency patterns are implemented;
-- wrong-owner/wrong-tenant security test helpers pass;
-- root coding-agent instructions/context discipline are in place.
+- protected `main` with no direct pushes is active and verified;
+- required PR/CI/review path operates;
+- agent discovery adapters exist and selected agents (including Codex/OpenCode) have been verified;
+- code formatter/linter/typecheck gates operate;
+- core Rust contracts compile/test;
+- database migrations/RLS pattern exists;
+- typed `TenantContext` + authorized tenant selection foundation exists;
+- server feature evaluator + tenant/deployment override precedence exists;
+- API/event/scanner/config version conventions exist;
+- audit/outbox/artifact/idempotency contracts exist;
+- UI shell/design/accessibility/session baseline exists;
+- package compatibility/lockfiles/update process active;
+- HMAC/TLS/rate-limit/security primitives exist;
+- immutable CI build identity + SBOM/provenance foundation exists;
+- OIDC-based AWS deployment identity exists before cloud deployment;
+- infrastructure firewall/port/container baseline represented in IaC;
+- zero-day affected-version inventory can be derived from release/SBOM metadata;
+- reliability/SLI telemetry conventions exist for later Tier-3 SLO activation;
+- wrong-user/wrong-tenant/wrong-owner/RLS/feature precedence tests pass;
+- documentation matches implementation.
 
-## Must not be built yet
+# Must not be built yet
 
 - full SMTP delivery pipeline;
 - full scanner engine set;
@@ -529,4 +543,4 @@ Phase 0 is complete when:
 - mailbox connectors;
 - customer-facing DMARC analytics.
 
-Only foundation necessary for later phases belongs here.
+Only foundations required by later phases belong here.
