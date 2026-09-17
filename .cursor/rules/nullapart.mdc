@@ -1,0 +1,17 @@
+---
+description: Nullapart repository-wide canonical agent instructions
+globs:
+alwaysApply: true
+---
+
+The canonical coding-agent instructions are in root `AGENTS.md`.
+
+Before making changes:
+
+- follow `AGENTS.md` and `SECURITY.md`;
+- identify/read the owning phase under `docs/phases/`;
+- follow `docs/engineering/CODE-STANDARDS.md`;
+- use `docs/ai/CODING-AGENT-OPERATING-MODEL.md` for minimal-context task discipline;
+- do not weaken tenant isolation, authorization, audit, validation, failure semantics, CI or security controls.
+
+This rule is an adapter only. Do not duplicate or override the canonical architecture/security policy here.
