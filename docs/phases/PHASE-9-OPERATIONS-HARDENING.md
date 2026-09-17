@@ -2,13 +2,21 @@
 
 ## Objective
 
-Turn the implemented product into a supportable, recoverable production service with controlled automation, operational evidence and production-readiness gates.
+Turn the implemented product into a supportable, recoverable production service with controlled automation, measured reliability, operational evidence and production-readiness gates.
 
 ## Prerequisites
 
 All product phases needed for the intended launch scope are complete.
 
 Not every optional feature must exist, but every enabled production capability must satisfy its phase exit criteria.
+
+## Required reading
+
+- `docs/30-RELIABILITY-SLO-ERROR-BUDGETS.md`
+- `docs/security/27-ZERO-DAY-INTELLIGENCE-RESPONSE.md`
+- `docs/security/19-VERSION-CONTROL-CICD.md`
+- `docs/29-TENANT-FEATURE-ROUTING.md`
+- `docs/compliance/README.md`
 
 ## Durable automation
 
@@ -26,27 +34,55 @@ n8n is asynchronous and non-critical to mail delivery.
 
 ## ClickUp
 
-Define event categories such as:
-
-- critical threat incident;
-- customer outage;
-- outbound outbreak;
-- remediation failure;
-- DMARC degradation;
-- scanner/system failure;
-- security configuration incident.
+Define event categories such as critical threat incident, customer outage, outbound outbreak, remediation failure, DMARC degradation, scanner/system failure and security-configuration incident.
 
 Send minimized metadata only.
 
 Use deduplication/aggregation to avoid task storms.
 
+## Tier-3 reliability implementation
+
+Classify production-critical capabilities using `docs/30-RELIABILITY-SLO-ERROR-BUDGETS.md`.
+
+For each Tier-3 capability establish:
+
+- owner;
+- SLI;
+- SLO;
+- error budget;
+- burn-rate alert rules;
+- RTO/RPO;
+- dependency/failure map;
+- redundancy/failover design;
+- capacity threshold;
+- degraded-mode behavior;
+- runbook.
+
+Tier-3 is an internal Nullapart reliability classification, not an external certification claim.
+
+## Burn-rate alerting
+
+Implement multi-window SLO alerts.
+
+Baseline:
+
+- fast page: 14.4x burn on both 1h and 5m windows;
+- sustained page: 6x burn on both 6h and 30m windows;
+- calibrated low/slow burn ticket path for long-duration budget exhaustion.
+
+Alerts include deployment, SLO, error-budget remaining, runbook and safe diagnostic links.
+
+Do not replace user-impact SLO paging with generic CPU/memory alerts.
+
 ## Operational dashboards
 
-System/Support needs:
+System/Support operations need:
 
 - regional deployment health;
-- Postfix queues;
-- scanner health/backlog;
+- Tier-3 SLO compliance;
+- error-budget remaining and burn rates;
+- Postfix queues/oldest age;
+- scanner health/backlog/UNKNOWN-ERROR rates;
 - config revision/staleness;
 - SQS/outbox/DLQ;
 - RDS/Redis/S3 health;
@@ -58,16 +94,16 @@ System/Support needs:
 
 ## Alerting
 
-Define actionable alerts with:
+Every actionable alert defines:
 
 - severity;
 - owner;
-- threshold;
+- threshold/SLO;
 - suppression/cooldown;
-- runbook link;
+- runbook;
 - escalation.
 
-Avoid alerting on every individual malicious message.
+Avoid one alert per malicious message or other task-storm patterns.
 
 ## Patching and dependency lifecycle
 
@@ -79,6 +115,21 @@ Production readiness verifies:
 - mail-node rolling patch/drain process;
 - scanner signature/ruleset freshness;
 - no unsupported/EOL critical platform without formal exception.
+
+## Zero-day readiness
+
+Before production, verify the zero-day process is operational:
+
+- intelligence sources/ownership identified;
+- SBOM/component-version correlation possible;
+- emergency System kill switches exist for risky optional/parser/tool paths where needed;
+- emergency branch/PR/release process works without direct pushes to `main`;
+- vulnerable node/workload can be drained/isolated;
+- credential/key/session rotation runbooks exist;
+- retrospective hunt data/correlation is available;
+- temporary mitigation ownership/expiry is tracked.
+
+Exercise at least one tabletop or technical scenario for a hostile-content parser or Internet-facing dependency zero-day.
 
 ## Network/firewall/load-balancer validation
 
@@ -95,7 +146,7 @@ Verify:
 
 ## Compliance evidence gate
 
-Populate/review `docs/compliance/` records for the actual production scope:
+Populate/review `docs/compliance/` records for actual production scope including:
 
 - scope/applicability;
 - control register;
@@ -103,6 +154,10 @@ Populate/review `docs/compliance/` records for the actual production scope:
 - data-processing register;
 - third parties;
 - risks/exceptions;
+- branch-protection evidence;
+- tenant-routing/feature-override evidence;
+- Tier-3/SLO evidence;
+- zero-day response evidence;
 - production-readiness evidence.
 
 Do not convert internal readiness into an unverified certification claim.
@@ -120,9 +175,9 @@ Execute:
 - node/AZ failure test;
 - mail queue recovery scenario.
 
-Measure actual RPO/RTO.
+Measure actual RPO/RTO against Tier-3 expectations.
 
-## Security exercises
+## Security/reliability exercises
 
 Before production:
 
@@ -130,6 +185,9 @@ Before production:
 - cross-tenant incident tabletop;
 - leaked key/cert rotation drill;
 - queue/scanner outage drill;
+- zero-day parser/dependency scenario;
+- one-MX/node loss/failover exercise;
+- burn-rate alert/runbook exercise;
 - regional impairment exercise appropriate to architecture;
 - external penetration test as required.
 
@@ -147,11 +205,11 @@ Benchmark:
 - UI query/report performance;
 - Deep AI separately.
 
-Establish scaling thresholds for creating additional regional deployment iteration (e.g. ZAB).
+Establish capacity/backpressure thresholds and scaling thresholds for additional regional deployment iteration such as ZAB.
 
 ## Release operations
 
-Define:
+Define and test:
 
 - release versioning;
 - changelog;
@@ -161,40 +219,49 @@ Define:
 - image provenance;
 - SBOM retention;
 - production approval;
-- emergency change procedure.
+- emergency/zero-day change procedure.
 
-## Production security gate
+No direct push to `main`, including emergency changes.
+
+## Production security/reliability gate
 
 Must verify:
 
 - Phase -1 accepted/current;
+- protected `main` active with no direct pushes;
+- required CI/reviews active;
 - MFA and break-glass controls;
-- audit functioning;
-- immutable audit checkpoint;
-- tenant isolation;
-- no Critical vulnerabilities;
+- audit functioning + immutable checkpoint;
+- tenant routing/RLS/isolation tests;
+- tenant feature override/System-floor precedence tests;
+- no unresolved Critical vulnerabilities;
 - High risk resolved or formal exception;
+- zero-day response process exercisable;
 - restore tests pass;
 - required runbooks exercised;
 - SMTP port25/PTR/DNS commissioning complete;
 - logging/alerting active;
+- Tier-3 SLO/error-budget/burn-rate alerts active;
 - data residency tested;
 - secrets/cert rotation paths tested;
 - scanner failure semantics validated;
-- customer content rendering isolation tested;
+- customer-content rendering isolation tested;
 - rate-limit failure/abuse behavior tested;
 - supported-version/patch status verified;
 - firewall/port registry verified;
-- compliance evidence records populated for launch scope.
+- compliance evidence populated for launch scope.
 
 ## AI-agent instructions
 
 AI agents working in operational hardening must not:
 
 - auto-remediate production infrastructure without an approved workflow;
-- weaken alert thresholds to make tests pass;
+- weaken SLO/burn-rate/alert thresholds to make tests pass;
+- exclude failures from SLIs without documented review;
 - silently disable failing security gates;
 - modify production secrets directly;
+- deploy emergency zero-day fixes autonomously;
+- bypass PR/branch protection;
 - treat a passing happy-path test as resilience evidence.
 
 ## Exit criteria
@@ -203,9 +270,12 @@ Phase 9 is complete for a production scope only when:
 
 - production-readiness checklist signed off;
 - operational dashboards/alerts/runbooks exist;
-- restore/security exercises have evidence;
+- Tier-3 SLO/error-budget monitoring is active;
+- burn-rate alerts have been tested;
+- restore/security/reliability exercises have evidence;
+- zero-day process has exercise/evidence;
 - capacity baseline exists;
-- release/rollback process tested;
+- release/rollback/emergency process tested;
 - security monitoring is live;
 - support operations can diagnose failures without message-content overreach.
 
@@ -213,14 +283,4 @@ Phase 9 is complete for a production scope only when:
 
 Production is not the end of the roadmap.
 
-Continuously feed:
-
-- incidents;
-- vulnerabilities;
-- false positives/negatives;
-- abuse;
-- capacity;
-- audit/control failures;
-- customer operational findings
-
-back into threat models, tests, policies, runbooks and future roadmap revisions.
+Continuously feed incidents, vulnerabilities/zero-days, SLO/error-budget burn, false positives/negatives, abuse, capacity, audit/control failures and customer operational findings back into threat models, tests, policies, runbooks and future roadmap revisions.
