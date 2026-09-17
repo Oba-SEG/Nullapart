@@ -1,0 +1,15 @@
+# CODEOWNERS
+#
+# Each contributor owns all files by default.
+# Update with specific path owners as the team grows.
+
+* obakeng-SEG
+
+# Security-critical paths require security review
+AGENTS.md obakeng-SEG
+SECURITY.md obakeng-SEG
+docs/security/ obakeng-SEG
+docs/compliance/ obakeng-SEG
+docs/phases/PHASE--1-SECURITY-GATE.md obakeng-SEG
+infrastructure/ obakeng-SEG
+.github/ obakeng-SEG

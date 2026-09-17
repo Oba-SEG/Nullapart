@@ -1,0 +1,175 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  rust:
+    name: Rust checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: rust-${{ runner.os }}-
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy lints
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Run tests
+        run: cargo test --workspace
+
+      - name: Workspace check
+        run: cargo check --workspace
+
+  frontend:
+    name: Frontend checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Format check
+        working-directory: frontend
+        run: pnpm format-check
+
+      - name: Lint
+        working-directory: frontend
+        run: pnpm lint
+
+      - name: Typecheck
+        working-directory: frontend
+        run: pnpm typecheck
+
+      - name: Unit tests
+        working-directory: frontend
+        run: pnpm test
+
+  contracts:
+    name: Contract verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: contracts-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Verify workspace compiles
+        run: cargo check --workspace
+
+      - name: Run contract tests
+        run: cargo test -p nullapart-mail-contracts
+
+  sbom:
+    name: SBOM and build provenance
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: sbom-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build workspace
+        run: cargo build --workspace --release
+
+      - name: Generate Rust SBOM (cargo-cyclonedx)
+        run: |
+          cargo install cargo-cyclonedx --locked 2>/dev/null || true
+          cargo cyclonedx --all --format json --output-dir sbom
+
+      - name: Generate source SBOM (syft)
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: sbom/source-sbom.spdx.json
+
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom/
+          retention-days: 90
+
+      - name: Generate build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: target/release/*
+
+      - name: Scan SBOM for critical vulnerabilities
+        uses: anchore/scan-action@v6
+        id: scan
+        with:
+          sbom: sbom/source-sbom.spdx.json
+          fail-build: false
+          severity-cutoff: critical
+
+      - name: Upload scan results
+        uses: actions/upload-artifact@v4
+        with:
+          name: vulnerability-scan
+          path: ${{ steps.scan.outputs.sarif }}
+          retention-days: 30
