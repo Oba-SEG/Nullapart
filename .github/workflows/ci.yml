@@ -2,17 +2,23 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches:
+      - main
   push:
     branches:
-      - "**"
+      - main
+      - "fix/**"
+      - "feature/**"
+      - "security/**"
+      - "infra/**"
+      - "docs/**"
 
 permissions:
   contents: read
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
+  RUST_BACKTRACE: "1"
 
 jobs:
   rust:
@@ -20,13 +26,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-
-      - name: Cache cargo registry and build
+      - name: Cache Cargo
         uses: actions/cache@v4
         with:
           path: |
@@ -34,18 +38,15 @@ jobs:
             ~/.cargo/git
             target
           key: rust-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: rust-${{ runner.os }}-
-
+          restore-keys: |
+            rust-${{ runner.os }}-
       - name: Check formatting
         run: cargo fmt --all -- --check
-
-      - name: Clippy lints
+      - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Run tests
+      - name: Test
         run: cargo test --workspace
-
-      - name: Workspace check
+      - name: Check
         run: cargo check --workspace
 
   frontend:
@@ -53,40 +54,32 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 11
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
-
       - name: Install dependencies
         working-directory: frontend
         run: pnpm install --frozen-lockfile
-
-      - name: Format check
+      - name: Format
         working-directory: frontend
         run: pnpm format-check
-
       - name: Lint
         working-directory: frontend
         run: pnpm lint
-
       - name: Typecheck
         working-directory: frontend
         run: pnpm typecheck
-
-      - name: Unit tests
+      - name: Test
         working-directory: frontend
         run: pnpm test
-
-      - name: Production build
+      - name: Build
         working-directory: frontend
         run: pnpm build
 
@@ -95,77 +88,51 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: contracts-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-
       - name: Verify workspace compiles
         run: cargo check --workspace
-
       - name: Run contract tests
         run: cargo test -p nullapart-mail-contracts
 
   sbom:
-    name: SBOM and build provenance
+    name: SBOM and provenance
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
+    if: ${{ github.event_name == 'push' }}
     permissions:
       contents: read
       id-token: write
       attestations: write
     steps:
       - uses: actions/checkout@v4
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: sbom-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Build workspace
+      - name: Build release workspace
         run: cargo build --workspace --release
-
-      - name: Generate Rust SBOM (cargo-cyclonedx)
+      - name: Generate Rust CycloneDX SBOMs
         run: |
           cargo install cargo-cyclonedx --locked
-          mkdir -p sbom/rust
           cargo cyclonedx --all --format json
-          find crates -type f \( -name "*.cdx.json" -o -name "bom.json" \) -exec cp {} sbom/rust/ \;
-
-      - name: Generate source SBOM (syft)
+      - name: Prepare SBOM directory
+        run: mkdir -p sbom
+      - name: Generate source SBOM
         uses: anchore/sbom-action@v0
         with:
           path: .
           format: spdx-json
           output-file: sbom/source-sbom.spdx.json
-
       - name: Upload SBOM artifacts
         uses: actions/upload-artifact@v4
         with:
           name: sbom
-          path: sbom/
+          path: |
+            sbom/
+            crates/**/*.cdx.json
           retention-days: 90
-
       - name: Generate build provenance
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: target/release/*
-
       - name: Scan SBOM for critical vulnerabilities
         uses: anchore/scan-action@v6
         id: scan
@@ -173,8 +140,8 @@ jobs:
           sbom: sbom/source-sbom.spdx.json
           fail-build: true
           severity-cutoff: critical
-
-      - name: Upload scan results
+      - name: Upload vulnerability scan
+        if: ${{ always() && steps.scan.outputs.sarif != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: vulnerability-scan
