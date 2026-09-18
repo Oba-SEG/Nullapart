@@ -221,7 +221,7 @@ impl FeatureEvaluator {
         ];
 
         for scope in &ordered_scopes {
-            let filtered: Vec<&FeatureOverride> = overrides
+            let mut filtered: Vec<&FeatureOverride> = overrides
                 .iter()
                 .filter(|o| {
                     o.feature_id == *feature_id
@@ -236,7 +236,14 @@ impl FeatureEvaluator {
                 })
                 .collect();
 
-            // Find first non-Inherit value
+            // Evaluation must not depend on database/query ordering. Newest
+            // revision wins within a scope; created_at is a deterministic tie-breaker.
+            filtered.sort_by(|a, b| {
+                b.revision
+                    .cmp(&a.revision)
+                    .then_with(|| b.created_at.cmp(&a.created_at))
+            });
+
             if let Some(winning) = filtered.iter().find(|o| !o.value.is_inherit()) {
                 let explanation = format!(
                     "Feature {} resolved at {:?} scope (override rev {})",
@@ -444,6 +451,45 @@ mod tests {
         assert!(result.value.is_disabled());
         assert_eq!(result.winning_scope, OverrideScope::Deployment);
         assert!(result.suppressed);
+    }
+
+    #[test]
+    fn newest_revision_wins_within_scope() {
+        let ev = evaluator();
+        let dep = DeploymentId("CZA-1".to_string());
+        let cust = CustomerId("cust-001".to_string());
+        let now = Utc::now();
+
+        let overrides = vec![
+            FeatureOverride {
+                feature_id: FeatureId::new("deep_ai"),
+                scope: OverrideScope::Tenant,
+                scope_id: "cust-001".to_string(),
+                value: FeatureValue::Enabled,
+                owner: "customer".to_string(),
+                reason: "older".to_string(),
+                revision: 1,
+                created_at: now - chrono::Duration::minutes(1),
+                expires_at: None,
+            },
+            FeatureOverride {
+                feature_id: FeatureId::new("deep_ai"),
+                scope: OverrideScope::Tenant,
+                scope_id: "cust-001".to_string(),
+                value: FeatureValue::Disabled,
+                owner: "customer".to_string(),
+                reason: "newer".to_string(),
+                revision: 2,
+                created_at: now,
+                expires_at: None,
+            },
+        ];
+
+        let result = ev
+            .evaluate(&FeatureId::new("deep_ai"), &dep, &cust, &overrides, now)
+            .unwrap();
+        assert!(result.value.is_disabled());
+        assert_eq!(result.winning_override.unwrap().revision, 2);
     }
 
     #[test]
