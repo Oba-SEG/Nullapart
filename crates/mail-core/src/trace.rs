@@ -12,6 +12,8 @@ use axum::response::Response;
 use axum::routing::{get, post};
 use axum::Router;
 use chrono::{DateTime, Utc};
+use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 use serde::{Deserialize, Serialize};
 
 use nullapart_mail_contracts::transaction::{DeliveryStatus, Disposition, MailDirection, TraceId};
@@ -23,6 +25,15 @@ pub struct TraceConfig {
     pub node_id: String,
     pub node_version: String,
     pub config_revision: Option<String>,
+    /// SHA-256 digest of the per-deployment workload bearer token.
+    /// Missing configuration fails closed for all non-health endpoints.
+    pub workload_token_sha256: Option<[u8; 32]>,
+}
+
+impl TraceConfig {
+    pub fn set_workload_token(&mut self, token: &str) {
+        self.workload_token_sha256 = Some(Sha256::digest(token.as_bytes()).into());
+    }
 }
 
 /// Search request for tracing mail.
@@ -235,6 +246,7 @@ pub fn trace_router(config: TraceConfig) -> Router {
         .route("/api/v1/trace/search", post(handle_trace_search))
         .route("/api/v1/trace/transaction/:id", get(handle_get_transaction))
         .route("/api/v1/trace/health", get(handle_health_check))
+        .layer(axum::Extension(config.clone()))
         .layer(middleware::from_fn(require_workload_auth))
         .with_state(config)
 }
@@ -247,24 +259,33 @@ async fn require_workload_auth(request: Request<Body>, next: Next) -> Result<Res
         return Ok(next.run(request).await);
     }
 
-    // Check for Authorization header with workload token
+    let expected = request
+        .extensions()
+        .get::<TraceConfig>()
+        .and_then(|cfg| cfg.workload_token_sha256);
+
+    let Some(expected) = expected else {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    };
+
     let auth_header = request
         .headers()
         .get("authorization")
         .and_then(|v| v.to_str().ok());
 
-    match auth_header {
-        Some(token) if token.starts_with("Bearer ") => {
-            let token = &token[7..];
-            // Phase 1: validate token format (non-empty)
-            // Real implementation: validate against workload identity store
-            if token.is_empty() {
-                return Err(StatusCode::UNAUTHORIZED);
-            }
-            Ok(next.run(request).await)
-        },
-        _ => Err(StatusCode::UNAUTHORIZED),
+    let Some(token) = auth_header.and_then(|value| value.strip_prefix("Bearer ")) else {
+        return Err(StatusCode::UNAUTHORIZED);
+    };
+    if token.is_empty() || token.len() > 4096 {
+        return Err(StatusCode::UNAUTHORIZED);
     }
+
+    let actual: [u8; 32] = Sha256::digest(token.as_bytes()).into();
+    if expected.ct_eq(&actual).unwrap_u8() != 1 {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    Ok(next.run(request).await)
 }
 
 /// Validate transaction ID format: TX-<uuid> or alphanumeric with hyphens.
