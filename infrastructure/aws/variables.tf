@@ -40,3 +40,8 @@ variable "postfix_config" {
   type        = map(string)
   default     = {}
 }
+variable "redis_auth_token" {
+  description = "Redis AUTH token loaded from the approved secret store at deployment time"
+  type        = string
+  sensitive   = true
+}
