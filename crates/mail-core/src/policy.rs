@@ -60,7 +60,7 @@ pub struct PolicyRuleEvaluator;
 
 impl PolicyRuleEvaluator {
     /// Evaluate a set of policy rules against an evaluation request.
-    /// Returns the first matching rule's action (by priority), or Allow if none match.
+    /// Returns the first matching rule's action (by priority). If no rule matches, fail safe to Hold.
     pub fn evaluate(
         rules: &[nullapart_mail_contracts::policy::PolicyRule],
         request: &PolicyEvaluationRequest,
@@ -83,12 +83,12 @@ impl PolicyRuleEvaluator {
             }
         }
 
-        // No rule matched — default allow
+        // No rule matched: an absent/incomplete policy must not become an implicit allow.
         PolicyEvaluationResult {
-            disposition: Disposition::Allow,
-            reason_code: ReasonCode::allowed(),
+            disposition: Disposition::Hold,
+            reason_code: ReasonCode::hold_pending(),
             policy_revision: request.policy_revision.clone(),
-            explanation: "No policy rule matched".to_string(),
+            explanation: "No explicit policy rule matched; held for safe fallback".to_string(),
             findings_applied: Vec::new(),
             evaluated_at: request.evaluated_at,
         }
@@ -106,11 +106,24 @@ impl PolicyRuleEvaluator {
             }
         }
 
+        // Check recipient conditions against this tenant-scoped recipient set.
+        if let Some(ref recipient_cond) = condition.recipient {
+            if !Self::matches_recipient(recipient_cond, &request.recipients) {
+                return false;
+            }
+        }
+
         // Check auth conditions
         if let Some(ref auth_cond) = condition.auth {
             if !Self::matches_auth(auth_cond, request) {
                 return false;
             }
+        }
+
+        // Content predicates are not yet represented in PolicyEvaluationRequest.
+        // Never treat an unevaluated predicate as matched.
+        if condition.content.is_some() {
+            return false;
         }
 
         // Check finding conditions
@@ -149,18 +162,46 @@ impl PolicyRuleEvaluator {
             }
         }
 
-        // Check internal
-        if let Some(_internal) = cond.internal {
-            // Internal flag is determined by the caller (not in envelope sender)
-            // This would require additional context — return true for now
-        }
-
-        // Check authenticated
-        if let Some(_authenticated) = cond.authenticated {
-            // Authenticated flag is determined by the caller
+        // These predicates require trusted connection/source context that is not
+        // present in this request yet. Fail closed instead of silently matching.
+        if cond.internal.is_some() || cond.authenticated.is_some() {
+            return false;
         }
 
         true
+    }
+
+    fn matches_recipient(
+        cond: &nullapart_mail_contracts::policy::RecipientCondition,
+        recipients: &[Recipient],
+    ) -> bool {
+        if recipients.is_empty() {
+            return false;
+        }
+
+        // "internal" requires authoritative domain/customer context that is not
+        // represented here yet, so an internal predicate cannot match safely.
+        if cond.internal.is_some() {
+            return false;
+        }
+
+        recipients.iter().any(|recipient| {
+            let address = recipient.address.to_lowercase();
+            let domain = address.rsplit('@').next().unwrap_or("");
+
+            let domain_ok = cond
+                .domain
+                .as_ref()
+                .map(|domains| domains.iter().any(|d| d.eq_ignore_ascii_case(domain)))
+                .unwrap_or(true);
+            let address_ok = cond
+                .address
+                .as_ref()
+                .map(|addresses| addresses.iter().any(|a| a.eq_ignore_ascii_case(&address)))
+                .unwrap_or(true);
+
+            domain_ok && address_ok
+        })
     }
 
     /// Match auth condition against SPF/DKIM/DMARC results.
@@ -348,10 +389,10 @@ mod tests {
     }
 
     #[test]
-    fn no_rules_matches_default_allow() {
+    fn no_rules_fail_safe_to_hold() {
         let result = PolicyRuleEvaluator::evaluate(&[], &test_request());
-        assert_eq!(result.disposition, Disposition::Allow);
-        assert_eq!(result.reason_code, ReasonCode::allowed());
+        assert_eq!(result.disposition, Disposition::Hold);
+        assert_eq!(result.reason_code, ReasonCode::hold_pending());
     }
 
     #[test]
@@ -414,7 +455,7 @@ mod tests {
         };
 
         let result = PolicyRuleEvaluator::evaluate(&[rule], &test_request_clean());
-        assert_eq!(result.disposition, Disposition::Allow);
+        assert_eq!(result.disposition, Disposition::Hold);
     }
 
     #[test]
@@ -445,7 +486,7 @@ mod tests {
         };
 
         let result = PolicyRuleEvaluator::evaluate(&[rule], &test_request());
-        assert_eq!(result.disposition, Disposition::Allow);
+        assert_eq!(result.disposition, Disposition::Hold);
     }
 
     #[test]
