@@ -25,7 +25,8 @@ smtpd_relay_restrictions =
 # ==============================================================================
 # Phase 1: static lookup. Later: policyd-weight / custom SQL.
 local_recipient_maps =
-relay_domains =
+relay_domains = hash:/etc/postfix/relay_domains
+relay_recipient_maps = hash:/etc/postfix/relay_recipients
 transport_maps =
 
 # ==============================================================================
@@ -101,7 +102,7 @@ smtp_tls_ciphers = high
 # ==============================================================================
 # Milter configuration (Rspamd)
 # ==============================================================================
-milter_default_action = accept
+milter_default_action = tempfail
 milter_protocol = 6
 smtpd_milters = inet:localhost:11332
 non_smtpd_milters = inet:localhost:11332
