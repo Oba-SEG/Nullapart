@@ -4,6 +4,8 @@
 //! HTTP method and path are covered by the canonical Nullapart HMAC contract.
 
 use axum::body::Bytes;
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
@@ -133,24 +135,30 @@ pub fn process_handoff(
     config: &HandoffConfig,
     request: &AfterQueueHandoffRequest,
 ) -> Result<AfterQueueHandoffResponse, HandoffError> {
-    if request.envelope_sender.is_empty() {
+    // The SMTP null reverse-path ("<>") is valid and must be preserved for DSNs.
+    // Reject only obviously unsafe/unbounded sender representations.
+    if request.envelope_sender.address().len() > 320
+        || request.envelope_sender.address().contains(['\r', '\n'])
+    {
         return Err(HandoffError::InvalidSender);
     }
     if request.recipients.is_empty() {
         return Err(HandoffError::NoRecipients);
     }
 
-    let decoded_size = (request.message_content.len() * 3) / 4;
-    if decoded_size as u64 > config.max_message_size {
+    let decoded = STANDARD
+        .decode(request.message_content.as_bytes())
+        .map_err(|_| HandoffError::MalformedRequest)?;
+    if decoded.len() as u64 > config.max_message_size {
         return Err(HandoffError::MessageTooLarge(
-            decoded_size as u64,
+            decoded.len() as u64,
             config.max_message_size,
         ));
     }
 
-    let calculated_hash = hex::encode(Sha256::digest(request.message_content.as_bytes()));
-    if request.content_hash.len() == 64
-        && !request.content_hash.eq_ignore_ascii_case(&calculated_hash)
+    let calculated_hash = hex::encode(Sha256::digest(&decoded));
+    if request.content_hash.len() != 64
+        || !request.content_hash.eq_ignore_ascii_case(&calculated_hash)
     {
         return Err(HandoffError::InvalidContentHash);
     }
@@ -273,7 +281,7 @@ mod tests {
                 latency_ms: 15,
             },
             message_content: "SGVsbG8gV29ybGQ=".to_string(),
-            content_hash: "abc123".to_string(),
+            content_hash: hex::encode(Sha256::digest(b"Hello World")),
             trace_id: None,
             handoff_at: Utc::now(),
         }
@@ -292,7 +300,11 @@ mod tests {
     fn empty_sender_and_recipient_set_are_rejected() {
         let config = HandoffConfig::default();
         let mut request = test_handoff_request();
-        request.envelope_sender = EnvelopeSender::new("");
+        request.envelope_sender = EnvelopeSender::new("<>");
+        assert!(process_handoff(&config, &request).is_ok());
+
+        let mut request = test_handoff_request();
+        request.envelope_sender = EnvelopeSender::new("bad\r\nsender");
         assert!(matches!(
             process_handoff(&config, &request),
             Err(HandoffError::InvalidSender)
