@@ -98,12 +98,11 @@ pub enum ScannerType {
 #[serde(rename_all = "lowercase")]
 pub enum ScannerStatus {
     Clean,
+    Threat,
     Suspicious,
-    Infected,
+    Unknown,
     Error,
-    Timeout,
-    Skipped,
-    Unavailable,
+    NotApplicable,
 }
 
 /// Finding severity
