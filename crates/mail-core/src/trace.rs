@@ -4,8 +4,11 @@
 //! Follows: docs/phases/PHASE-1-EXECUTION-PLAN.md Work Package 10
 //! Support cannot access body/raw MIME/attachments. No raw JSON UI.
 
+use axum::body::Body;
 use axum::extract::{Json, Path, State};
-use axum::http::StatusCode;
+use axum::http::{Request, StatusCode};
+use axum::middleware::{self, Next};
+use axum::response::Response;
 use axum::routing::{get, post};
 use axum::Router;
 use chrono::{DateTime, Utc};
@@ -226,13 +229,69 @@ pub fn get_transaction_detail(
     }
 }
 
-/// Build the Axum router for the trace API.
+/// Build the Axum router for the trace API with auth middleware.
 pub fn trace_router(config: TraceConfig) -> Router {
     Router::new()
         .route("/api/v1/trace/search", post(handle_trace_search))
         .route("/api/v1/trace/transaction/:id", get(handle_get_transaction))
         .route("/api/v1/trace/health", get(handle_health_check))
+        .layer(middleware::from_fn(require_workload_auth))
         .with_state(config)
+}
+
+/// Middleware: require workload authentication for trace endpoints.
+/// The health endpoint is exempted (it returns only basic node info).
+async fn require_workload_auth(request: Request<Body>, next: Next) -> Result<Response, StatusCode> {
+    // Health check is exempt from auth
+    if request.uri().path() == "/api/v1/trace/health" {
+        return Ok(next.run(request).await);
+    }
+
+    // Check for Authorization header with workload token
+    let auth_header = request
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok());
+
+    match auth_header {
+        Some(token) if token.starts_with("Bearer ") => {
+            let token = &token[7..];
+            // Phase 1: validate token format (non-empty)
+            // Real implementation: validate against workload identity store
+            if token.is_empty() {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+            Ok(next.run(request).await)
+        },
+        _ => Err(StatusCode::UNAUTHORIZED),
+    }
+}
+
+/// Validate transaction ID format: TX-<uuid> or alphanumeric with hyphens.
+fn validate_transaction_id(id: &str) -> Result<String, (StatusCode, String)> {
+    if id.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "transaction ID cannot be empty".to_string(),
+        ));
+    }
+    if id.len() > 128 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "transaction ID too long".to_string(),
+        ));
+    }
+    // Allow TX-<uuid> format or alphanumeric with hyphens/underscores
+    if !id
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "transaction ID contains invalid characters".to_string(),
+        ));
+    }
+    Ok(id.to_string())
 }
 
 async fn handle_trace_search(
@@ -255,7 +314,8 @@ async fn handle_get_transaction(
     State(config): State<TraceConfig>,
     Path(transaction_id): Path<String>,
 ) -> Result<(StatusCode, Json<TraceTransactionDetail>), (StatusCode, String)> {
-    let detail = get_transaction_detail(&transaction_id, &config.node_id, &config.node_version);
+    let validated_id = validate_transaction_id(&transaction_id)?;
+    let detail = get_transaction_detail(&validated_id, &config.node_id, &config.node_version);
     Ok((StatusCode::OK, Json(detail)))
 }
 

@@ -50,7 +50,7 @@ fn unauthorized_outbound_source_rejected() {
     }];
 
     // No domain mappings → all recipients unmapped → no valid tenants
-    let result = resolver.partition_recipients(&recipients);
+    let result = resolver.partition_recipients(&TransactionId::new(), &recipients);
     let partition = result.unwrap();
     assert!(
         !partition.unmapped_recipients.is_empty(),
@@ -285,7 +285,9 @@ fn multi_tenant_transaction_partitioned_correctly() {
         },
     ];
 
-    let result = resolver.partition_recipients(&recipients).unwrap();
+    let result = resolver
+        .partition_recipients(&TransactionId::new(), &recipients)
+        .unwrap();
     assert_eq!(
         result.instances.len(),
         2,

@@ -30,7 +30,7 @@ impl std::fmt::Display for ApiVersion {
 
 /// Standard API error response envelope.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApiError {
+pub struct ApiErrorEnvelope {
     /// Machine-readable error code.
     pub error: String,
     /// Human-readable message.

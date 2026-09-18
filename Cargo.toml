@@ -43,7 +43,6 @@ hmac = "0.12"
 
 # Validation
 validator = { version = "0.18", features = ["derive"] }
-zod = "0.13"
 
 [profile.release]
 opt-level = 3

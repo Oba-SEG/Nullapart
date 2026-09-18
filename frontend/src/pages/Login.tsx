@@ -21,8 +21,8 @@ export function Login() {
   });
 
   const onSubmit = async (data: LoginForm) => {
-    // TODO: Implement actual authentication
-    console.log("Login attempt:", data);
+    // TODO: Implement BFF OIDC authorization-code flow per docs/23-FRONTEND-ARCHITECTURE.md
+    // Never log credentials
   };
 
   return (

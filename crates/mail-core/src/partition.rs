@@ -206,9 +206,9 @@ impl TenantResolver {
     /// Partition a list of recipients into tenant groups.
     pub fn partition_recipients(
         &self,
+        transaction_id: &TransactionId,
         recipients: &[Recipient],
     ) -> Result<PartitionResult, PartitionError> {
-        let transaction_id = TransactionId::new();
         let mappings: Vec<RecipientMapping> = recipients
             .iter()
             .map(|r| self.resolve_recipient(r))
@@ -263,7 +263,7 @@ impl TenantResolver {
             .collect();
 
         Ok(PartitionResult {
-            transaction_id,
+            transaction_id: transaction_id.clone(),
             instances,
             unmapped_recipients: unmapped,
             partitioned_at: Utc::now(),
@@ -363,7 +363,9 @@ mod tests {
                 notify: None,
             },
         ];
-        let result = resolver.partition_recipients(&recipients).unwrap();
+        let result = resolver
+            .partition_recipients(&TransactionId::new(), &recipients)
+            .unwrap();
         assert_eq!(result.instances.len(), 2);
         assert!(result.unmapped_recipients.is_empty());
 
@@ -398,7 +400,9 @@ mod tests {
             orcpt: None,
             notify: None,
         }];
-        assert!(resolver.partition_recipients(&recipients).is_err());
+        assert!(resolver
+            .partition_recipients(&TransactionId::new(), &recipients)
+            .is_err());
     }
 
     #[test]
@@ -426,6 +430,8 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert!(resolver.partition_recipients(&recipients).is_err());
+        assert!(resolver
+            .partition_recipients(&TransactionId::new(), &recipients)
+            .is_err());
     }
 }
