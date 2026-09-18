@@ -1,59 +1,58 @@
 //! HMAC-SHA-256 signing and verification primitives.
 //!
 //! Implements `docs/security/26-HMAC-SIGNING-WEBHOOKS.md`.
-//! One reviewed HMAC contract for Nullapart-signed webhook/event use.
+//! All Nullapart-owned HTTP HMAC boundaries use the same canonical form.
 
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine as _;
 use hmac::{Hmac, Mac};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// Signature version for format evolution.
 pub const SIGNATURE_VERSION: u32 = 1;
 
-/// HMAC signature result.
+/// Signature header wire format:
+/// `v1,<key_id>,<unix_timestamp>,<lowercase_hex_signature>`.
 #[derive(Debug, Clone)]
 pub struct HmacSignature {
-    /// Base64-encoded signature bytes.
     pub signature: String,
-    /// Key ID used for signing (for key rotation).
     pub key_id: String,
-    /// Signature format version.
     pub version: u32,
-    /// Unix timestamp of signing.
     pub timestamp: u64,
 }
 
 impl HmacSignature {
-    /// Parse a signature header value in the format:
-    /// `v1,key_id,timestamp,base64_signature`
     pub fn parse(header: &str) -> Result<Self, HmacError> {
         let parts: Vec<&str> = header.splitn(4, ',').collect();
         if parts.len() != 4 {
             return Err(HmacError::InvalidFormat);
         }
 
-        let version: u32 = parts[0]
+        let version = parts[0]
             .strip_prefix('v')
-            .and_then(|v| v.parse().ok())
+            .and_then(|v| v.parse::<u32>().ok())
             .ok_or(HmacError::InvalidVersion)?;
 
-        let key_id = parts[1].to_string();
-        let timestamp: u64 = parts[2].parse().map_err(|_| HmacError::InvalidTimestamp)?;
-        let signature = parts[3].to_string();
+        if parts[1].is_empty() || parts[1].len() > 128 {
+            return Err(HmacError::InvalidKeyId);
+        }
+
+        let timestamp = parts[2]
+            .parse::<u64>()
+            .map_err(|_| HmacError::InvalidTimestamp)?;
+
+        if parts[3].len() != 64 || !parts[3].bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(HmacError::InvalidSignatureEncoding);
+        }
 
         Ok(Self {
-            signature,
-            key_id,
+            signature: parts[3].to_ascii_lowercase(),
+            key_id: parts[1].to_string(),
             version,
             timestamp,
         })
     }
 
-    /// Format as header value string.
     pub fn to_header(&self) -> String {
         format!(
             "v{},{},{},{}",
@@ -62,45 +61,170 @@ impl HmacSignature {
     }
 }
 
-/// Sign a raw body with HMAC-SHA-256.
-///
-/// - `body`: raw bytes to sign (canonical form)
-/// - `key`: signing key
-/// - `key_id`: identifier for the key used
-/// - `event_id`: event ID for replay protection context
-pub fn sign(
+/// Build the canonical signed input documented by the security contract.
+fn canonical_input(
+    version: u32,
+    timestamp: u64,
+    event_id: &str,
+    method: &str,
+    normalized_path: &str,
+    body: &[u8],
+) -> Result<Vec<u8>, HmacError> {
+    validate_event_id(event_id)?;
+    validate_http_component(method)?;
+    validate_path(normalized_path)?;
+
+    let body_hash = hex::encode(Sha256::digest(body));
+    Ok(format!(
+        "v{}\n{}\n{}\n{}\n{}\n{}",
+        version,
+        timestamp,
+        event_id,
+        method.to_ascii_uppercase(),
+        normalized_path,
+        body_hash
+    )
+    .into_bytes())
+}
+
+fn validate_event_id(event_id: &str) -> Result<(), HmacError> {
+    if event_id.is_empty()
+        || event_id.len() > 160
+        || !event_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':'))
+    {
+        return Err(HmacError::InvalidEventId);
+    }
+    Ok(())
+}
+
+fn validate_http_component(method: &str) -> Result<(), HmacError> {
+    if method.is_empty()
+        || method.len() > 16
+        || !method.bytes().all(|b| b.is_ascii_alphabetic())
+    {
+        return Err(HmacError::InvalidHttpContext);
+    }
+    Ok(())
+}
+
+fn validate_path(path: &str) -> Result<(), HmacError> {
+    if !path.starts_with('/') || path.len() > 2048 || path.contains('\n') || path.contains('\r') {
+        return Err(HmacError::InvalidHttpContext);
+    }
+    Ok(())
+}
+
+pub fn sign_http(
     body: &[u8],
     key: &[u8],
     key_id: &str,
     event_id: &str,
+    method: &str,
+    normalized_path: &str,
 ) -> Result<HmacSignature, HmacError> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| HmacError::TimestampError)?
         .as_secs();
+    sign_http_at(
+        body,
+        key,
+        key_id,
+        event_id,
+        method,
+        normalized_path,
+        timestamp,
+    )
+}
 
-    let payload = format!("{}.{}.{}", SIGNATURE_VERSION, timestamp, event_id);
+fn sign_http_at(
+    body: &[u8],
+    key: &[u8],
+    key_id: &str,
+    event_id: &str,
+    method: &str,
+    normalized_path: &str,
+    timestamp: u64,
+) -> Result<HmacSignature, HmacError> {
+    if key_id.is_empty() || key_id.len() > 128 {
+        return Err(HmacError::InvalidKeyId);
+    }
 
+    let canonical = canonical_input(
+        SIGNATURE_VERSION,
+        timestamp,
+        event_id,
+        method,
+        normalized_path,
+        body,
+    )?;
     let mut mac = HmacSha256::new_from_slice(key).map_err(|_| HmacError::InvalidKey)?;
-    mac.update(payload.as_bytes());
-    mac.update(body);
-    let result = mac.finalize();
+    mac.update(&canonical);
 
     Ok(HmacSignature {
-        signature: STANDARD.encode(result.into_bytes()),
+        signature: hex::encode(mac.finalize().into_bytes()),
         key_id: key_id.to_string(),
         version: SIGNATURE_VERSION,
         timestamp,
     })
 }
 
-/// Verify an HMAC-SHA-256 signature.
-///
-/// - `body`: raw bytes that were signed
-/// - `key`: signing key
-/// - `signature`: parsed signature to verify
-/// - `event_id`: event ID for replay protection context
-/// - `max_age_secs`: maximum age of signature (replay protection window)
+pub fn verify_http(
+    body: &[u8],
+    key: &[u8],
+    signature: &HmacSignature,
+    event_id: &str,
+    method: &str,
+    normalized_path: &str,
+    max_age_secs: u64,
+    max_future_skew_secs: u64,
+) -> Result<(), HmacError> {
+    if signature.version != SIGNATURE_VERSION {
+        return Err(HmacError::InvalidVersion);
+    }
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| HmacError::TimestampError)?
+        .as_secs();
+
+    if signature.timestamp > now.saturating_add(max_future_skew_secs) {
+        return Err(HmacError::SignatureFromFuture);
+    }
+    if now.saturating_sub(signature.timestamp) > max_age_secs {
+        return Err(HmacError::SignatureExpired);
+    }
+
+    let sig_bytes =
+        hex::decode(&signature.signature).map_err(|_| HmacError::InvalidSignatureEncoding)?;
+    let canonical = canonical_input(
+        signature.version,
+        signature.timestamp,
+        event_id,
+        method,
+        normalized_path,
+        body,
+    )?;
+
+    let mut mac = HmacSha256::new_from_slice(key).map_err(|_| HmacError::InvalidKey)?;
+    mac.update(&canonical);
+    mac.verify_slice(&sig_bytes)
+        .map_err(|_| HmacError::VerificationFailed)
+}
+
+/// Compatibility wrappers for non-HTTP event signing. New HTTP integrations must
+/// use `sign_http` / `verify_http`.
+pub fn sign(
+    body: &[u8],
+    key: &[u8],
+    key_id: &str,
+    event_id: &str,
+) -> Result<HmacSignature, HmacError> {
+    sign_http(body, key, key_id, event_id, "EVENT", "/event")
+}
+
 pub fn verify(
     body: &[u8],
     key: &[u8],
@@ -108,59 +232,42 @@ pub fn verify(
     event_id: &str,
     max_age_secs: u64,
 ) -> Result<(), HmacError> {
-    if signature.version != SIGNATURE_VERSION {
-        return Err(HmacError::InvalidVersion);
-    }
-
-    // Replay protection: reject old signatures
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| HmacError::TimestampError)?
-        .as_secs();
-
-    if now.saturating_sub(signature.timestamp) > max_age_secs {
-        return Err(HmacError::SignatureExpired);
-    }
-
-    let sig_bytes = STANDARD
-        .decode(&signature.signature)
-        .map_err(|_| HmacError::InvalidSignatureEncoding)?;
-
-    let payload = format!("{}.{}.{}", signature.version, signature.timestamp, event_id);
-
-    let mut mac = HmacSha256::new_from_slice(key).map_err(|_| HmacError::InvalidKey)?;
-    mac.update(payload.as_bytes());
-    mac.update(body);
-
-    // Constant-time verification
-    mac.verify_slice(&sig_bytes)
-        .map_err(|_| HmacError::VerificationFailed)
+    verify_http(
+        body,
+        key,
+        signature,
+        event_id,
+        "EVENT",
+        "/event",
+        max_age_secs,
+        30,
+    )
 }
 
-/// HMAC operation errors.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum HmacError {
     #[error("invalid signature format")]
     InvalidFormat,
-
     #[error("invalid signature version")]
     InvalidVersion,
-
+    #[error("invalid key id")]
+    InvalidKeyId,
+    #[error("invalid event id")]
+    InvalidEventId,
+    #[error("invalid HTTP signing context")]
+    InvalidHttpContext,
     #[error("invalid timestamp")]
     InvalidTimestamp,
-
     #[error("invalid HMAC key")]
     InvalidKey,
-
-    #[error("signature expired (older than max_age)")]
+    #[error("signature expired")]
     SignatureExpired,
-
+    #[error("signature timestamp is too far in the future")]
+    SignatureFromFuture,
     #[error("signature verification failed")]
     VerificationFailed,
-
-    #[error("invalid base64 signature encoding")]
+    #[error("invalid signature encoding")]
     InvalidSignatureEncoding,
-
     #[error("timestamp error")]
     TimestampError,
 }
@@ -175,55 +282,123 @@ mod tests {
     #[test]
     fn sign_and_verify_roundtrip() {
         let body = b"test body content";
-        let sig = sign(body, TEST_KEY, "key-1", TEST_EVENT_ID).unwrap();
-        let header = sig.to_header();
-        let parsed = HmacSignature::parse(&header).unwrap();
-
-        assert!(verify(body, TEST_KEY, &parsed, TEST_EVENT_ID, 300).is_ok());
+        let sig = sign_http(body, TEST_KEY, "key-1", TEST_EVENT_ID, "POST", "/hook").unwrap();
+        let parsed = HmacSignature::parse(&sig.to_header()).unwrap();
+        assert!(verify_http(
+            body,
+            TEST_KEY,
+            &parsed,
+            TEST_EVENT_ID,
+            "POST",
+            "/hook",
+            300,
+            30
+        )
+        .is_ok());
     }
 
     #[test]
-    fn verify_rejects_wrong_key() {
+    fn modified_method_or_path_is_rejected() {
         let body = b"test body content";
-        let sig = sign(body, TEST_KEY, "key-1", TEST_EVENT_ID).unwrap();
-        let header = sig.to_header();
-        let parsed = HmacSignature::parse(&header).unwrap();
-
-        let wrong_key = b"wrong-key";
-        assert!(verify(body, wrong_key, &parsed, TEST_EVENT_ID, 300).is_err());
+        let sig = sign_http(body, TEST_KEY, "key-1", TEST_EVENT_ID, "POST", "/hook").unwrap();
+        assert!(verify_http(
+            body,
+            TEST_KEY,
+            &sig,
+            TEST_EVENT_ID,
+            "GET",
+            "/hook",
+            300,
+            30
+        )
+        .is_err());
+        assert!(verify_http(
+            body,
+            TEST_KEY,
+            &sig,
+            TEST_EVENT_ID,
+            "POST",
+            "/other",
+            300,
+            30
+        )
+        .is_err());
     }
 
     #[test]
-    fn verify_rejects_wrong_body() {
+    fn wrong_key_or_body_is_rejected() {
         let body = b"test body content";
-        let sig = sign(body, TEST_KEY, "key-1", TEST_EVENT_ID).unwrap();
-        let header = sig.to_header();
-        let parsed = HmacSignature::parse(&header).unwrap();
-
-        let wrong_body = b"different body content";
-        assert!(verify(wrong_body, TEST_KEY, &parsed, TEST_EVENT_ID, 300).is_err());
+        let sig = sign_http(body, TEST_KEY, "key-1", TEST_EVENT_ID, "POST", "/hook").unwrap();
+        assert!(verify_http(
+            body,
+            b"wrong-key",
+            &sig,
+            TEST_EVENT_ID,
+            "POST",
+            "/hook",
+            300,
+            30
+        )
+        .is_err());
+        assert!(verify_http(
+            b"changed",
+            TEST_KEY,
+            &sig,
+            TEST_EVENT_ID,
+            "POST",
+            "/hook",
+            300,
+            30
+        )
+        .is_err());
     }
 
     #[test]
-    fn verify_rejects_expired_signature() {
-        let body = b"test body content";
-        let sig = sign(body, TEST_KEY, "key-1", TEST_EVENT_ID).unwrap();
+    fn expired_and_future_signatures_are_rejected() {
+        let body = b"test";
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
-        // Manually create an expired signature
-        let expired = HmacSignature {
-            timestamp: sig.timestamp - 600,
-            ..sig
-        };
-        let header = expired.to_header();
-        let parsed = HmacSignature::parse(&header).unwrap();
+        let expired =
+            sign_http_at(body, TEST_KEY, "key-1", TEST_EVENT_ID, "POST", "/hook", now - 600)
+                .unwrap();
+        assert!(matches!(
+            verify_http(
+                body,
+                TEST_KEY,
+                &expired,
+                TEST_EVENT_ID,
+                "POST",
+                "/hook",
+                300,
+                30
+            ),
+            Err(HmacError::SignatureExpired)
+        ));
 
-        // max_age 300s, but signature is 600s old
-        assert!(verify(body, TEST_KEY, &parsed, TEST_EVENT_ID, 300).is_err());
+        let future =
+            sign_http_at(body, TEST_KEY, "key-1", TEST_EVENT_ID, "POST", "/hook", now + 120)
+                .unwrap();
+        assert!(matches!(
+            verify_http(
+                body,
+                TEST_KEY,
+                &future,
+                TEST_EVENT_ID,
+                "POST",
+                "/hook",
+                300,
+                30
+            ),
+            Err(HmacError::SignatureFromFuture)
+        ));
     }
 
     #[test]
     fn parse_rejects_invalid_format() {
         assert!(HmacSignature::parse("invalid").is_err());
-        assert!(HmacSignature::parse("v1,key,ts").is_err()); // missing sig
+        assert!(HmacSignature::parse("v1,key,ts").is_err());
     }
 }
