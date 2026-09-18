@@ -36,13 +36,13 @@ Use short-lived branches such as:
 
 Branches are temporary and normally deleted after merge.
 
-# Main branch protection — hard gate
+# Main branch control
 
 ## Rule
 
-`main` must be protected before normal Phase 0 implementation PRs begin.
+Where the GitHub plan supports repository-enforced branch protection, enable it. On the current private-repository plan this control is unavailable, so Nullapart uses an explicit compensating process until the plan changes.
 
-**No direct pushes to `main`.**
+**No routine direct pushes to `main`.**
 
 This applies to:
 
@@ -72,15 +72,21 @@ At minimum:
 
 Production release tags/rulesets are also protected against casual deletion/rewrite.
 
-## Hard activation requirement
+## Enforcement availability and compensating control
 
-Unlike optional convenience controls, protected `main` is not satisfied by a documentation-only compensating process.
+The current private-repository GitHub plan does not provide branch protection/rulesets. This is an explicit platform limitation, not a control that is silently treated as active.
 
-If the repository/organization plan cannot enforce no-direct-push protection, **normal implementation does not proceed until an equivalent enforceable repository-control mechanism is available**.
+Until repository-enforced protection becomes available:
 
-The current ChatGPT GitHub integration cannot administer the required repository ruleset/branch-protection setting. Activation therefore requires an authorized GitHub repository/organization administrator.
+- all normal development uses short-lived branches;
+- CI runs on every pushed branch and on `main`;
+- changes are reviewed before manually advancing `main`;
+- force-push/history rewrite of `main` remains prohibited by policy;
+- release/deployment evidence records the reviewed source SHA and CI result;
+- production deployment requires an explicit human approval independent of the source push;
+- any direct-to-`main` emergency change is recorded as a security/change exception and still requires CI evidence.
 
-Record evidence of the active rule in Phase 0 / compliance production-readiness records.
+This compensating process is weaker than server-side branch protection and must be recorded honestly in readiness evidence. If the GitHub plan later supports protection, enable it and remove the exception.
 
 ## Protection monitoring
 
@@ -385,7 +391,7 @@ Accept this policy before implementation.
 
 Before normal implementation proceeds through the repository:
 
-- protected `main` with no direct pushes is active and verified;
+- branch-control policy is active; repository-enforced protection is enabled where the plan supports it, otherwise the documented compensating process is in force;
 - PR workflow exists;
 - required checks/reviews are configured;
 - locked/frozen dependency installs exist;
@@ -398,7 +404,7 @@ Before normal implementation proceeds through the repository:
 
 Production is blocked unless:
 
-- branch/review controls remain active;
+- branch/review controls remain active and any platform enforcement limitation is documented;
 - CI security gates run;
 - OIDC/scoped AWS deployment identity is active;
 - immutable artifact promotion is used;
