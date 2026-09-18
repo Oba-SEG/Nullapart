@@ -40,8 +40,8 @@ smtp      inet  n       -       n       -       -       smtpd
 # Mail Core after-queue content filter
 # ==============================================================================
 mailcore unix  -       n       n       -       10      pipe
-  flags=Rq user=nullapart nullapart_certificate=
-  argv=/usr/libexec/nullapart/mailcore-filter -f ${sender} -- ${recipient}
+  flags=Rq user=nullapart null_sender=<>
+  argv=/usr/libexec/nullapart/mailcore-filter --queue-id ${queue_id} --client-address ${client_address} --client-hostname ${client_hostname} --client-helo ${client_helo} --sasl-username ${sasl_username} --sender ${sender} -- ${recipient}
 
 # ==============================================================================
 # Queue runner
