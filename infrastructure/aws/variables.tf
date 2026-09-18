@@ -45,3 +45,9 @@ variable "redis_auth_token" {
   type        = string
   sensitive   = true
 }
+
+variable "mail_spool_volume_gib" {
+  description = "Persistent encrypted Postfix spool volume size per mail node"
+  type        = number
+  default     = 100
+}
