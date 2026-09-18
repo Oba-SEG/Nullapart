@@ -521,7 +521,7 @@ mod tests {
             id: FindingId::new(),
             scope: FindingScope::Transaction,
             scanner: ScannerType::Clamav,
-            scanner_status: ScannerStatus::Infected,
+            scanner_status: ScannerStatus::Threat,
             severity: FindingSeverity::Critical,
             confidence: Confidence::High,
             category: FindingCategory::Malware,
