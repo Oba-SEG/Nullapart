@@ -4,7 +4,6 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main]
 
 permissions:
   contents: read
@@ -116,7 +115,7 @@ jobs:
   sbom:
     name: SBOM and build provenance
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.event_name == 'push'
     permissions:
       contents: read
       id-token: write
