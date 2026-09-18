@@ -79,7 +79,6 @@ pub struct ScannerFinding {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FindingSeverity {
-    Clean,
     Info,
     Low,
     Medium,
@@ -152,10 +151,9 @@ pub enum ScannerStatus {
     Clean,
     Threat,
     Suspicious,
+    Unknown,
     Error,
-    Timeout,
-    ResourceLimit,
-    Unsupported,
+    NotApplicable,
 }
 
 impl std::fmt::Display for ScannerStatus {
@@ -164,10 +162,9 @@ impl std::fmt::Display for ScannerStatus {
             Self::Clean => write!(f, "clean"),
             Self::Threat => write!(f, "threat"),
             Self::Suspicious => write!(f, "suspicious"),
+            Self::Unknown => write!(f, "unknown"),
             Self::Error => write!(f, "error"),
-            Self::Timeout => write!(f, "timeout"),
-            Self::ResourceLimit => write!(f, "resource_limit"),
-            Self::Unsupported => write!(f, "unsupported"),
+            Self::NotApplicable => write!(f, "not_applicable"),
         }
     }
 }
