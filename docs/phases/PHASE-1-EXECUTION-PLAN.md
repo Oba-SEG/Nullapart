@@ -6,18 +6,18 @@
 
 | WP | Name | Code status | Infrastructure status | Remaining |
 |----|------|-------------|----------------------|-----------|
-| 1 | Mail-node runtime contract | ✅ `crates/mail-core/src/node.rs` | — | — |
-| 2 | Postfix baseline | ✅ `infrastructure/postfix/` | — | Live validation on EC2 |
-| 3 | Bounded Rspamd Milter | ✅ `infrastructure/rspamd/rspamd.conf` | — | Install on EC2, tune thresholds |
-| 4 | After-queue handoff | ✅ `crates/mail-core/src/handoff.rs` | — | Wire to Postfix content filter |
-| 5 | Tenant partitioning | ✅ `crates/mail-core/src/partition.rs` | — | — |
-| 6 | Trusted auth evidence | ✅ `crates/mail-core/src/auth.rs` | — | Wire to Rspamd output |
-| 7 | Baseline policy | ✅ `crates/mail-core/src/policy.rs` | — | — |
-| 8 | Reinjection + loop prevention | ✅ `crates/mail-core/src/reinjection.rs` | — | Wire to Postfix reinjection listener |
-| 9 | Outbound intake | ✅ `crates/mail-core/src/outbound.rs` | — | Wire to outbound connector |
-| 10 | Trace/operations UI | ✅ `crates/mail-core/src/trace.rs` | — | React UI pages (frontend) |
+| 1 | Mail-node runtime contract | 🟡 Contract present | 🟡 IaC incomplete | Stable EIP/PTR/spool lifecycle still required |
+| 2 | Postfix baseline | 🟡 Config present | 🟡 Not live-validated | Recipient maps, install/bootstrap and EC2 validation required |
+| 3 | Bounded Rspamd Milter | 🟡 Config present | 🟡 Not live-validated | Install, evidence wiring, timeout/failure tests |
+| 4 | After-queue handoff | 🟡 Adapter + authenticated endpoint present | 🟡 Not deployed | Persistence/idempotency DB integration and live Postfix exercise |
+| 5 | Tenant partitioning | 🟡 Logic present | — | Persistence + live cross-tenant tests |
+| 6 | Trusted auth evidence | 🟠 Types only | — | Actual SPF/DKIM/DMARC/ARC verification using maintained implementations |
+| 7 | Baseline policy | 🟡 Evaluator present | — | Complete trusted predicates, persisted policy loading and failure tests |
+| 8 | Reinjection + loop prevention | 🟠 Validation/types only | 🟡 Listener config present | Actual SMTP reinjection client + delivery persistence |
+| 9 | Outbound intake | 🟡 Validation foundation | — | Connector authz, source policy, signing, rate/bulk and live routing |
+| 10 | Trace/operations UI | 🟠 API scaffold | — | Real persistence queries, RBAC/TenantContext and React trace UI |
 | 11 | SMTP commissioning | ⬜ Not started | ⬜ Requires AWS | EC2, EIP, DNS, port 25, TLS |
-| 12 | Security/reliability gate | ✅ `crates/mail-core/tests/security_reliability.rs` | — | Live integration tests on EC2 |
+| 12 | Security/reliability gate | 🟠 Unit-level assertions only | — | Real Postfix/Rspamd/PostgreSQL/AWS integration evidence |
 
 ## Goal
 
@@ -216,7 +216,7 @@ Acceptance tests include multi-RCPT cross-tenant transactions.
 
 ## Work package 6 — Trusted authentication results
 
-**Status:** ✅ COMPLETE — `crates/mail-core/src/auth.rs`
+**Status:** 🟠 PARTIAL — trusted evidence types exist; protocol verification is not yet implemented
 
 Implement/validate trusted authentication evidence using maintained protocol implementations.
 
@@ -262,7 +262,7 @@ Do not introduce full scanner/ML policy here.
 
 ## Work package 8 — Reinjection and downstream delivery
 
-**Status:** ✅ COMPLETE — `crates/mail-core/src/reinjection.rs`, `delivery.rs`
+**Status:** 🟠 PARTIAL — loop/envelope validation exists; actual SMTP reinjection remains open
 
 For each allowed Tenant Message Instance:
 
@@ -299,7 +299,7 @@ No generic public relay API.
 
 ## Work package 10 — Trace and operations UI
 
-**Status:** ✅ COMPLETE — `crates/mail-core/src/trace.rs` (API endpoints)
+**Status:** 🟠 PARTIAL — authenticated API scaffold exists; persistence/RBAC/UI are not complete
 
 Ship backend and UI together.
 
@@ -340,7 +340,7 @@ Evidence includes:
 
 ## Work package 12 — Phase 1 security and reliability test gate
 
-**Status:** ✅ COMPLETE — `crates/mail-core/tests/security_reliability.rs` (unit-level)
+**Status:** 🟠 PARTIAL — unit-level assertions exist; they are not end-to-end security evidence
 **Remaining:** Live integration tests on EC2 infrastructure
 
 Required end-to-end matrix:
@@ -386,35 +386,34 @@ Required end-to-end matrix:
 
 Recommended order after Phase 0 gate:
 
-1. ✅ mail-node runtime contract;
-2. ✅ Postfix baseline + test harness;
-3. ✅ reinjection listener/loop prevention;
-4. ✅ Rspamd bounded Milter;
-5. ✅ Mail Core after-queue receiver;
-6. ✅ transaction + tenant partitioning;
-7. ✅ trusted auth evidence;
-8. ✅ baseline policy/reason codes;
-9. ✅ reinjection/delivery tracking;
-10. ✅ outbound intake/routing;
-11. ✅ trace/operations UI (API);
-12. ⬜ AWS SMTP commissioning;
-13. ✅ full Phase 1 security/reliability gate (unit tests).
+1. 🟡 mail-node runtime contract and IaC hardening;
+2. 🟡 Postfix baseline + recipient maps + test harness;
+3. 🟡 authenticated after-queue adapter/server integration;
+4. 🟡 bounded Rspamd Milter and evidence handoff;
+5. 🟡 transaction + tenant partitioning persistence;
+6. 🟠 maintained SPF/DKIM/DMARC/ARC verification;
+7. 🟡 baseline policy/reason codes and trusted predicates;
+8. 🟠 SMTP reinjection/delivery tracking;
+9. 🟡 outbound authorization/signing/routing;
+10. 🟠 trace persistence/RBAC/React UI;
+11. ⬜ AWS SMTP commissioning;
+12. ⬜ live Phase 1 security/reliability gate.
 
 ## Definition of Phase 1 done
 
 Phase 1 is complete only when:
 
-- ✅ inbound and outbound mail work end-to-end; (code complete, needs live validation)
-- ✅ no open relay exists; (Postfix baseline + unit tests)
-- ✅ accepted mail is durable across downstream processing outages; (Postfix queue + handoff semantics)
-- ✅ transaction/tenant partitioning is correct; (TenantResolver + 7 unit tests)
-- ✅ trusted authentication observations are generated internally; (auth.rs)
-- ✅ reinjection cannot loop or be publicly abused; (loop prevention + port separation)
-- ✅ downstream retry/DSN behavior is correct; (delivery.rs + classification tests)
-- ✅ tenant-safe trace UI exists; (trace.rs API endpoints)
-- ✅ Tier-3 operational metrics/alerts are present; (NodeMetrics types + SLI conventions)
-- ⬜ SMTP commissioning is repeatable from documented evidence; (requires AWS)
-- ✅ all mandatory security tests pass. (17 integration tests)
+- ⬜ inbound and outbound mail work end-to-end;
+- ⬜ no open relay is proven by live test evidence;
+- ⬜ accepted mail durability is proven across downstream outages/restarts;
+- 🟡 transaction/tenant partitioning logic and persistence schema exist, live isolation evidence pending;
+- 🟠 trusted authentication types exist, protocol verification implementation pending;
+- 🟠 reinjection loop validation exists, actual SMTP reinjection pending;
+- 🟠 downstream retry classification exists, live DSN/retry behavior pending;
+- 🟠 trace API scaffold exists, tenant-safe persistence/RBAC/UI pending;
+- 🟡 Tier-3 metric contracts exist, runtime alarms/evidence pending;
+- ⬜ SMTP commissioning is repeatable from documented evidence;
+- ⬜ all mandatory security tests pass with end-to-end evidence.
 
 ### Remaining for full Phase 1 completion
 
