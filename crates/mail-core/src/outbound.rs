@@ -139,6 +139,26 @@ pub fn validate_outbound(
     allowed_domains: &[DomainValidation],
     authorization: &DomainAuthorization,
 ) -> Result<OutboundIntakeResult, OutboundError> {
+    if request.connector.connector_id.trim().is_empty()
+        || request
+            .connector
+            .authenticated_as
+            .as_deref()
+            .map(str::trim)
+            .filter(|identity| !identity.is_empty())
+            .is_none()
+    {
+        return Err(OutboundError::NotAuthenticated);
+    }
+
+    if request.connector.ip_address.parse::<std::net::IpAddr>().is_err() {
+        return Err(OutboundError::InvalidSourceAddress);
+    }
+
+    if request.connector.deployment_id.0.trim().is_empty() {
+        return Err(OutboundError::DeploymentNotAuthorized);
+    }
+
     // Extract sender domain
     let sender_addr = request.envelope_sender.address().to_lowercase();
     let sender_domain = sender_addr.rsplit('@').next().unwrap_or("");
@@ -174,9 +194,18 @@ pub fn validate_outbound(
         },
     }
 
-    // Validate recipients exist
+    // Validate recipients exist and are syntactically routable.
     if request.recipients.is_empty() {
         return Err(OutboundError::NoRecipients);
+    }
+    if request.recipients.iter().any(|recipient| {
+        let address = recipient.address.trim();
+        let mut parts = address.rsplitn(2, '@');
+        let domain = parts.next().unwrap_or("");
+        let local = parts.next().unwrap_or("");
+        local.is_empty() || domain.is_empty() || !domain.contains('.')
+    }) {
+        return Err(OutboundError::InvalidRecipient);
     }
 
     // Determine routing
@@ -221,6 +250,15 @@ pub enum OutboundError {
 
     #[error("connector not authenticated")]
     NotAuthenticated,
+
+    #[error("invalid connector source address")]
+    InvalidSourceAddress,
+
+    #[error("connector deployment is not authorized")]
+    DeploymentNotAuthorized,
+
+    #[error("invalid outbound recipient")]
+    InvalidRecipient,
 
     #[error("rate limit exceeded")]
     RateLimitExceeded,
@@ -271,6 +309,25 @@ mod tests {
         assert!(result.is_ok());
         let result = result.unwrap();
         assert_eq!(result.disposition, OutboundDisposition::Accepted);
+    }
+
+    #[test]
+    fn unauthenticated_connector_rejected() {
+        let mut connector = test_connector();
+        connector.authenticated_as = None;
+        let request = OutboundIntakeRequest {
+            connector,
+            envelope_sender: EnvelopeSender::new("sender@customer-a.com"),
+            recipients: vec![Recipient {
+                address: "user@external.com".to_string(),
+                orcpt: None,
+                notify: None,
+            }],
+            message_id: None,
+            content_hash: "abc".to_string(),
+        };
+        let result = validate_outbound(&request, &test_domains(), &DomainAuthorization::Full);
+        assert!(matches!(result, Err(OutboundError::NotAuthenticated)));
     }
 
     #[test]
