@@ -8,7 +8,7 @@ GitHub branch protection for `main` (no direct pushes, PR required, required rev
 
 - **No direct pushes to `main`** — all changes go through reviewed PRs.
 - Emergency changes still use expedited PR/review/checks, not direct pushes.
-- CODEOWNERS and CI required checks enforce review quality.
+- CODEOWNERS documents ownership and CI supplies evidence; neither is server-side merge enforcement while branch protection is unavailable.
 - All contributors are expected to follow this rule; violations are treated as policy exceptions.
 
 This compensating control is recorded in `docs/compliance/12-IMPLEMENTATION-GATE-STATUS.md`.
