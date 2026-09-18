@@ -246,8 +246,8 @@ pub fn trace_router(config: TraceConfig) -> Router {
         .route("/api/v1/trace/search", post(handle_trace_search))
         .route("/api/v1/trace/transaction/:id", get(handle_get_transaction))
         .route("/api/v1/trace/health", get(handle_health_check))
-        .layer(axum::Extension(config.clone()))
         .layer(middleware::from_fn(require_workload_auth))
+        .layer(axum::Extension(config.clone()))
         .with_state(config)
 }
 
