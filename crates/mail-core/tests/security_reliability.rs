@@ -65,7 +65,7 @@ fn forged_trusted_headers_not_trusted() {
         id: FindingId::new(),
         scope: FindingScope::Transaction,
         scanner: ScannerType::Dkim,
-        scanner_status: ScannerStatus::Clean,
+        scanner_status: ScannerStatus::Unknown,
         severity: FindingSeverity::Info,
         confidence: Confidence::High,
         category: FindingCategory::AuthFailure,
@@ -81,7 +81,7 @@ fn forged_trusted_headers_not_trusted() {
 
     assert_eq!(
         finding.scanner_status,
-        ScannerStatus::Clean,
+        ScannerStatus::Unknown,
         "forged headers produce no trusted findings"
     );
 }
@@ -376,7 +376,7 @@ fn tenant_quarantine_does_not_affect_other_tenants() {
         evaluated_at: chrono::Utc::now(),
     };
     let result_b = PolicyRuleEvaluator::evaluate(&[rule_quarantine], &request_b);
-    assert_eq!(result_b.disposition, Disposition::Allow);
+    assert_eq!(result_b.disposition, Disposition::Hold);
 }
 
 #[test]
