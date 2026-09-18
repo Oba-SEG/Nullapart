@@ -231,69 +231,138 @@ resource "aws_ecs_cluster_capacity_providers" "control_plane" {
   }
 }
 
-# Dedicated EC2 mail nodes (stable SMTP identity / queue lifecycle)
-resource "aws_launch_template" "mail_node" {
-  name_prefix = "nullapart-mail-${var.environment}-"
-
-  image_id      = data.aws_ami.amazon_linux_2.id
-  instance_type = var.mail_node_instance_type
-
-  iam_instance_profile {
-    name = aws_iam_instance_profile.mail_node.name
-  }
-
-  network_interfaces {
-    security_groups             = [module.security_groups["mail-node"].security_group_id]
-    associate_public_ip_address = true
-  }
-
-  user_data = base64encode("#TODO: Postfix + Rspamd bootstrap script")
-
-  tag_specifications {
-    resource_type = "instance"
-    tags = {
-      Name        = "nullapart-mail-node"
-      Environment = var.environment
-    }
-  }
-}
-
-data "aws_ami" "amazon_linux_2" {
+# Dedicated EC2 mail nodes
+#
+# Mail nodes intentionally use stable instance slots rather than an ASG because
+# SMTP identity (EIP/PTR/HELO) and queued responsibility must survive ordinary
+# instance replacement. Each slot owns a persistent encrypted spool volume and EIP.
+data "aws_ami" "amazon_linux_2023" {
   most_recent = true
   owners      = ["amazon"]
 
   filter {
     name   = "name"
-    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
+    values = ["al2023-ami-2023.*-x86_64"]
+  }
+
+  filter {
+    name   = "architecture"
+    values = ["x86_64"]
   }
 }
 
-resource "aws_autoscaling_group" "mail_nodes" {
-  name                = "nullapart-mail-${var.environment}"
-  min_size            = var.mail_node_desired_capacity
-  max_size            = var.mail_node_desired_capacity * 2
-  desired_capacity    = var.mail_node_desired_capacity
-  vpc_zone_identifier = module.vpc.public_subnets
+resource "aws_instance" "mail_node" {
+  count = var.mail_node_desired_capacity
 
-  launch_template {
-    id      = aws_launch_template.mail_node.id
-    version = "$Latest"
+  ami                    = data.aws_ami.amazon_linux_2023.id
+  instance_type          = var.mail_node_instance_type
+  subnet_id              = element(module.vpc.public_subnets, count.index % length(module.vpc.public_subnets))
+  vpc_security_group_ids = [module.security_groups["mail-node"].security_group_id]
+  iam_instance_profile   = aws_iam_instance_profile.mail_node.name
+
+  associate_public_ip_address = false
+
+  root_block_device {
+    encrypted   = true
+    volume_type = "gp3"
+    volume_size = 20
   }
 
-  tags = [{
-    key                 = "Name"
-    value               = "nullapart-mail-node"
-    propagate_at_launch = true
-  }]
+  metadata_options {
+    http_endpoint = "enabled"
+    http_tokens   = "required"
+  }
+
+  user_data = base64encode("# Bootstrap intentionally supplied by immutable image/config management before production commissioning.")
+
+  tags = {
+    Name        = format("mxin-%s-%02d", var.environment, count.index + 1)
+    Environment = var.environment
+    NodeSlot    = tostring(count.index + 1)
+  }
+}
+
+resource "aws_eip" "mail_node" {
+  count  = var.mail_node_desired_capacity
+  domain = "vpc"
+
+  tags = {
+    Name     = format("nullapart-%s-mail-%02d", var.environment, count.index + 1)
+    NodeSlot = tostring(count.index + 1)
+  }
+}
+
+resource "aws_eip_association" "mail_node" {
+  count         = var.mail_node_desired_capacity
+  instance_id   = aws_instance.mail_node[count.index].id
+  allocation_id = aws_eip.mail_node[count.index].id
+}
+
+resource "aws_ebs_volume" "mail_spool" {
+  count = var.mail_node_desired_capacity
+
+  availability_zone = aws_instance.mail_node[count.index].availability_zone
+  encrypted         = true
+  type              = "gp3"
+  size              = var.mail_spool_volume_gib
+
+  tags = {
+    Name     = format("nullapart-%s-mail-spool-%02d", var.environment, count.index + 1)
+    NodeSlot = tostring(count.index + 1)
+    Purpose  = "postfix-spool"
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_volume_attachment" "mail_spool" {
+  count = var.mail_node_desired_capacity
+
+  device_name = "/dev/sdf"
+  volume_id   = aws_ebs_volume.mail_spool[count.index].id
+  instance_id = aws_instance.mail_node[count.index].id
+}
+
+# Internet-facing SMTP only. No SSH ingress.
+resource "aws_security_group_rule" "mail_smtp_ingress" {
+  type              = "ingress"
+  from_port         = 25
+  to_port           = 25
+  protocol          = "tcp"
+  cidr_blocks       = ["0.0.0.0/0"]
+  security_group_id = module.security_groups["mail-node"].security_group_id
+  description       = "Internet SMTP"
+}
+
+resource "aws_security_group_rule" "mail_smtp_egress" {
+  type              = "egress"
+  from_port         = 25
+  to_port           = 25
+  protocol          = "tcp"
+  cidr_blocks       = ["0.0.0.0/0"]
+  security_group_id = module.security_groups["mail-node"].security_group_id
+  description       = "Direct MX delivery"
+}
+
+resource "aws_security_group_rule" "mail_https_egress" {
+  type              = "egress"
+  from_port         = 443
+  to_port           = 443
+  protocol          = "tcp"
+  cidr_blocks       = ["0.0.0.0/0"]
+  security_group_id = module.security_groups["mail-node"].security_group_id
+  description       = "Approved HTTPS dependencies and package/image retrieval"
 }
 
 resource "aws_iam_instance_profile" "mail_node" {
-  name = "nullapart-mail-${var.environment}"
+  name = "nullapart-${var.environment}-mail"
   role = aws_iam_role.mail_node.name
 }
 
 resource "aws_iam_role" "mail_node" {
-  name = "nullapart-mail-${var.environment}"
+  name = "nullapart-${var.environment}-mail"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -305,6 +374,11 @@ resource "aws_iam_role" "mail_node" {
       }
     }]
   })
+}
+
+resource "aws_iam_role_policy_attachment" "mail_node_ssm" {
+  role       = aws_iam_role.mail_node.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
 # RDS PostgreSQL
@@ -428,9 +502,14 @@ output "ecs_cluster_name" {
   value       = aws_ecs_cluster.control_plane.name
 }
 
-output "mail_asg_name" {
-  description = "Mail node autoscaling group name"
-  value       = aws_autoscaling_group.mail_nodes.name
+output "mail_node_ids" {
+  description = "Stable mail node instance slots"
+  value       = aws_instance.mail_node[*].id
+}
+
+output "mail_node_eips" {
+  description = "Stable public SMTP addresses used for PTR/HELO commissioning"
+  value       = aws_eip.mail_node[*].public_ip
 }
 
 output "rds_endpoint" {
