@@ -9,6 +9,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
   }
   
   # Production uses remote state with encryption
@@ -31,12 +35,20 @@ provider "aws" {
   }
 }
 
-# GitHub OIDC Provider for CI/CD deployment identity
-# Follows: no long-lived AWS deployment credentials; use scoped OIDC/workload identity.
+# GitHub OIDC Provider for CI/CD deployment identity.
+# Resolve the live certificate chain instead of shipping a placeholder thumbprint.
+data "tls_certificate" "github_actions" {
+  url = "https://token.actions.githubusercontent.com"
+}
+
 resource "aws_iam_openid_connect_provider" "github" {
-  url             = "https://token.actions.githubusercontent.com"
-  client_id_list  = ["sts.amazonaws.com"]
-  thumbprint_list = ["ffffffffffffffffffffffffffffffffffffffff"]
+  url            = "https://token.actions.githubusercontent.com"
+  client_id_list = ["sts.amazonaws.com"]
+  thumbprint_list = [
+    data.tls_certificate.github_actions.certificates[
+      length(data.tls_certificate.github_actions.certificates) - 1
+    ].sha1_fingerprint
+  ]
   tags = {
     Name = "nullapart-github-oidc"
   }
@@ -334,27 +346,37 @@ module "rds" {
 }
 
 # ElastiCache Redis/Valkey
-module "redis" {
-  source  = "terraform-aws-modules/memcached/aws"
-  version = "~> 1.0"
-  
-  for_each = toset(["redis"])
-  
-  cluster_id = "nullapart-${var.environment}-${each.key}"
-  
-  node_type               = "cache.t4g.micro"
-  number_of_cache_nodes   = 1
-  port                    = 6379
-  apply_immediately       = var.environment != "prod"
-  
-  vpc_id             = module.vpc.vpc_id
-  subnet_ids         = module.vpc.private_subnets
-  security_groups    = [module.security_groups[each.key].security_group_id]
-  
-  auto_minor_version_upgrade = true
-  maintenance_window         = "mon:05:00-mon:06:00"
-  snapshot_window            = "03:00-05:00"
-  
+resource "aws_elasticache_subnet_group" "redis" {
+  name       = "nullapart-${var.environment}-redis"
+  subnet_ids = module.vpc.private_subnets
+}
+
+resource "aws_elasticache_replication_group" "redis" {
+  replication_group_id = "nullapart-${var.environment}-redis"
+  description          = "Nullapart regional cache/runtime state"
+
+  engine               = "redis"
+  engine_version       = "7.1"
+  node_type            = var.environment == "prod" ? "cache.t4g.small" : "cache.t4g.micro"
+  port                 = 6379
+  parameter_group_name = "default.redis7"
+
+  num_cache_clusters         = var.environment == "prod" ? 2 : 1
+  automatic_failover_enabled = var.environment == "prod"
+  multi_az_enabled           = var.environment == "prod"
+
+  subnet_group_name  = aws_elasticache_subnet_group.redis.name
+  security_group_ids = [module.security_groups["redis"].security_group_id]
+
+  at_rest_encryption_enabled = true
+  transit_encryption_enabled = true
+  auth_token                 = var.redis_auth_token
+
+  snapshot_retention_limit = var.environment == "prod" ? 7 : 1
+  snapshot_window          = "03:00-05:00"
+  maintenance_window       = "mon:05:00-mon:06:00"
+  apply_immediately        = var.environment != "prod"
+
   tags = {
     Name = "nullapart-redis"
   }
