@@ -4,7 +4,7 @@ These actions require repository/organization/operator access outside the curren
 
 ## Before normal Phase 0 implementation
 
-- ~~Activate GitHub `main` protection/ruleset with no direct pushes, required PR/review/checks, no force push/deletion.~~ — Documented policy rule accepted (GitHub branch protection requires paid plan).
+- GitHub server-side `main` protection is **unavailable on the current private-repository plan**. Keep the documented branch/review/CI compensating process active; enable technical protection if/when the plan supports it.
 - ~~Assign real security/repository owners and populate CODEOWNERS.~~ — `obakeng-SEG` owns all paths; security-critical paths flagged.
 - Verify Codex and OpenCode sessions actually load root `AGENTS.md`.
 - Verify Copilot/Claude/Gemini/Cursor adapters in the tools the team will use.
@@ -12,8 +12,8 @@ These actions require repository/organization/operator access outside the curren
 
 ## During Phase 0 implementation
 
-- ~~Create real GitHub Actions workflows.~~ — `.github/workflows/ci.yml` implemented.
-- ~~Wire merge-blocking formatter/lint/type/security checks.~~ — `cargo fmt`, `cargo clippy`, `pnpm format-check`, `pnpm lint`, `pnpm typecheck` in CI.
+- Repair and verify `.github/workflows/ci.yml` until Rust, frontend, contracts, SBOM/provenance and vulnerability checks all run green.
+- Verify formatter/lint/type/security checks execute successfully on the current branch; server-side merge blocking is unavailable with current branch-protection limitations.
 - ~~Initialize lockfiles/toolchain pins.~~ — `Cargo.lock` and `pnpm-lock.yaml` generated; `rustfmt.toml` cleaned.
 - ~~Implement TenantContext and feature-override foundation.~~ — `crates/policy/src/tenant_context.rs` + `feature_evaluator.rs` with precedence model and tests.
 - ~~Implement observability primitives needed for later Tier-3 SLOs.~~ — `crates/observability/src/lib.rs` with SLI types, mail-specific metrics, alert conventions.
