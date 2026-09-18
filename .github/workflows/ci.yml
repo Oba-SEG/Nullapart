@@ -85,6 +85,10 @@ jobs:
         working-directory: frontend
         run: pnpm test
 
+      - name: Production build
+        working-directory: frontend
+        run: pnpm build
+
   contracts:
     name: Contract verification
     runs-on: ubuntu-latest
@@ -137,8 +141,10 @@ jobs:
 
       - name: Generate Rust SBOM (cargo-cyclonedx)
         run: |
-          cargo install cargo-cyclonedx --locked 2>/dev/null || true
-          cargo cyclonedx --all --format json --output-dir sbom
+          cargo install cargo-cyclonedx --locked
+          mkdir -p sbom/rust
+          cargo cyclonedx --all --format json
+          find crates -type f \( -name "*.cdx.json" -o -name "bom.json" \) -exec cp {} sbom/rust/ \;
 
       - name: Generate source SBOM (syft)
         uses: anchore/sbom-action@v0
@@ -164,7 +170,7 @@ jobs:
         id: scan
         with:
           sbom: sbom/source-sbom.spdx.json
-          fail-build: false
+          fail-build: true
           severity-cutoff: critical
 
       - name: Upload scan results
