@@ -12,9 +12,9 @@ use axum::response::Response;
 use axum::routing::{get, post};
 use axum::Router;
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
-use serde::{Deserialize, Serialize};
 
 use nullapart_mail_contracts::transaction::{DeliveryStatus, Disposition, MailDirection, TraceId};
 
@@ -247,12 +247,15 @@ pub fn trace_router(config: TraceConfig) -> Router {
         .route("/api/v1/trace/transaction/:id", get(handle_get_transaction))
         .route("/api/v1/trace/health", get(handle_health_check))
         .layer(middleware::from_fn(require_workload_auth))
+        .layer(axum::extract::DefaultBodyLimit::max(64 * 1024))
         .layer(axum::Extension(config.clone()))
         .with_state(config)
 }
 
 /// Middleware: require workload authentication for trace endpoints.
 /// The health endpoint is exempted (it returns only basic node info).
+/// Defense-in-depth: also reject non-loopback clients when a workload token
+/// is configured — the token alone is the primary gate.
 async fn require_workload_auth(request: Request<Body>, next: Next) -> Result<Response, StatusCode> {
     // Health check is exempt from auth
     if request.uri().path() == "/api/v1/trace/health" {
@@ -267,6 +270,16 @@ async fn require_workload_auth(request: Request<Body>, next: Next) -> Result<Res
     let Some(expected) = expected else {
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     };
+
+    // Defense-in-depth: if the server is bound to loopback (the default),
+    // reject requests from non-loopback origins.
+    if let Some(forwarded) = request.headers().get("x-forwarded-for") {
+        if let Ok(val) = forwarded.to_str() {
+            if !val.starts_with("127.") && !val.starts_with("[::1]") && val != "::1" {
+                return Err(StatusCode::FORBIDDEN);
+            }
+        }
+    }
 
     let auth_header = request
         .headers()

@@ -4,15 +4,16 @@
 //! HTTP method and path are covered by the canonical Nullapart HMAC contract.
 
 use axum::body::Bytes;
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine as _;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
 use axum::{Json, Router};
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
 use nullapart_mail_contracts::hmac::{verify_http, HmacSignature};
@@ -156,9 +157,14 @@ pub fn process_handoff(
         ));
     }
 
-    let calculated_hash = hex::encode(Sha256::digest(&decoded));
-    if request.content_hash.len() != 64
-        || !request.content_hash.eq_ignore_ascii_case(&calculated_hash)
+    let calculated_hash_bytes: [u8; 32] = Sha256::digest(&decoded).into();
+    let provided_hash_bytes =
+        hex::decode(&request.content_hash).map_err(|_| HandoffError::InvalidContentHash)?;
+    if provided_hash_bytes.len() != 32
+        || provided_hash_bytes
+            .ct_eq(&calculated_hash_bytes)
+            .unwrap_u8()
+            != 1
     {
         return Err(HandoffError::InvalidContentHash);
     }
@@ -183,8 +189,10 @@ pub fn process_handoff(
 }
 
 pub fn handoff_router(config: HandoffConfig) -> Router {
+    let body_limit = config.max_message_size as usize;
     Router::new()
         .route(HANDOFF_PATH, post(handle_handoff))
+        .layer(axum::extract::DefaultBodyLimit::max(body_limit))
         .with_state(config)
 }
 
@@ -234,18 +242,26 @@ async fn handle_handoff(
     verify_request_auth(&config, &headers, &body)
         .map_err(|_| (StatusCode::UNAUTHORIZED, "unauthorized".to_string()))?;
 
-    let request: AfterQueueHandoffRequest = serde_json::from_slice(&body)
-        .map_err(|_| (StatusCode::BAD_REQUEST, "malformed handoff request".to_string()))?;
+    let request: AfterQueueHandoffRequest = serde_json::from_slice(&body).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            "malformed handoff request".to_string(),
+        )
+    })?;
 
     match process_handoff(&config, &request) {
         Ok(response) => Ok((StatusCode::OK, Json(response))),
-        Err(HandoffError::MessageTooLarge(_, _)) => {
-            Err((StatusCode::PAYLOAD_TOO_LARGE, "message too large".to_string()))
-        }
+        Err(HandoffError::MessageTooLarge(_, _)) => Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "message too large".to_string(),
+        )),
         Err(HandoffError::InvalidContentHash) => {
             Err((StatusCode::BAD_REQUEST, "content hash mismatch".to_string()))
-        }
-        Err(_) => Err((StatusCode::BAD_REQUEST, "invalid handoff request".to_string())),
+        },
+        Err(_) => Err((
+            StatusCode::BAD_REQUEST,
+            "invalid handoff request".to_string(),
+        )),
     }
 }
 

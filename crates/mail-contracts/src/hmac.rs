@@ -100,10 +100,7 @@ fn validate_event_id(event_id: &str) -> Result<(), HmacError> {
 }
 
 fn validate_http_component(method: &str) -> Result<(), HmacError> {
-    if method.is_empty()
-        || method.len() > 16
-        || !method.bytes().all(|b| b.is_ascii_alphabetic())
-    {
+    if method.is_empty() || method.len() > 16 || !method.bytes().all(|b| b.is_ascii_alphabetic()) {
         return Err(HmacError::InvalidHttpContext);
     }
     Ok(())
@@ -171,6 +168,7 @@ fn sign_http_at(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn verify_http(
     body: &[u8],
     key: &[u8],
@@ -301,17 +299,7 @@ mod tests {
     fn modified_method_or_path_is_rejected() {
         let body = b"test body content";
         let sig = sign_http(body, TEST_KEY, "key-1", TEST_EVENT_ID, "POST", "/hook").unwrap();
-        assert!(verify_http(
-            body,
-            TEST_KEY,
-            &sig,
-            TEST_EVENT_ID,
-            "GET",
-            "/hook",
-            300,
-            30
-        )
-        .is_err());
+        assert!(verify_http(body, TEST_KEY, &sig, TEST_EVENT_ID, "GET", "/hook", 300, 30).is_err());
         assert!(verify_http(
             body,
             TEST_KEY,
@@ -361,9 +349,16 @@ mod tests {
             .unwrap()
             .as_secs();
 
-        let expired =
-            sign_http_at(body, TEST_KEY, "key-1", TEST_EVENT_ID, "POST", "/hook", now - 600)
-                .unwrap();
+        let expired = sign_http_at(
+            body,
+            TEST_KEY,
+            "key-1",
+            TEST_EVENT_ID,
+            "POST",
+            "/hook",
+            now - 600,
+        )
+        .unwrap();
         assert!(matches!(
             verify_http(
                 body,
@@ -378,9 +373,16 @@ mod tests {
             Err(HmacError::SignatureExpired)
         ));
 
-        let future =
-            sign_http_at(body, TEST_KEY, "key-1", TEST_EVENT_ID, "POST", "/hook", now + 120)
-                .unwrap();
+        let future = sign_http_at(
+            body,
+            TEST_KEY,
+            "key-1",
+            TEST_EVENT_ID,
+            "POST",
+            "/hook",
+            now + 120,
+        )
+        .unwrap();
         assert!(matches!(
             verify_http(
                 body,

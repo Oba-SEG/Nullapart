@@ -23,6 +23,7 @@ use nullapart_mail_core::{
     policy::{PolicyEvaluationRequest, PolicyRuleEvaluator},
     reinjection::{LoopPreventionHeader, ReinjectionConfig},
 };
+use sha2::Digest;
 
 // ============================================================================
 // SMTP/Security tests
@@ -163,6 +164,8 @@ fn reinjection_bind_localhost() {
 #[test]
 fn duplicate_handoff_idempotent() {
     let config = HandoffConfig::default();
+    let raw = b"Hello";
+    let content_hash = hex::encode(sha2::Sha256::digest(raw));
     let request = AfterQueueHandoffRequest {
         postfix_queue_id: "dup-test".to_string(),
         envelope_sender: EnvelopeSender::new("sender@test.com"),
@@ -188,8 +191,8 @@ fn duplicate_handoff_idempotent() {
             symbols: vec![],
             latency_ms: 0,
         },
-        message_content: "SGVsbG8=".to_string(),
-        content_hash: "same-hash".to_string(),
+        message_content: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, raw),
+        content_hash,
         trace_id: None,
         handoff_at: chrono::Utc::now(),
     };
@@ -420,6 +423,8 @@ fn tier3_sli_statuses_representable() {
 #[test]
 fn dependency_failure_does_not_lose_accepted_mail() {
     let config = HandoffConfig::default();
+    let raw = b"Hello";
+    let content_hash = hex::encode(sha2::Sha256::digest(raw));
     let request = AfterQueueHandoffRequest {
         postfix_queue_id: "test-durability".to_string(),
         envelope_sender: EnvelopeSender::new("sender@test.com"),
@@ -445,8 +450,8 @@ fn dependency_failure_does_not_lose_accepted_mail() {
             symbols: vec![],
             latency_ms: 0,
         },
-        message_content: "SGVsbG8=".to_string(),
-        content_hash: "durability-test".to_string(),
+        message_content: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, raw),
+        content_hash,
         trace_id: None,
         handoff_at: chrono::Utc::now(),
     };

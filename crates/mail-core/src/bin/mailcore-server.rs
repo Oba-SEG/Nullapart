@@ -11,9 +11,10 @@ use nullapart_mail_core::trace::{trace_router, TraceConfig};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let deployment_id =
-        DeploymentId::new(&env::var("NULLAPART_DEPLOYMENT_ID").unwrap_or_else(|_| "CZA-1".into()));
-    let node_id = env::var("NULLAPART_NODE_ID").unwrap_or_else(|_| "mail-node-1".into());
+    let deployment_id = DeploymentId::new(
+        &env::var("NULLAPART_DEPLOYMENT_ID").map_err(|_| "NULLAPART_DEPLOYMENT_ID is required")?,
+    );
+    let node_id = env::var("NULLAPART_NODE_ID").map_err(|_| "NULLAPART_NODE_ID is required")?;
     let node_version = env!("CARGO_PKG_VERSION").to_string();
 
     let handoff_secret = env::var("NULLAPART_HANDOFF_HMAC_SECRET")
@@ -44,7 +45,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let app = handoff.merge(trace_router(trace_config));
+    let app = handoff
+        .merge(trace_router(trace_config))
+        .layer(axum::extract::DefaultBodyLimit::max(52_428_800));
     let bind = env::var("NULLAPART_MAILCORE_BIND").unwrap_or_else(|_| "127.0.0.1:8081".into());
     if !bind.starts_with("127.0.0.1:") && !bind.starts_with("[::1]:") {
         return Err("Mail Core internal server must bind to loopback".into());

@@ -204,31 +204,36 @@ impl PolicyRuleEvaluator {
         })
     }
 
+    /// Parse an SPF/DKIM/DMARC result string into an AuthResultType.
+    fn parse_auth_result(s: &str) -> Option<AuthResultType> {
+        match s.to_lowercase().as_str() {
+            "pass" => Some(AuthResultType::Pass),
+            "fail" => Some(AuthResultType::Fail),
+            "softfail" => Some(AuthResultType::Softfail),
+            "neutral" => Some(AuthResultType::Neutral),
+            "none" => Some(AuthResultType::None),
+            "permerror" => Some(AuthResultType::Permerror),
+            "temperror" => Some(AuthResultType::Temperror),
+            _ => None,
+        }
+    }
+
     /// Match auth condition against SPF/DKIM/DMARC results.
     fn matches_auth(
         cond: &nullapart_mail_contracts::policy::AuthCondition,
         request: &PolicyEvaluationRequest,
     ) -> bool {
-        // Check SPF
         if let Some(ref expected_spf) = cond.spf {
             match &request.spf_result {
-                Some(result_str) => {
-                    let parsed = match result_str.to_lowercase().as_str() {
-                        "pass" => AuthResultType::Pass,
-                        "fail" => AuthResultType::Fail,
-                        "softfail" => AuthResultType::Softfail,
-                        "neutral" => AuthResultType::Neutral,
-                        "none" => AuthResultType::None,
-                        "permerror" => AuthResultType::Permerror,
-                        "temperror" => AuthResultType::Temperror,
-                        _ => return false,
-                    };
-                    if !expected_spf.contains(&parsed) {
-                        return false;
-                    }
+                Some(result_str) => match Self::parse_auth_result(result_str) {
+                    Some(parsed) => {
+                        if !expected_spf.contains(&parsed) {
+                            return false;
+                        }
+                    },
+                    None => return false,
                 },
                 None => {
-                    // No SPF result — only match if None is in expected
                     if !expected_spf.contains(&AuthResultType::None) {
                         return false;
                     }
@@ -236,23 +241,15 @@ impl PolicyRuleEvaluator {
             }
         }
 
-        // Check DKIM
         if let Some(ref expected_dkim) = cond.dkim {
             match &request.dkim_result {
-                Some(result_str) => {
-                    let parsed = match result_str.to_lowercase().as_str() {
-                        "pass" => AuthResultType::Pass,
-                        "fail" => AuthResultType::Fail,
-                        "softfail" => AuthResultType::Softfail,
-                        "neutral" => AuthResultType::Neutral,
-                        "none" => AuthResultType::None,
-                        "permerror" => AuthResultType::Permerror,
-                        "temperror" => AuthResultType::Temperror,
-                        _ => return false,
-                    };
-                    if !expected_dkim.contains(&parsed) {
-                        return false;
-                    }
+                Some(result_str) => match Self::parse_auth_result(result_str) {
+                    Some(parsed) => {
+                        if !expected_dkim.contains(&parsed) {
+                            return false;
+                        }
+                    },
+                    None => return false,
                 },
                 None => {
                     if !expected_dkim.contains(&AuthResultType::None) {
@@ -262,23 +259,15 @@ impl PolicyRuleEvaluator {
             }
         }
 
-        // Check DMARC
         if let Some(ref expected_dmarc) = cond.dmarc {
             match &request.dmarc_result {
-                Some(result_str) => {
-                    let parsed = match result_str.to_lowercase().as_str() {
-                        "pass" => AuthResultType::Pass,
-                        "fail" => AuthResultType::Fail,
-                        "softfail" => AuthResultType::Softfail,
-                        "neutral" => AuthResultType::Neutral,
-                        "none" => AuthResultType::None,
-                        "permerror" => AuthResultType::Permerror,
-                        "temperror" => AuthResultType::Temperror,
-                        _ => return false,
-                    };
-                    if !expected_dmarc.contains(&parsed) {
-                        return false;
-                    }
+                Some(result_str) => match Self::parse_auth_result(result_str) {
+                    Some(parsed) => {
+                        if !expected_dmarc.contains(&parsed) {
+                            return false;
+                        }
+                    },
+                    None => return false,
                 },
                 None => {
                     if !expected_dmarc.contains(&AuthResultType::None) {
@@ -428,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn clean_mail_gets_allow() {
+    fn clean_mail_spf_rule_no_match_fallback_hold() {
         let rule = PolicyRule {
             id: PolicyRuleId::new(),
             name: "reject-spf-fail".to_string(),

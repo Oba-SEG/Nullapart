@@ -104,21 +104,29 @@ async fn main() {
 async fn run() -> Result<(), String> {
     let args = parse_args()?;
 
-    let mut raw_message = Vec::new();
-    std::io::stdin()
-        .read_to_end(&mut raw_message)
-        .map_err(|e| format!("cannot read queued message: {e}"))?;
-
     let max_bytes = env::var("NULLAPART_HANDOFF_MAX_BYTES")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(52_428_800);
-    if raw_message.len() > max_bytes {
-        return Err(format!(
-            "message exceeds handoff limit: {} > {} bytes",
-            raw_message.len(),
-            max_bytes
-        ));
+
+    let mut raw_message = Vec::with_capacity(1024 * 1024);
+    let mut total = 0usize;
+    let mut buf = [0u8; 8192];
+    let mut stdin = std::io::stdin();
+    loop {
+        let n = stdin
+            .read(&mut buf)
+            .map_err(|e| format!("cannot read queued message: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        total += n;
+        if total > max_bytes {
+            return Err(format!(
+                "message exceeds handoff limit: > {max_bytes} bytes"
+            ));
+        }
+        raw_message.extend_from_slice(&buf[..n]);
     }
 
     let content_hash = hex::encode(Sha256::digest(&raw_message));

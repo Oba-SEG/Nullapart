@@ -151,7 +151,12 @@ pub fn validate_outbound(
         return Err(OutboundError::NotAuthenticated);
     }
 
-    if request.connector.ip_address.parse::<std::net::IpAddr>().is_err() {
+    if request
+        .connector
+        .ip_address
+        .parse::<std::net::IpAddr>()
+        .is_err()
+    {
         return Err(OutboundError::InvalidSourceAddress);
     }
 

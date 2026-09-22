@@ -76,43 +76,43 @@ DROP POLICY IF EXISTS domains_isolation ON domains;
 ALTER TABLE tenant_message_instances ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tenant_message_instances FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_messages_isolation ON tenant_message_instances
-    USING (customer_id = current_setting('app.current_customer_id', true))
-    WITH CHECK (customer_id = current_setting('app.current_customer_id', true));
+    USING (customer_id = current_setting('app.current_customer_id'))
+    WITH CHECK (customer_id = current_setting('app.current_customer_id'));
 
 ALTER TABLE audit_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_events FORCE ROW LEVEL SECURITY;
 CREATE POLICY audit_events_isolation ON audit_events
-    USING (customer_id = current_setting('app.current_customer_id', true))
-    WITH CHECK (customer_id = current_setting('app.current_customer_id', true));
+    USING (customer_id = current_setting('app.current_customer_id'))
+    WITH CHECK (customer_id = current_setting('app.current_customer_id'));
 
 ALTER TABLE artifacts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE artifacts FORCE ROW LEVEL SECURITY;
 CREATE POLICY artifacts_isolation ON artifacts
-    USING (customer_id = current_setting('app.current_customer_id', true))
-    WITH CHECK (customer_id = current_setting('app.current_customer_id', true));
+    USING (customer_id = current_setting('app.current_customer_id'))
+    WITH CHECK (customer_id = current_setting('app.current_customer_id'));
 
 ALTER TABLE domains ENABLE ROW LEVEL SECURITY;
 ALTER TABLE domains FORCE ROW LEVEL SECURITY;
 CREATE POLICY domains_isolation ON domains
-    USING (customer_id = current_setting('app.current_customer_id', true))
-    WITH CHECK (customer_id = current_setting('app.current_customer_id', true));
+    USING (customer_id = current_setting('app.current_customer_id'))
+    WITH CHECK (customer_id = current_setting('app.current_customer_id'));
 
 ALTER TABLE policy_revisions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE policy_revisions FORCE ROW LEVEL SECURITY;
 CREATE POLICY policy_revisions_isolation ON policy_revisions
-    USING (customer_id = current_setting('app.current_customer_id', true))
-    WITH CHECK (customer_id = current_setting('app.current_customer_id', true));
+    USING (customer_id = current_setting('app.current_customer_id'))
+    WITH CHECK (customer_id = current_setting('app.current_customer_id'));
 
 ALTER TABLE config_revisions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE config_revisions FORCE ROW LEVEL SECURITY;
 CREATE POLICY config_revisions_tenant_isolation ON config_revisions
     USING (
         scope = 'tenant'
-        AND scope_id = current_setting('app.current_customer_id', true)
+        AND scope_id = current_setting('app.current_customer_id')
     )
     WITH CHECK (
         scope = 'tenant'
-        AND scope_id = current_setting('app.current_customer_id', true)
+        AND scope_id = current_setting('app.current_customer_id')
     );
 
 ALTER TABLE feature_overrides ENABLE ROW LEVEL SECURITY;
@@ -120,18 +120,18 @@ ALTER TABLE feature_overrides FORCE ROW LEVEL SECURITY;
 CREATE POLICY feature_overrides_tenant_isolation ON feature_overrides
     USING (
         scope = 'tenant'
-        AND scope_id = current_setting('app.current_customer_id', true)
+        AND scope_id = current_setting('app.current_customer_id')
     )
     WITH CHECK (
         scope = 'tenant'
-        AND scope_id = current_setting('app.current_customer_id', true)
+        AND scope_id = current_setting('app.current_customer_id')
     );
 
 ALTER TABLE outbox_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE outbox_events FORCE ROW LEVEL SECURITY;
 CREATE POLICY outbox_events_tenant_isolation ON outbox_events
-    USING (customer_id = current_setting('app.current_customer_id', true))
-    WITH CHECK (customer_id = current_setting('app.current_customer_id', true));
+    USING (customer_id = current_setting('app.current_customer_id'))
+    WITH CHECK (customer_id = current_setting('app.current_customer_id'));
 
 ALTER TABLE tenant_message_recipients ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tenant_message_recipients FORCE ROW LEVEL SECURITY;
@@ -141,7 +141,7 @@ CREATE POLICY tenant_message_recipients_isolation ON tenant_message_recipients
             SELECT 1
             FROM tenant_message_instances tmi
             WHERE tmi.id = tenant_message_recipients.tenant_message_id
-              AND tmi.customer_id = current_setting('app.current_customer_id', true)
+              AND tmi.customer_id = current_setting('app.current_customer_id')
         )
     )
     WITH CHECK (
@@ -149,7 +149,7 @@ CREATE POLICY tenant_message_recipients_isolation ON tenant_message_recipients
             SELECT 1
             FROM tenant_message_instances tmi
             WHERE tmi.id = tenant_message_recipients.tenant_message_id
-              AND tmi.customer_id = current_setting('app.current_customer_id', true)
+              AND tmi.customer_id = current_setting('app.current_customer_id')
         )
     );
 
@@ -161,7 +161,7 @@ CREATE POLICY delivery_attempts_isolation ON delivery_attempts
             SELECT 1
             FROM tenant_message_instances tmi
             WHERE tmi.id = delivery_attempts.tenant_message_id
-              AND tmi.customer_id = current_setting('app.current_customer_id', true)
+              AND tmi.customer_id = current_setting('app.current_customer_id')
         )
     )
     WITH CHECK (
@@ -169,7 +169,7 @@ CREATE POLICY delivery_attempts_isolation ON delivery_attempts
             SELECT 1
             FROM tenant_message_instances tmi
             WHERE tmi.id = delivery_attempts.tenant_message_id
-              AND tmi.customer_id = current_setting('app.current_customer_id', true)
+              AND tmi.customer_id = current_setting('app.current_customer_id')
         )
     );
 

@@ -33,7 +33,9 @@ export async function loadSession(signal?: AbortSignal): Promise<Session | null>
 
 export function beginLogin(returnTo = "/"): void {
   const target = new URL("/api/v1/auth/login", window.location.origin);
-  target.searchParams.set("return_to", returnTo.startsWith("/") ? returnTo : "/");
+  const safeReturnTo =
+    returnTo.startsWith("/") && !returnTo.startsWith("//") ? returnTo : "/";
+  target.searchParams.set("return_to", safeReturnTo);
   window.location.assign(target.toString());
 }
 
