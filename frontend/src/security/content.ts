@@ -7,14 +7,41 @@
  * Follows: docs/23-FRONTEND-ARCHITECTURE.md
  */
 
+import DOMPurify from "dompurify";
+
 // Sanitize a string for safe display in the trusted UI
+// Uses DOMPurify instead of manual regex replacements
 export function sanitizeDisplay(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#x27;");
+  return DOMPurify.sanitize(text, {
+    ALLOWED_TAGS: [],
+    ALLOWED_ATTR: [],
+  });
+}
+
+// Sanitize HTML content (for rich email preview)
+export function sanitizeHtml(html: string): string {
+  return DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: [
+      "b",
+      "i",
+      "em",
+      "strong",
+      "p",
+      "br",
+      "ul",
+      "ol",
+      "li",
+      "a",
+      "span",
+      "div",
+      "table",
+      "tr",
+      "td",
+      "th",
+    ],
+    ALLOWED_ATTR: ["href", "title", "style"],
+    ALLOW_DATA_ATTR: false,
+  });
 }
 
 // Check if a URL is safe to link to (no javascript: or data: schemes)

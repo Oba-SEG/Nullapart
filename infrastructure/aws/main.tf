@@ -13,6 +13,10 @@ terraform {
       source  = "hashicorp/tls"
       version = "~> 4.0"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.0"
+    }
   }
   
   # Production uses remote state with encryption
@@ -381,7 +385,33 @@ resource "aws_iam_role_policy_attachment" "mail_node_ssm" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
-# RDS PostgreSQL
+# RDS PostgreSQL — password managed via Secrets Manager
+resource "random_password" "rds_master" {
+  length           = 32
+  special          = true
+  override_special = "!#$%&*()-_=+[]{}<>:?"
+}
+
+resource "aws_secretsmanager_secret" "rds_password" {
+  name        = "nullapart-${var.environment}-rds-password"
+  description = "Master password for Nullapart RDS PostgreSQL"
+  tags = {
+    Name = "nullapart-rds-password"
+  }
+}
+
+resource "aws_secretsmanager_secret_version" "rds_password" {
+  secret_id = aws_secretsmanager_secret.rds_password.id
+  secret_string = jsonencode({
+    username = "nullapart_admin"
+    password = random_password.rds_master.result
+    engine   = "postgres"
+    host     = module.rds.db_instance_address
+    port     = module.rds.db_instance_port
+    dbname   = "nullapart"
+  })
+}
+
 module "rds" {
   source  = "terraform-aws-modules/rds/aws"
   version = "~> 6.0"
@@ -399,7 +429,7 @@ module "rds" {
   
   db_name  = "nullapart"
   username = "nullapart_admin"
-  # password set via SSM Parameter Store or OpenBao
+  password = random_password.rds_master.result
   
   vpc_id             = module.vpc.vpc_id
   subnet_ids         = module.vpc.private_subnets

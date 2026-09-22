@@ -6,11 +6,11 @@ export default defineConfig({
   plugins: [react(), tsconfigPaths()],
   server: {
     port: 3000,
-    host: true,
+    // host: true removed — binds to 0.0.0.0 by default, security risk
   },
   build: {
     target: 'ES2022',
-    sourcemap: true,
+    sourcemap: false, // Security: do not ship sourcemaps in production
   },
   test: {
     globals: true,

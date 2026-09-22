@@ -7,6 +7,7 @@
 use std::env;
 use std::io::Read;
 use std::process;
+use std::sync::LazyLock;
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
@@ -20,6 +21,15 @@ use sha2::{Digest, Sha256};
 
 const EX_TEMPFAIL: i32 = 75;
 const HANDOFF_PATH: &str = "/internal/handoff";
+
+/// Shared HTTP client with connection pooling across invocations.
+static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .pool_max_idle_per_host(4)
+        .pool_idle_timeout(std::time::Duration::from_secs(30))
+        .build()
+        .expect("failed to create HTTP client")
+});
 
 #[derive(Debug)]
 struct Args {
@@ -185,7 +195,7 @@ async fn run() -> Result<(), String> {
     let endpoint = env::var("NULLAPART_MAILCORE_HANDOFF_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:8081/internal/handoff".to_string());
 
-    let response = reqwest::Client::new()
+    let response = HTTP_CLIENT
         .post(endpoint)
         .header("content-type", "application/json")
         .header("x-nullapart-signature", signature.to_header())

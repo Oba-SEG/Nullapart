@@ -112,11 +112,16 @@ pub enum DmarcPolicy {
 
 impl DmarcEvaluation {
     pub fn to_auth_result(&self) -> AuthResult {
+        let policy_str = match self.policy {
+            DmarcPolicy::None => "none",
+            DmarcPolicy::Quarantine => "quarantine",
+            DmarcPolicy::Reject => "reject",
+        };
         AuthResult {
             result: self.result,
             detail: Some(format!(
-                "spf={} dkim={} policy={:?}",
-                self.spf_aligned, self.dkim_aligned, self.policy
+                "spf={} dkim={} policy={}",
+                self.spf_aligned, self.dkim_aligned, policy_str
             )),
             identity: Some(self.domain.clone()),
             selector: None,

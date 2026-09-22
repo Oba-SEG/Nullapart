@@ -1,10 +1,14 @@
 //! Scanner SDK types
 //!
 //! Shared types for scanner integration: scan requests, results, findings, and status.
+//! Canonical types live in `nullapart-mail-contracts`; this module re-exports them.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+// Re-export canonical types from mail-contracts
+pub use nullapart_mail_contracts::{FindingSeverity, ScannerStatus};
 
 use crate::trait_defs::ScannerId;
 
@@ -75,17 +79,6 @@ pub struct ScannerFinding {
     pub false_positive: bool,
 }
 
-/// Normalized finding severity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum FindingSeverity {
-    Info,
-    Low,
-    Medium,
-    High,
-    Critical,
-}
-
 /// An indicator found in a finding.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FindingIndicator {
@@ -144,27 +137,137 @@ pub struct ScannerHealth {
     pub queue_depth: Option<u32>,
 }
 
-/// Scanner operational status.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ScannerStatus {
-    Clean,
-    Threat,
-    Suspicious,
-    Unknown,
-    Error,
-    NotApplicable,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl std::fmt::Display for ScannerStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Clean => write!(f, "clean"),
-            Self::Threat => write!(f, "threat"),
-            Self::Suspicious => write!(f, "suspicious"),
-            Self::Unknown => write!(f, "unknown"),
-            Self::Error => write!(f, "error"),
-            Self::NotApplicable => write!(f, "not_applicable"),
-        }
+    #[test]
+    fn scan_request_serde_roundtrip() {
+        let req = ScanRequest {
+            request_id: Uuid::new_v4(),
+            transaction_id: "tx-001".to_string(),
+            tenant_message_id: Some("msg-001".to_string()),
+            customer_id: Some("cust-001".to_string()),
+            deployment_id: "CZA-1".to_string(),
+            artifact_id: "artifact-001".to_string(),
+            content_type: "message/rfc822".to_string(),
+            content_hash: "sha256:abc123".to_string(),
+            timeout_ms: 5000,
+            requested_at: Utc::now(),
+            params: serde_json::json!({"max_depth": 3}),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: ScanRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(req.request_id, back.request_id);
+        assert_eq!(req.transaction_id, back.transaction_id);
+        assert_eq!(req.deployment_id, back.deployment_id);
+    }
+
+    #[test]
+    fn scan_result_serde_roundtrip() {
+        let result = ScanResult {
+            request_id: Uuid::new_v4(),
+            scanner_id: ScannerId::new("clamav"),
+            status: ScannerStatus::Clean,
+            message: None,
+            findings: vec![],
+            completed_at: Utc::now(),
+            duration_ms: 42,
+            details: None,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let back: ScanResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(result.request_id, back.request_id);
+        assert_eq!(result.status, ScannerStatus::Clean);
+    }
+
+    #[test]
+    fn scanner_finding_serde_roundtrip() {
+        let finding = ScannerFinding {
+            id: Uuid::new_v4(),
+            severity: FindingSeverity::High,
+            category: "malware".to_string(),
+            description: "EICAR test file detected".to_string(),
+            details: Some(serde_json::json!({"engine": "clamav"})),
+            indicators: vec![FindingIndicator {
+                indicator_type: IndicatorType::Hash,
+                value: "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f"
+                    .to_string(),
+                context: None,
+            }],
+            false_positive: false,
+        };
+        let json = serde_json::to_string(&finding).unwrap();
+        let back: ScannerFinding = serde_json::from_str(&json).unwrap();
+        assert_eq!(finding.severity, FindingSeverity::High);
+        assert_eq!(back.indicators.len(), 1);
+        assert_eq!(back.indicators[0].indicator_type, IndicatorType::Hash);
+    }
+
+    #[test]
+    fn scanner_capabilities_serde_roundtrip() {
+        let caps = ScannerCapabilities {
+            supported_content_types: vec!["message/rfc822".to_string()],
+            max_content_size: 52_428_800,
+            latency_class: LatencyClass::Fast,
+            requires_network: false,
+            milter_compatible: true,
+            extra: serde_json::json!({}),
+        };
+        let json = serde_json::to_string(&caps).unwrap();
+        let back: ScannerCapabilities = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.latency_class, LatencyClass::Fast);
+        assert!(back.milter_compatible);
+    }
+
+    #[test]
+    fn scanner_health_serde_roundtrip() {
+        let health = ScannerHealth {
+            healthy: true,
+            message: Some("OK".to_string()),
+            checked_at: Utc::now(),
+            uptime_seconds: Some(86400),
+            queue_depth: Some(0),
+        };
+        let json = serde_json::to_string(&health).unwrap();
+        let back: ScannerHealth = serde_json::from_str(&json).unwrap();
+        assert!(back.healthy);
+        assert_eq!(back.uptime_seconds, Some(86400));
+    }
+
+    #[test]
+    fn finding_severity_serializes_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&FindingSeverity::Critical).unwrap(),
+            "\"critical\""
+        );
+        assert_eq!(
+            serde_json::to_string(&FindingSeverity::Info).unwrap(),
+            "\"info\""
+        );
+    }
+
+    #[test]
+    fn scanner_status_serializes_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&ScannerStatus::Clean).unwrap(),
+            "\"clean\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ScannerStatus::NotApplicable).unwrap(),
+            "\"not_applicable\""
+        );
+    }
+
+    #[test]
+    fn indicator_type_serializes_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&IndicatorType::Url).unwrap(),
+            "\"url\""
+        );
+        assert_eq!(
+            serde_json::to_string(&IndicatorType::Certificate).unwrap(),
+            "\"certificate\""
+        );
     }
 }

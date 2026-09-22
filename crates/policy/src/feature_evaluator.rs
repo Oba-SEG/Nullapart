@@ -15,15 +15,8 @@ use serde::{Deserialize, Serialize};
 
 use nullapart_mail_contracts::{CustomerId, DeploymentId};
 
-/// Feature identifier.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct FeatureId(pub String);
-
-impl FeatureId {
-    pub fn new(id: &str) -> Self {
-        Self(id.to_string())
-    }
-}
+// Re-export canonical FeatureId from mail-contracts
+pub use nullapart_mail_contracts::FeatureId;
 
 /// Override scope level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

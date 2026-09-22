@@ -68,6 +68,8 @@ pub struct ArtifactHash {
 pub enum HashAlgorithm {
     Sha256,
     Sha512,
+    /// Legacy-only — kept for backward-compatibility scanning of old artifacts.
+    /// Do not use for new content; prefer SHA-256 or SHA-512.
     Md5,
 }
 

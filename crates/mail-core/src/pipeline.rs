@@ -92,7 +92,9 @@ pub struct SmtpPipelineContext {
     pub milter_observations: Vec<MilterObservation>,
 }
 
-/// A trusted observation from the Rspamd milter stage.
+/// A single trusted observation from the Rspamd milter stage (pre-queue).
+/// This is the per-source observation; the aggregated after-queue version
+/// is `MilterObservations` in the handoff module.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MilterObservation {
     pub source: String,
