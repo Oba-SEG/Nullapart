@@ -2605,7 +2605,7 @@ fn finding_with_details(
 /// adapter's own max input. Content-limit and read failures map to canonical
 /// fail-safe [`ScanError`]s; a misbehaving provider that yields more bytes
 /// than the bound is rejected as a resource limit rather than analysed.
-async fn read_content_bounded(
+pub(crate) async fn read_content_bounded(
     content: &dyn ScanContent,
     max_input_bytes: u64,
 ) -> Result<Arc<[u8]>, ScanError> {

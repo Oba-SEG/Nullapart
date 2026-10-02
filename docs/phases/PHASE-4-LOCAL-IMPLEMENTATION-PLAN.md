@@ -1,8 +1,9 @@
 # Phase 4 Local Implementation Plan — Inline ML
 
-**Status:** plan active (started 2026-10-01); increments 1 and 2 complete and
-evidence-backed below (increment 2 closed 2026-10-01: dataset, training,
-evaluation, ONNX export and `ml/inline/MODEL-CARD.md` all recorded).
+**Status:** plan active (started 2026-10-01); increments 1, 2 and 3 complete
+and evidence-backed below (increment 3 closed 2026-10-02: stage wired behind
+`inline_ml_classification`, gates green, profiled, live smoke positive +
+fail-closed negative on `.4`).
 Increment 2 was resequenced by owner direction:
 model fine-tuning comes first (executed on the local workstation `.4`),
 inference wiring follows as increment 3. Increment 2 was then redefined by
@@ -12,7 +13,7 @@ sources plus Nullapart-owned synthetic fixtures for the 8 classes without
 permissive data, and five agreed baseline targets. Source survey is
 complete and approved; dataset fetch/prepare/train/eval/export under the
 new architecture is complete (evidence in increment 2 below). Next up:
-inference wiring (increment 3, pending the two-stage fabric ruling).
+model registry and audited admin API (increment 4).
 Increments are completed and
 evidence-backed one at a time; checked work is evidence-backed, not
 inferred from the presence of a module.
@@ -324,8 +325,86 @@ Complete (2026-10-01, all on `.4`, decisions 13–16 honored).
   onnxruntime's quantizer shape inference); `onnxscript==0.7.2` installed
   and pinned in `ml/inline/requirements.txt`.
 - **Not claimed/next:** artifact is not registered (increment 4),
-  inference is not wired (increment 3, pending the two-stage fabric
-  ruling), no customer data, no external benchmark.
+  no customer data, no external benchmark. Inference wiring is increment 3,
+  evidence-backed separately below.
+
+## Increment 3 evidence — inference stage, feature switch, adapter
+
+Complete (2026-10-02). Scope as planned: pass-2 inline ML stage behind
+`inline_ml_classification`, one extra single-scanner fabric pass merged
+before policy evaluation (owner-confirmed two-stage shape), explicit
+unavailable/unknown evidence on model failure.
+
+- **Wiring:** `crates/mail-core/src/inline_ml/` — `model_text.rs`
+  (training-parity `compose_model_text`/`clean_text`), `runtime.rs`
+  (ort session + tokenizer, fixed 1×128 input contract, sigmoid over the 13
+  canonical labels, typed `ModelError`s with `UnavailableRuntime` when the
+  model/tokenizer is missing or unloadable), `adapter.rs`
+  (`InlineMlScanner`, request params contract key `inline_ml`, provenance
+  `inline-ml-v1/{model_version}`, versioned `details` payload), `switch.rs`
+  (`FeatureEvaluator`-backed; any switch-read error fails to OFF), `stage.rs`
+  (switch gate, pass-2 fabric, `merge_pass2` keeping pass-1 `requires_hold`
+  authoritative). Pipeline: `ScanArtifact.params` now carried into every
+  `ScanRequest`; `DurableScannerPipeline::with_inline_ml`; the stage runs
+  after the pass-1 fabric scan and before `evaluate_policy`.
+  `mailcore-server` always constructs the stage from environment — a missing
+  model becomes an explicit unavailable runtime, never a silent skip.
+- **Compose/deploy:** `compose.local.yml` mailcore env
+  (`NULLAPART_INLINE_ML_MODEL_PATH`, `…_TOKENIZER_PATH`, `…_MODEL_ID`,
+  `…_MODEL_VERSION`) plus two read-only volume mounts of
+  `ml/inline/checkpoints/multilabel-v1/{onnx,model}`. Toolchain: the
+  builder gained `g++` (tokenizers → esaxx-rs) and both Dockerfile stages
+  moved bookworm → trixie because the ort-prebuilt onnxruntime needs
+  glibc ≥ 2.38 (`__isoc23_*`) and a GCC-14 libstdc++; recorded in
+  `docs/26-PACKAGE-COMPATIBILITY.md`.
+- **Evidence boundary (decided and tested):** successful inference emits
+  **no findings** — probabilities land in the versioned
+  `ScanResult.details` (not persisted by the Phase-2 scanner-evidence
+  schema; persisted success evidence = scanner result row `clean` + duration
+  + stage logs). Turning scores into findings/policy is increment 5 by
+  design. Any model/runtime failure produces the fabric's Unknown/Medium
+  failure finding; the local finding policy then quarantines (fail-closed) —
+  reviewed intent; `requires_hold` stays false because the stage is an
+  Optional scanner.
+- **Text-contract parity:** `compose_model_text` reproduces
+  `prepare_dataset.compose_text` exactly (part order, per-part clean+limit,
+  `Authentication-Results: ` prefix, final collapse/strip/10,240-char
+  truncate). Representation sanitization maps control characters to spaces
+  (training `clean_text` parity) while keeping `\n`/`\t`, instead of
+  dropping them — evidence test renamed to
+  `control_characters_are_neutralized_to_spaces_in_headers_and_text`.
+  **Python↔Rust parity run (2026-10-02):** same fixture text, 62 tokens,
+  onnxruntime-python vs Rust `ort` — argmax identical (Spam 0.9999560 vs
+  0.9999571), all 13 probabilities within 2.2e-8 absolute.
+- **Gates:** `cargo fmt --all -- --check`, `cargo clippy --workspace
+  --all-targets -- -D warnings`, `cargo test --workspace` — all green
+  (workspace includes 38 inline-ml unit tests); ignored PostgreSQL suite
+  5/5 via SSH tunnel against the `.4` scratch DB: the two Phase-2
+  baselines plus `inline_ml_stage_merges_pass2_evidence_when_feature_enabled`,
+  `inline_ml_stage_skips_when_deployment_override_disables_feature`,
+  `inline_ml_stage_unavailable_runtime_surfaces_explicit_unknown_failure`.
+- **Profiling:** ignored harness `tests/inline_ml_profile.rs` (debug build,
+  local workstation, real int8 model, n=200) — **p50 8.97 ms, p95 9.21 ms,
+  max 9.44 ms** for tokenize + inference, far inside the 750 ms stage
+  budget and the 500 ms assertion. Live release container on `.4`: inline
+  pass-2 wall time **68 ms** per message (stage log), also inside budget.
+  Export-side CPU p95 41.01 ms recorded in increment 2.
+- **Live smoke on `.4` (2026-10-02, HMAC-signed `POST /internal/handoff`):**
+  - positive (model present): handoff 200, all five scanner rows present,
+    `inline-ml-classifier` **clean, required=false, 68 ms**, **0 findings,
+    disposition allow, 0 quarantine cases** — scoring alone never changes
+    disposition; stage log `pass2_results=1 pass2_findings=0
+    pass2_failures=0`;
+  - negative (model artifact removed, container restarted): startup WARN
+    `model failed to load; runtime is unavailable`, handoff still 200,
+    inline row status **unknown**, finding **inline_ml / unknown / medium**,
+    disposition **quarantine** + 1 quarantine case (local policy
+    fail-closed), stage log `pass2_findings=1 pass2_failures=1`;
+  - restored: `inline ml model loaded` again, container healthy.
+- **Not claimed (increment 3):** no thresholds/bands or score→policy wiring
+  (increment 5), no registry (4), no UI (8), probability vectors not
+  persisted (schema change considered with increment 5), profiling is a
+  debug build on the local workstation unless stated, no customer data.
 
 ## Superseded work — binary pilot (not counted as increment 2)
 

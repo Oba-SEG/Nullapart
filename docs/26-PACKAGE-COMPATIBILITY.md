@@ -73,6 +73,8 @@ Phase 0 should maintain an implementation manifest such as:
 | TanStack Query | ^5.62.8 | React 18+ / supported TS | UI/integration | TBD | TBD |
 | Zod | ^3.24.1 | TS/tooling | form/API schema tests | TBD | TBD |
 | openidconnect (Rust OIDC relying party) | 4.0.1 (`Cargo.lock`) | reqwest + rustls, default features off | mail-core OIDC unit tests, ignored PostgreSQL suite, local ZITADEL v4.19.2 login | TBD | 2026-09-29 |
+| ort / ort-sys (Rust ONNX runtime) | 2.0.0-rc.13 (`Cargo.lock`, features `download-binaries`, `ndarray`) | downloads a pinned onnxruntime prebuilt; needs glibc ≥ 2.38 and a GCC-14 libstdc++ in the container image (Debian trixie) | mail-core inline ML unit/profile tests, tokenizer parity tests, live local compose smoke | TBD | 2026-10-02 |
+| tokenizers | 0.23.2 (`Cargo.lock`) | esaxx-rs builds C++; the builder stage needs `g++` | Rust tokenizer parity + compose-contract tests | TBD | 2026-10-02 |
 
 The lockfile remains the authoritative exact dependency resolution.
 
@@ -96,6 +98,16 @@ UserInfo responses) and is therefore covered by the upstream advisory and
 zero-day tracking in `docs/security/27-ZERO-DAY-INTELLIGENCE-RESPONSE.md`;
 upgrade it through this compatibility process, never by an ad-hoc version bump
 that changes TLS backends, HTTP clients or feature sets at the same time.
+
+The inline ML native toolchain is one compatibility unit: `Dockerfile.mailcore`
+builder and runtime stages run on Debian trixie (glibc 2.41, libstdc++ 14) with
+`g++` installed, because the onnxruntime prebuilt shipped by `ort` 2.0.0-rc.13
+references `__isoc23_*` glibc symbols (glibc ≥ 2.38) and GCC-14 libstdc++
+symbols that bookworm (glibc 2.36, libstdc++ 12) can neither link nor run, and
+`tokenizers` → `esaxx-rs` needs a C++ compiler. Upgrade the Debian release and
+the `ort`/`tokenizers` pair together through this process with a container
+build plus an inline ML profile/live smoke re-run — never by an ad-hoc version
+bump.
 
 Avoid duplicate incompatible crate versions when they materially increase risk/binary size or create conflicting protocol behavior.
 

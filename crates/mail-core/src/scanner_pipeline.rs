@@ -465,6 +465,7 @@ pub struct DurableScannerPipeline {
     store: FilesystemArtifactStore,
     fabric: Arc<crate::scanner_fabric::ScannerFabric>,
     persistence: PostgresPhase2Persistence,
+    inline_ml: Option<Arc<crate::inline_ml::stage::InlineMlStage>>,
 }
 
 impl DurableScannerPipeline {
@@ -485,7 +486,18 @@ impl DurableScannerPipeline {
             store,
             fabric,
             persistence: PostgresPhase2Persistence::new(pool),
+            inline_ml: None,
         }
+    }
+
+    /// Attach the optional pass-2 inline ML stage. `None` keeps the
+    /// deterministic single-pass behaviour (stage not provisioned).
+    pub fn with_inline_ml(
+        mut self,
+        stage: Option<Arc<crate::inline_ml::stage::InlineMlStage>>,
+    ) -> Self {
+        self.inline_ml = stage;
+        self
     }
 
     /// Stores, authorizes, scans, applies the scanner fail-safe floor, and
@@ -602,12 +614,36 @@ impl DurableScannerPipeline {
             content_type: authorized.content_type.clone(),
             content_hash: content_hash_of(&authorized.hash),
             size_bytes: authorized.bytes.len() as u64,
+            params: serde_json::Value::Null,
         };
         let content = Arc::new(InMemoryScanContent {
             bytes: Arc::from(authorized.bytes),
             content_type: authorized.content_type,
         });
-        let scan_result = self.fabric.scan(scan_artifact, content).await;
+        let scan_result = self
+            .fabric
+            .scan(
+                scan_artifact.clone(),
+                Arc::clone(&content) as Arc<dyn ScanContent>,
+            )
+            .await;
+        let scan_result = match &self.inline_ml {
+            Some(stage) => {
+                let pass2 = stage
+                    .run(
+                        &context,
+                        &scan_artifact,
+                        &scan_result,
+                        content.clone() as Arc<dyn ScanContent>,
+                    )
+                    .await;
+                match pass2 {
+                    Some(pass2) => crate::inline_ml::stage::merge_pass2(scan_result, pass2),
+                    None => scan_result,
+                }
+            },
+            None => scan_result,
+        };
         tracing::info!(
             scanner_outcomes = scan_result.results.len(),
             findings = scan_result.findings.len(),

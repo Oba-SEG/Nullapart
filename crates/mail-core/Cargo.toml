@@ -34,6 +34,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 quircs = "0.10"
 flate2 = "1.0"
 openidconnect = { version = "4.0.1", default-features = false, features = ["reqwest", "rustls-tls"] }
+ort = { version = "2.0.0-rc.13", features = ["download-binaries", "ndarray"] }
+tokenizers = "0.23.2"
 
 [dev-dependencies]
 sha2 = { version = "0.10", features = ["oid"] }

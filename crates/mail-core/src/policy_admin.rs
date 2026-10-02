@@ -165,11 +165,13 @@ const ADVISORY_LOCK_SQL: &str = "SELECT pg_advisory_xact_lock(hashtext($1))";
 const OUTBOX_INSERT_SQL: &str = "INSERT INTO outbox_events \
      (event_type, event_version, payload, idempotency_key, customer_id, deployment_id, trace_id) \
      VALUES ($1, $2, $3, $4, $5, $6, $7)";
-const FEATURE_DEFINITIONS_SQL: &str = "SELECT feature_id, description, default_value, mandatory, \
+pub(crate) const FEATURE_DEFINITIONS_SQL: &str =
+    "SELECT feature_id, description, default_value, mandatory, \
      kill_switch, allowed_scopes FROM feature_definitions ORDER BY feature_id";
 const FEATURE_DEFINITION_SQL: &str = "SELECT feature_id, description, default_value, mandatory, \
      kill_switch, allowed_scopes FROM feature_definitions WHERE feature_id = $1";
-const FEATURE_OVERRIDES_SQL: &str = "SELECT id, feature_id, scope, scope_id, value, owner, \
+pub(crate) const FEATURE_OVERRIDES_SQL: &str =
+    "SELECT id, feature_id, scope, scope_id, value, owner, \
      reason, revision, created_at, expires_at FROM feature_overrides \
      ORDER BY revision, created_at";
 const OVERRIDE_MAX_REVISION_SQL: &str = "SELECT COALESCE(MAX(revision), 0) + 1 \
@@ -813,7 +815,7 @@ async fn write_outbox(
 // Transaction helpers
 // ---------------------------------------------------------------------------
 
-async fn set_scope(
+pub(crate) async fn set_scope(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     deployment_id: &str,
     customer_id: &str,
@@ -1018,9 +1020,9 @@ fn override_from_row(row: FeatureOverrideRow) -> Option<LoadedOverride> {
     })
 }
 
-struct LoadedOverride {
+pub(crate) struct LoadedOverride {
     id: Uuid,
-    item: FeatureOverride,
+    pub(crate) item: FeatureOverride,
 }
 
 fn override_response(loaded: &LoadedOverride) -> FeatureOverrideResponse {
@@ -1047,7 +1049,7 @@ fn active_revision(row: &FamilyActiveRow) -> Option<RevisionSummaryResponse> {
     })
 }
 
-async fn load_definitions(
+pub(crate) async fn load_definitions(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     sql: &str,
     feature_id: Option<&str>,
@@ -1076,7 +1078,7 @@ async fn load_definitions(
     Ok(definitions)
 }
 
-async fn load_overrides(
+pub(crate) async fn load_overrides(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
 ) -> Result<Vec<LoadedOverride>, Response> {
     let rows = sqlx::query_as::<_, FeatureOverrideRow>(FEATURE_OVERRIDES_SQL)

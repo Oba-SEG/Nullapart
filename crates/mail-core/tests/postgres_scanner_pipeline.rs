@@ -310,3 +310,295 @@ async fn late_quarantine_conflict_rolls_back_artifact_evidence_and_disposition()
         .await
         .expect("rollback artifact fixture cleanup");
 }
+
+fn inline_fake_runtime(
+    ready: bool,
+) -> Arc<dyn nullapart_mail_core::inline_ml::runtime::InlineModelRuntime> {
+    struct FakeInlineRuntime {
+        ready: bool,
+    }
+    impl nullapart_mail_core::inline_ml::runtime::InlineModelRuntime for FakeInlineRuntime {
+        fn ready(&self) -> bool {
+            self.ready
+        }
+        fn representation_version(&self) -> u32 {
+            nullapart_mail_core::inline_ml::representation::INLINE_ML_REPRESENTATION_VERSION
+        }
+        fn identity(&self) -> nullapart_mail_core::inline_ml::runtime::ModelIdentity {
+            nullapart_mail_core::inline_ml::runtime::ModelIdentity {
+                model_id: "multilabel-v1".to_string(),
+                model_version: "1".to_string(),
+            }
+        }
+        fn infer(
+            &self,
+            _text: &str,
+        ) -> Result<
+            nullapart_mail_core::inline_ml::runtime::ModelInference,
+            nullapart_mail_core::inline_ml::runtime::ModelError,
+        > {
+            if !self.ready {
+                return Err(
+                    nullapart_mail_core::inline_ml::runtime::ModelError::Unavailable(
+                        "fake runtime not ready".to_string(),
+                    ),
+                );
+            }
+            Ok(nullapart_mail_core::inline_ml::runtime::ModelInference {
+                probabilities: vec![
+                    0.01;
+                    nullapart_mail_core::inline_ml::runtime::INLINE_ML_LABELS.len()
+                ],
+            })
+        }
+    }
+    Arc::new(FakeInlineRuntime { ready })
+}
+
+async fn scanner_result_row(
+    pool: &PgPool,
+    fixture: &TenantFixture,
+    scanner_id: &str,
+) -> Option<(String, bool, i64)> {
+    let mut transaction = pool.begin().await.expect("assertion transaction");
+    sqlx::query("SELECT set_config('app.current_customer_id', $1, true)")
+        .bind(&fixture.customer.0)
+        .execute(&mut *transaction)
+        .await
+        .expect("assertion RLS scope");
+    let row = sqlx::query(
+        "SELECT status, required, duration_ms FROM scanner_results \
+         WHERE tenant_message_id = $1 AND scanner_id = $2",
+    )
+    .bind(fixture.tenant_message_id.0)
+    .bind(scanner_id)
+    .fetch_optional(&mut *transaction)
+    .await
+    .expect("scanner result row");
+    transaction.commit().await.expect("assertion commit");
+    row.map(|row| {
+        (
+            row.get("status"),
+            row.get("required"),
+            row.get("duration_ms"),
+        )
+    })
+}
+
+async fn finding_rows(pool: &PgPool, fixture: &TenantFixture) -> Vec<(String, String)> {
+    let mut transaction = pool.begin().await.expect("assertion transaction");
+    sqlx::query("SELECT set_config('app.current_customer_id', $1, true)")
+        .bind(&fixture.customer.0)
+        .execute(&mut *transaction)
+        .await
+        .expect("assertion RLS scope");
+    let rows = sqlx::query(
+        "SELECT scanner_type, category FROM security_findings \
+         WHERE tenant_message_id = $1 ORDER BY created_at",
+    )
+    .bind(fixture.tenant_message_id.0)
+    .fetch_all(&mut *transaction)
+    .await
+    .expect("finding rows");
+    transaction.commit().await.expect("assertion commit");
+    rows.into_iter()
+        .map(|row| (row.get("scanner_type"), row.get("category")))
+        .collect()
+}
+
+fn benign_message() -> Vec<u8> {
+    b"Content-Type: text/plain\r\n\r\nhello from the tenant\r\n".to_vec()
+}
+
+#[tokio::test]
+#[ignore = "requires migrated local PostgreSQL through 014_policy_administration.sql and NULLAPART_TEST_DATABASE_URL"]
+async fn inline_ml_stage_merges_pass2_evidence_when_feature_enabled() {
+    let database_url = env::var("NULLAPART_TEST_DATABASE_URL")
+        .expect("NULLAPART_TEST_DATABASE_URL must target local test PostgreSQL");
+    let pool = PgPool::connect(&database_url)
+        .await
+        .expect("local PostgreSQL must connect");
+    let fixture = seed_tenant(&pool, "allow").await;
+    let root = env::temp_dir().join(format!(
+        "nullapart-pipeline-inline-on-{}",
+        fixture.tenant_message_id.0
+    ));
+    let store = FilesystemArtifactStore::try_new(root.clone(), FilesystemArtifactRuntime::Test)
+        .await
+        .expect("filesystem store must initialize");
+    let stage = nullapart_mail_core::inline_ml::stage::InlineMlStage::with_runtime(
+        pool.clone(),
+        inline_fake_runtime(true),
+    )
+    .expect("single inline ml registration must satisfy fabric validation");
+    let pipeline = DurableScannerPipeline::new(store, scanner_fabric(), pool.clone())
+        .with_inline_ml(Some(Arc::new(stage)));
+
+    let outcome = pipeline
+        .process(
+            context(&fixture),
+            benign_message(),
+            ContentType::new("message/rfc822"),
+            policy(Disposition::Allow),
+        )
+        .await
+        .expect("durable workflow with inline pass-2 must complete");
+    assert_eq!(outcome.disposition, Disposition::Allow);
+    assert!(!outcome.quarantine_created);
+
+    let inline_row = scanner_result_row(&pool, &fixture, "inline-ml-classifier")
+        .await
+        .expect("pass-2 inline scanner result must persist");
+    assert_eq!(inline_row.0, "clean", "successful inference records clean");
+    assert!(!inline_row.1, "inline stage is an optional scanner");
+    assert!(inline_row.2 >= 0, "duration is recorded");
+
+    let findings = finding_rows(&pool, &fixture).await;
+    assert!(
+        findings.is_empty(),
+        "successful inference must not emit policy findings: {findings:?}"
+    );
+    assert_eq!(
+        scoped_counts(&pool, &fixture).await,
+        (1, 2, 0, 0, 0, "allow".to_string()),
+        "pass-1 and pass-2 scanner rows persist without policy changes"
+    );
+
+    tokio::fs::remove_dir_all(root)
+        .await
+        .expect("artifact fixture cleanup");
+}
+
+#[tokio::test]
+#[ignore = "requires migrated local PostgreSQL through 014_policy_administration.sql and NULLAPART_TEST_DATABASE_URL"]
+async fn inline_ml_stage_skips_when_deployment_override_disables_feature() {
+    let database_url = env::var("NULLAPART_TEST_DATABASE_URL")
+        .expect("NULLAPART_TEST_DATABASE_URL must target local test PostgreSQL");
+    let pool = PgPool::connect(&database_url)
+        .await
+        .expect("local PostgreSQL must connect");
+    let fixture = seed_tenant(&pool, "allow").await;
+
+    let mut transaction = pool.begin().await.expect("override transaction");
+    sqlx::query("SELECT set_config('app.current_deployment_id', $1, true), set_config('app.current_customer_id', $2, true)")
+        .bind(&fixture.deployment.0)
+        .bind(&fixture.customer.0)
+        .execute(&mut *transaction)
+        .await
+        .expect("override RLS scope");
+    sqlx::query(
+        "INSERT INTO feature_overrides \
+            (feature_id, scope, scope_id, value, owner, reason, revision) \
+         VALUES ('inline_ml_classification', 'deployment', $1, 'disabled', \
+                 'integration-test', 'deployment override off', 1)",
+    )
+    .bind(&fixture.deployment.0)
+    .execute(&mut *transaction)
+    .await
+    .expect("deployment feature override must insert");
+    transaction.commit().await.expect("override commit");
+
+    let root = env::temp_dir().join(format!(
+        "nullapart-pipeline-inline-off-{}",
+        fixture.tenant_message_id.0
+    ));
+    let store = FilesystemArtifactStore::try_new(root.clone(), FilesystemArtifactRuntime::Test)
+        .await
+        .expect("filesystem store must initialize");
+    let stage = nullapart_mail_core::inline_ml::stage::InlineMlStage::with_runtime(
+        pool.clone(),
+        inline_fake_runtime(true),
+    )
+    .expect("single inline ml registration must satisfy fabric validation");
+    let pipeline = DurableScannerPipeline::new(store, scanner_fabric(), pool.clone())
+        .with_inline_ml(Some(Arc::new(stage)));
+
+    let outcome = pipeline
+        .process(
+            context(&fixture),
+            benign_message(),
+            ContentType::new("message/rfc822"),
+            policy(Disposition::Allow),
+        )
+        .await
+        .expect("durable workflow must complete with stage skipped");
+    assert_eq!(outcome.disposition, Disposition::Allow);
+    assert!(
+        scanner_result_row(&pool, &fixture, "inline-ml-classifier")
+            .await
+            .is_none(),
+        "disabled feature must skip pass-2 entirely"
+    );
+    assert_eq!(
+        scoped_counts(&pool, &fixture).await,
+        (1, 1, 0, 0, 0, "allow".to_string()),
+        "only pass-1 evidence persists when the switch is off"
+    );
+
+    tokio::fs::remove_dir_all(root)
+        .await
+        .expect("artifact fixture cleanup");
+}
+
+#[tokio::test]
+#[ignore = "requires migrated local PostgreSQL through 014_policy_administration.sql and NULLAPART_TEST_DATABASE_URL"]
+async fn inline_ml_stage_unavailable_runtime_surfaces_explicit_unknown_failure() {
+    let database_url = env::var("NULLAPART_TEST_DATABASE_URL")
+        .expect("NULLAPART_TEST_DATABASE_URL must target local test PostgreSQL");
+    let pool = PgPool::connect(&database_url)
+        .await
+        .expect("local PostgreSQL must connect");
+    let fixture = seed_tenant(&pool, "allow").await;
+    let root = env::temp_dir().join(format!(
+        "nullapart-pipeline-inline-unavailable-{}",
+        fixture.tenant_message_id.0
+    ));
+    let store = FilesystemArtifactStore::try_new(root.clone(), FilesystemArtifactRuntime::Test)
+        .await
+        .expect("filesystem store must initialize");
+    let stage = nullapart_mail_core::inline_ml::stage::InlineMlStage::with_runtime(
+        pool.clone(),
+        inline_fake_runtime(false),
+    )
+    .expect("single inline ml registration must satisfy fabric validation");
+    let pipeline = DurableScannerPipeline::new(store, scanner_fabric(), pool.clone())
+        .with_inline_ml(Some(Arc::new(stage)));
+
+    let outcome = pipeline
+        .process(
+            context(&fixture),
+            benign_message(),
+            ContentType::new("message/rfc822"),
+            policy(Disposition::Allow),
+        )
+        .await
+        .expect("durable workflow must complete with unavailable runtime");
+    assert_eq!(
+        outcome.disposition,
+        Disposition::Allow,
+        "optional pass-2 failure never forces a hold on its own"
+    );
+
+    let inline_row = scanner_result_row(&pool, &fixture, "inline-ml-classifier")
+        .await
+        .expect("failed pass-2 attempt must still record evidence");
+    assert_eq!(
+        inline_row.0, "unknown",
+        "unavailable runtime records unknown status, never clean"
+    );
+
+    let findings = finding_rows(&pool, &fixture).await;
+    assert_eq!(
+        findings,
+        vec![("inline_ml".to_string(), "unknown".to_string())],
+        "failure becomes explicit Unknown evidence, never a clean result"
+    );
+    assert_eq!(
+        scoped_counts(&pool, &fixture).await,
+        (1, 2, 1, 0, 0, "allow".to_string())
+    );
+
+    tokio::fs::remove_dir_all(root)
+        .await
+        .expect("artifact fixture cleanup");
+}

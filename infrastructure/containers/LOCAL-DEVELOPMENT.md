@@ -163,3 +163,46 @@ Postfix and Rspamd are part of this stack; a service that merely starts the
 daemons is not sufficient evidence, so the after-queue handoff, quarantine,
 authorized release and reinjection contracts must be exercised end to end
 before a Phase 2 completion claim.
+
+## Inline ML model provisioning
+
+`mailcore` in `compose.local.yml` runs the pass-2 inline ML stage behind the
+server-authoritative `inline_ml_classification` switch. The stage is always
+constructed from environment; a missing model becomes an explicit
+unavailable runtime (unknown scanner evidence), never a silent skip.
+
+Required checkout state (read-only volume mounts):
+
+```text
+ml/inline/checkpoints/multilabel-v1/onnx/model_int8.onnx   # int8 export
+ml/inline/checkpoints/multilabel-v1/model/tokenizer.json
+```
+
+These paths are excluded from rsync deploys (checkpoints are local build
+outputs); provision them directly on the target host after fetching or
+building the model. The container reads:
+
+- `NULLAPART_INLINE_ML_MODEL_PATH=/var/lib/nullapart/inline-ml/onnx/model_int8.onnx`
+- `NULLAPART_INLINE_ML_TOKENIZER_PATH=/var/lib/nullapart/inline-ml/model/tokenizer.json`
+- `NULLAPART_INLINE_ML_MODEL_ID=multilabel-v1`
+- `NULLAPART_INLINE_ML_MODEL_VERSION=1`
+
+Because the switch is seeded enabled and its kill switch is server-
+authoritative, running with the switch on and the model absent fails closed:
+messages get `inline-ml-classifier` status `unknown`, an `unknown`/`medium`
+finding, and a local-policy quarantine. To exercise that path deliberately:
+
+```text
+mv ml/inline/checkpoints/multilabel-v1/onnx/model_int8.onnx{,.bak}
+docker compose --env-file .env.local -f compose.local.yml restart mailcore
+# observe WARN "model failed to load; runtime is unavailable" in
+# docker logs nullapart-local-mailcore-1, then send a message and check
+# scanner_results.status = 'unknown' and a quarantine case
+mv ml/inline/checkpoints/multilabel-v1/onnx/model_int8.onnx{.bak,}
+docker compose --env-file .env.local -f compose.local.yml restart mailcore
+# confirm "inline ml model loaded" in the log
+```
+
+Model provenance, training and evaluation are documented in
+`ml/inline/MODEL-CARD.md`; compatibility constraints on the native runtime
+are in `docs/26-PACKAGE-COMPATIBILITY.md`.

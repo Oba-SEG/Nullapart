@@ -185,7 +185,7 @@ pub fn build(sources: &RepresentationSources<'_>) -> InlineMlRepresentation {
         from_domain: None,
         envelope_sender: sources
             .envelope_sender
-            .map(sanitize_header)
+            .map(sanitize_field)
             .map(|s| s.chars().take(MAX_HEADER_VALUE_CHARS).collect()),
     };
 
@@ -193,7 +193,7 @@ pub fn build(sources: &RepresentationSources<'_>) -> InlineMlRepresentation {
         for header in &parsed.headers {
             let name = header.get_key().to_ascii_lowercase();
             if name == "subject" {
-                subject = sanitize_header(&header.get_value());
+                subject = sanitize_field(&header.get_value());
                 continue;
             }
             if !ALLOWED_HEADERS.contains(&name.as_str()) {
@@ -208,7 +208,7 @@ pub fn build(sources: &RepresentationSources<'_>) -> InlineMlRepresentation {
             }
             headers.push(HeaderField {
                 name,
-                value: sanitize_header(&value)
+                value: sanitize_field(&value)
                     .chars()
                     .take(MAX_HEADER_VALUE_CHARS)
                     .collect(),
@@ -259,7 +259,7 @@ pub fn build(sources: &RepresentationSources<'_>) -> InlineMlRepresentation {
             .iter()
             .take(MAX_VIP_PRINCIPALS)
             .map(|p| {
-                sanitize_header(p)
+                sanitize_field(p)
                     .chars()
                     .take(MAX_ATTACHMENT_NAME_CHARS)
                     .collect()
@@ -339,7 +339,7 @@ fn walk_part<'a>(mail: &'a ParsedMail<'a>, depth: u32, state: &mut WalkState) {
         if raw_len > MAX_RAW_PART_BYTES {
             state.push_text("[omitted: text part exceeds per-part size limit]");
             state.truncated = true;
-            state.note_urls(&sanitize_text(&String::from_utf8_lossy(
+            state.note_urls(&sanitize_field(&String::from_utf8_lossy(
                 &mail.raw_bytes[..raw_len.min(MAX_RAW_PART_BYTES)],
             )));
             return;
@@ -359,10 +359,10 @@ fn walk_part<'a>(mail: &'a ParsedMail<'a>, depth: u32, state: &mut WalkState) {
         if mimetype == "text/html" {
             let cleaned = strip_html(&bounded);
             state.note_urls(&bounded);
-            state.push_text(&sanitize_text(&cleaned));
+            state.push_text(&sanitize_field(&cleaned));
         } else {
             state.note_urls(&bounded);
-            state.push_text(&sanitize_text(&bounded));
+            state.push_text(&sanitize_field(&bounded));
         }
         return;
     }
@@ -379,12 +379,12 @@ fn walk_part<'a>(mail: &'a ParsedMail<'a>, depth: u32, state: &mut WalkState) {
             return;
         }
         let filename = filename
-            .map(|name| sanitize_header(&name))
+            .map(|name| sanitize_field(&name))
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| "unnamed".to_string());
         state.attachments.push(AttachmentSignal {
             filename: filename.chars().take(MAX_ATTACHMENT_NAME_CHARS).collect(),
-            content_type: sanitize_header(&mail.ctype.mimetype)
+            content_type: sanitize_field(&mail.ctype.mimetype)
                 .chars()
                 .take(MAX_ATTACHMENT_NAME_CHARS)
                 .collect(),
@@ -393,13 +393,20 @@ fn walk_part<'a>(mail: &'a ParsedMail<'a>, depth: u32, state: &mut WalkState) {
     }
 }
 
-fn sanitize_header(raw: &str) -> String {
-    raw.chars().filter(|ch| !ch.is_control()).collect()
-}
-
-fn sanitize_text(raw: &str) -> String {
+/// Neutralize control characters as spaces while preserving structural
+/// whitespace (`\n`, `\t`). Training-side `clean_text` replaced control
+/// characters with spaces before collapsing (`prepare_dataset.py`), so
+/// dropping them would merge words and diverge from the checkpoint's text
+/// contract; a space is inert for stored evidence (no log/UI injection).
+fn sanitize_field(raw: &str) -> String {
     raw.chars()
-        .filter(|ch| !ch.is_control() || *ch == '\n' || *ch == '\t')
+        .map(|ch| {
+            if ch.is_control() && ch != '\n' && ch != '\t' {
+                ' '
+            } else {
+                ch
+            }
+        })
         .collect()
 }
 
@@ -778,7 +785,7 @@ mod tests {
     }
 
     #[test]
-    fn control_characters_are_stripped_from_headers_and_text() {
+    fn control_characters_are_neutralized_to_spaces_in_headers_and_text() {
         let mime = [
             "From: a@example.test\r\n",
             "Subject: hi\u{0000}there\u{0007} done\r\n",
@@ -793,10 +800,10 @@ mod tests {
             envelope_sender: None,
             vip: None,
         });
-        assert_eq!(representation.subject.text, "hithere done");
+        assert_eq!(representation.subject.text, "hi there  done");
         assert!(!representation.text.text.contains('\u{0008}'));
         assert!(!representation.text.text.contains('\u{001b}'));
-        assert!(representation.text.text.contains("lineone\nline[2Jtwo"));
+        assert!(representation.text.text.contains("line one \nline [2Jtwo"));
     }
 
     #[test]

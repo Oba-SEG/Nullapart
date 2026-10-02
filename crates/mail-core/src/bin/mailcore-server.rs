@@ -15,6 +15,7 @@ use nullapart_mail_core::admin_rbac::{
 use nullapart_mail_core::artifact_recovery::recover_persisted_artifacts;
 use nullapart_mail_core::artifact_store::{FilesystemArtifactRuntime, FilesystemArtifactStore};
 use nullapart_mail_core::handoff::HandoffConfig;
+use nullapart_mail_core::inline_ml::stage::InlineMlStage;
 use nullapart_mail_core::operations_api::{operations_router, OperationsState};
 use nullapart_mail_core::phase2_handoff::{durable_handoff_router, DurableHandoffState};
 use nullapart_mail_core::policy_admin::{policy_admin_router, AdminPolicyState};
@@ -103,8 +104,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &artifact_store,
     )
     .await?;
+    let inline_ml_stage = Arc::new(InlineMlStage::from_environment(pool.clone()).await);
     let pipeline =
-        DurableScannerPipeline::new_shared(artifact_store.clone(), scanner_fabric, pool.clone());
+        DurableScannerPipeline::new_shared(artifact_store.clone(), scanner_fabric, pool.clone())
+            .with_inline_ml(Some(inline_ml_stage));
     let handoff = durable_handoff_router(DurableHandoffState::new(
         handoff_config,
         pool.clone(),

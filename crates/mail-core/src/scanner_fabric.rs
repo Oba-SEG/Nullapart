@@ -50,6 +50,10 @@ pub struct ScanArtifact {
     pub content_type: ContentType,
     pub content_hash: ContentHash,
     pub size_bytes: u64,
+    /// Scanner-specific parameters handed to every scanner registered for
+    /// this run (`Null` for the deterministic pass; structured stage
+    /// parameters for the optional inline ML pass).
+    pub params: serde_json::Value,
 }
 
 /// Whether scanner failure blocks policy/delivery.
@@ -452,7 +456,7 @@ fn scan_target(artifact: &ScanArtifact) -> ScanTarget {
         content_hash: artifact.content_hash.clone(),
         artifact_size_bytes: artifact.size_bytes,
         requested_at: Utc::now(),
-        params: serde_json::Value::Null,
+        params: artifact.params.clone(),
     }
 }
 
@@ -603,6 +607,7 @@ mod tests {
             content_type: ContentType::new("message/rfc822"),
             content_hash: hash_of(bytes),
             size_bytes: bytes.len() as u64,
+            params: serde_json::Value::Null,
         }
     }
 

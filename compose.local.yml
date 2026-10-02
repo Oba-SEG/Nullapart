@@ -63,6 +63,14 @@ services:
       NULLAPART_LOCAL_CONTROL_CUSTOMER_ID: ${NULLAPART_LOCAL_CONTROL_CUSTOMER_ID:-CZA-1}
       NULLAPART_TRACE_WORKLOAD_TOKEN: ${NULLAPART_TRACE_WORKLOAD_TOKEN:-}
       NULLAPART_DNS_RESOLVER: ${NULLAPART_DNS_RESOLVER:-}
+      # Inline ML pass-2 stage (Phase 4 increment 3). The feature switch
+      # `inline_ml_classification` is seeded enabled, so the local
+      # deployment provisions the evaluated checkpoint artifacts below; a
+      # missing artifact surfaces explicit Unknown/Error scanner evidence.
+      NULLAPART_INLINE_ML_MODEL_PATH: /var/lib/nullapart/inline-ml/onnx/model_int8.onnx
+      NULLAPART_INLINE_ML_TOKENIZER_PATH: /var/lib/nullapart/inline-ml/model/tokenizer.json
+      NULLAPART_INLINE_ML_MODEL_ID: multilabel-v1
+      NULLAPART_INLINE_ML_MODEL_VERSION: "1"
       # Server-authoritative identity mode. proxy_header is the local/CI
       # default; oidc is only usable once the NULLAPART_OIDC_* family is set.
       # The OIDC variables stay empty in proxy_header mode and are ignored
@@ -77,6 +85,8 @@ services:
       - "${NULLAPART_BIND_ADDRESS:-127.0.0.1}:${NULLAPART_MAILCORE_PORT:-58081}:8081"
     volumes:
       - artifact-data:/var/lib/nullapart/artifacts
+      - ./ml/inline/checkpoints/multilabel-v1/onnx:/var/lib/nullapart/inline-ml/onnx:ro
+      - ./ml/inline/checkpoints/multilabel-v1/model:/var/lib/nullapart/inline-ml/model:ro
     depends_on:
       postgres:
         condition: service_healthy
