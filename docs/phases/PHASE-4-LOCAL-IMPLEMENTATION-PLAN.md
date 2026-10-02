@@ -276,25 +276,39 @@ Complete (2026-10-01, all on `.4`, decisions 13–16 honored).
   per-label, per-source and real-vs-synthetic counts in `stats.json`.
 - **Training** (`train.py` defaults: 3 epochs, batch 16, lr 3e-5, seed 42):
   best validation **macro-F1 0.9775**, macro-AUC 0.9999, clean FPR 0.0042,
-  train loss 0.0019 (`train-v2.log`, `best_val_metrics.json`); per-class
-  thresholds tuned on validation only (`thresholds.npy`, clean-FPR target
-  1%).
+  train loss 0.0019 (`train-v2.log`, `best_val_metrics.json`); train-time
+  per-class thresholds preserved at `thresholds_pre_sweep.npy`.
+- **Threshold re-selection (tune-first, validation only):**
+  `tune_sweep.py` re-selected `thresholds.npy` on validation across four
+  schemes (coarse 0.01–0.99 grid, fine, plateau); the pre-declared tie
+  rule chose **S1 coarse** (validation macro-F1 0.9801;
+  `tune_sweep_report.json`); test data never participated in selection.
+  The run also exposed a defect — `evaluate.py` compared raw logits
+  against probability-space thresholds (training and the baseline
+  already used sigmoid probabilities). Fixed at the evaluation call
+  site and re-measured; the superseded logits-space report is retained
+  on `.4` as `eval_report_pre_sweep.json`.
 - **Evaluation vs the five agreed targets** (`evaluate.py`,
-  `eval_report.json`): macro-F1 0.9807 ≥ 0.90 ✅; per-class AUC min 0.9995
-  ≥ 0.97 ✅ (no unscorable classes); clean FPR 0.0042 ≤ 0.01 ✅; baseline
-  delta **+0.0155 < +0.02 ❌** (TF-IDF/LogReg baseline test macro-F1
-  0.9652 — reported as failed, never redefined); latency/artifact targets
-  met on the deployment path via export below.
+  `eval_report.json`, corrected run 2026-10-02): macro-F1 **0.9862**
+  ≥ 0.90 ✅; per-class AUC min **0.9997** ≥ 0.97 ✅ (no unscorable
+  classes); clean FPR **0.0042** ≤ 0.01 ✅; baseline delta
+  **+0.0210 ≥ +0.02 ✅** (TF-IDF/LogReg baseline test macro-F1 0.9652,
+  unchanged) — **all five targets met**, margin 0.0010 on the baseline
+  target disclosed in the model card; latency/artifact targets met on
+  the deployment path via export below.
 - **Export** (`export_onnx.py`, `export_report.json`): opset 17; int8
   dynamic quantization **64.2 MB ≤ 100 MB ✅**, CPU p95 **41.01 ms ≤ 50 ms
   ✅** (batch 1, seq 128, `.4`, 300 iters), int8 parity mean abs diff
   0.00015 ≤ 0.05 with argmax agreement ✅ — all export targets met. The
-  fp32 torch-eager evaluation path (p95 70.76 ms, 255.53 MB) is an offline
-  harness and is disclosed as non-compliant on both counts.
+  fp32 torch-eager evaluation path (p95 69.37 ms corrected run,
+  255.53 MB) is an offline harness and is disclosed as non-compliant on
+  both counts.
 - **Model card:** `ml/inline/MODEL-CARD.md` — per-class P/R/F1/AUC tables,
   split/fixture counts (12,000 fixtures disclosed with the 8 synthetic-only
-  classes flagged), baseline comparison, the failed target, and all §7
-  limitations stated honestly. Linked from `ml/inline/README.md`.
+  classes flagged), baseline comparison, the tune-first re-measurement
+  (target (c) closed at +0.0210 with the evaluation defect fixed and the
+  margin disclosed), and all §7 limitations stated honestly. Linked from
+  `ml/inline/README.md`.
 - **Data-integrity check:** a deploy-time rsync of `ml/` used an incorrect
   exclude (`ml/data` instead of `ml/inline/data`) and overwrote the remote
   fixtures file with a 500-row local test copy. Detected by cross-checking

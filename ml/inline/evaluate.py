@@ -159,11 +159,13 @@ def main() -> int:
     tokenizer = DistilBertTokenizerFast.from_pretrained(args.checkpoint)
     model = DistilBertForSequenceClassification.from_pretrained(args.checkpoint).to(device)
 
-    val_probs = predict_batched(model, val_rows, tokenizer, device, args.batch_size)
+    val_logits = predict_batched(model, val_rows, tokenizer, device, args.batch_size)
+    val_probs = sigmoid(val_logits)
     thresholds = np.load(args.thresholds)
     val_metrics = per_class_metrics(val_probs, val_rows, thresholds)
 
-    test_probs = predict_batched(model, test_rows, tokenizer, device, args.batch_size)
+    test_logits = predict_batched(model, test_rows, tokenizer, device, args.batch_size)
+    test_probs = sigmoid(test_logits)
     test_metrics = per_class_metrics(test_probs, test_rows, thresholds)
 
     latency = latency_benchmark(model, tokenizer, test_rows, device, args.latency_iters)
