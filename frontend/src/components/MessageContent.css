@@ -1,0 +1,182 @@
+.message-content {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  padding: var(--spacing-5);
+  box-shadow: var(--shadow-sm);
+}
+
+.message-content-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+
+.message-content-heading {
+  align-items: flex-start;
+  display: flex;
+  gap: var(--spacing-4);
+  justify-content: space-between;
+}
+
+.message-content-subject {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.message-content-meta {
+  display: grid;
+  gap: var(--spacing-1) var(--spacing-4);
+  grid-template-columns: minmax(4rem, auto) minmax(0, 1fr);
+}
+
+.message-content-meta dt {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+}
+
+.message-content-meta dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.message-content-notice {
+  background: var(--color-warning-light);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  padding: var(--spacing-3) var(--spacing-4);
+}
+
+.message-content-tabs {
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  gap: var(--spacing-2);
+}
+
+.message-content-tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  padding: var(--spacing-2) var(--spacing-3);
+}
+
+.message-content-tab.active {
+  border-bottom-color: var(--color-link);
+  color: var(--color-link);
+}
+
+.message-content-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-height: 4rem;
+}
+
+.message-content-pre {
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-md);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  max-height: 24rem;
+  overflow: auto;
+  padding: var(--spacing-4);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.message-content-frame {
+  background: #ffffff;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  height: 24rem;
+  width: 100%;
+}
+
+.message-content-note {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.message-content-headers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+}
+
+.message-content-header-row {
+  display: grid;
+  gap: var(--spacing-3);
+  grid-template-columns: minmax(8rem, 16rem) minmax(0, 1fr);
+  padding: var(--spacing-1) 0;
+}
+
+.message-content-header-row dt {
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
+}
+
+.message-content-header-row dd {
+  margin: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.message-content-attachments {
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding-top: var(--spacing-4);
+}
+
+.message-content-subheading {
+  font-size: var(--font-size-sm);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.message-content-attachment-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.message-content-attachment-list li {
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding: var(--spacing-3) var(--spacing-4);
+}
+
+.message-content-attachment-name {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.message-content-attachment-meta {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}

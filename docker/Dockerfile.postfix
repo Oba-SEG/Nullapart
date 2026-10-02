@@ -1,0 +1,39 @@
+FROM rust:1.96-slim-bookworm AS mailcore-builder
+
+RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+RUN --mount=type=cache,id=nullapart-cargo-registry-v2,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=nullapart-mailcore-target-v2,target=/src/target,sharing=locked \
+    cargo build --release --bin mailcore-filter && \
+    cp /src/target/release/mailcore-filter /tmp/mailcore-filter && \
+    strip /tmp/mailcore-filter
+
+# Nullapart Postfix — MTA with milter integration
+FROM debian:bookworm-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      ca-certificates postfix postfix-pgsql libsasl2-modules \
+      mailutils syslog-ng && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin nullapart && \
+    install -d -o root -g root -m 0755 /usr/libexec/nullapart
+COPY --from=mailcore-builder /tmp/mailcore-filter /usr/libexec/nullapart/mailcore-filter
+COPY docker/mailcore-filter-wrapper.sh /usr/libexec/nullapart/mailcore-filter-wrapper
+
+# Copy Nullapart Postfix configs
+COPY infrastructure/postfix/main.cf /etc/postfix/main.cf
+COPY infrastructure/postfix/master.cf /etc/postfix/master.cf
+COPY infrastructure/postfix/header_checks_nullapart /etc/postfix/header_checks_nullapart
+
+# Entry script to start both postfix and syslog
+COPY docker/postfix-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh /usr/libexec/nullapart/mailcore-filter-wrapper
+
+# SMTP ports
+EXPOSE 25 465 587
+
+ENTRYPOINT ["/entrypoint.sh"]

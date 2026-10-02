@@ -7,24 +7,22 @@
 smtp      inet  n       -       n       -       -       smtpd
   -o content_filter=mailcore:dummy
   -o smtpd_relay_restrictions=permit_mynetworks,reject_unauth_destination
-  -o smtpd_recipient_restrictions=permit_mynetworks,reject_unauth_destination,reject_non_fqdn_recipient,reject_unknown_recipient_domain
+  -o smtpd_recipient_restrictions=permit_mynetworks,reject_unauth_destination,reject_non_fqdn_recipient
   -o receive_override_options=no_header_body_checks
   -o smtp_helo_timeout=300
-  -o smtp_client_timeout=300
   -o smtp_bind_address=0.0.0.0
 
 # ==============================================================================
-# Reinjection listener (private, 127.0.0.1:10026)
+# Reinjection listener (private Docker network only; never host-published)
 # Accepts only Mail Core reinjection. Loop prevention header checked.
 # ==============================================================================
-127.0.0.1:10026 inet  n       -       n       -       -       smtpd
+10026 inet  n       -       n       -       -       smtpd
   -o content_filter=
-  -o receive_override_options=no_unknown_recipient_checks,no_header_body_checks
+  -o receive_override_options=no_unknown_recipient_checks
   -o smtpd_relay_restrictions=permit_mynetworks,reject
   -o smtpd_recipient_restrictions=permit_mynetworks,reject
-  -o mynetworks=127.0.0.0/8
+  -o mynetworks=172.30.0.10/32
   -o smtpd_client_restrictions=permit_mynetworks,reject
-  -o header_checks=regexp:/etc/postfix/header_checks_nullapart
 
 # ==============================================================================
 # Outbound SMTP (private, used by Mail Core for delivery)
@@ -41,7 +39,7 @@ smtp      inet  n       -       n       -       -       smtpd
 # ==============================================================================
 mailcore unix  -       n       n       -       10      pipe
   flags=Rq user=nullapart null_sender=<>
-  argv=/usr/libexec/nullapart/mailcore-filter --queue-id ${queue_id} --client-address ${client_address} --client-hostname ${client_hostname} --client-helo ${client_helo} --sasl-username ${sasl_username} --sender ${sender} -- ${recipient}
+  argv=/usr/libexec/nullapart/mailcore-filter-wrapper --queue-id ${queue_id} --client-address ${client_address} --client-hostname ${client_hostname} --client-helo ${client_helo} --sasl-username ${sasl_username} --sender ${sender} -- ${recipient}
 
 # ==============================================================================
 # Queue runner
@@ -58,6 +56,14 @@ verify    unix  -       -       n       -       1       verify
 flush     unix  n       -       n       1000?   0       flush
 proxymap  unix  -       -       n       -       -       proxymap
 proxywrite unix -       -       n       -       1       proxymap
+anvil     unix  -       -       n       -       1       anvil
+scache    unix  -       -       n       -       1       scache
+smtp      unix  -       -       n       -       -       smtp
+relay     unix  -       -       n       -       -       smtp
+showq     unix  n       -       n       -       -       showq
+error     unix  -       -       n       -       -       error
+retry     unix  -       -       n       -       -       error
+discard   unix  -       -       n       -       -       discard
 
 # ==============================================================================
 # Local delivery (disabled - relay only)

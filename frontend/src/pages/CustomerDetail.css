@@ -1,0 +1,219 @@
+.customer-detail-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-6);
+}
+
+.customer-detail-back {
+  align-items: center;
+  display: inline-flex;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-sm);
+}
+
+.customer-detail-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+
+.customer-detail-heading {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-3);
+}
+
+.customer-detail-title {
+  font-size: var(--font-size-3xl);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-primary);
+}
+
+.customer-detail-lifecycle {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  text-transform: capitalize;
+}
+
+.customer-detail-lifecycle-active {
+  color: var(--color-success);
+}
+
+.customer-detail-lifecycle-grace {
+  color: var(--color-warning);
+}
+
+.customer-detail-lifecycle-suspended {
+  color: var(--color-error);
+}
+
+.customer-detail-lifecycle-terminated {
+  color: var(--color-text-tertiary);
+}
+
+.customer-detail-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: var(--spacing-4);
+  margin: 0;
+}
+
+.customer-detail-facts dt {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+}
+
+.customer-detail-facts dd {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  margin-top: var(--spacing-1);
+  overflow-wrap: anywhere;
+}
+
+.customer-detail-id {
+  max-width: 16rem;
+}
+
+.customer-detail-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+
+.customer-detail-panel h3 {
+  font-size: var(--font-size-lg);
+}
+
+.customer-detail-hint {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.customer-detail-error {
+  color: var(--color-error);
+  font-size: var(--font-size-sm);
+}
+
+.customer-detail-notice {
+  color: var(--color-success);
+  font-size: var(--font-size-sm);
+}
+
+.customer-detail-table-wrap {
+  overflow-x: auto;
+}
+
+.customer-detail-table td {
+  vertical-align: top;
+}
+
+.customer-detail-meta {
+  color: var(--color-text-secondary);
+  display: block;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  margin-top: var(--spacing-1);
+}
+
+.customer-detail-badge {
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: 0.05em;
+  padding: var(--spacing-1) var(--spacing-2);
+  text-transform: uppercase;
+}
+
+.customer-detail-type-internal {
+  background-color: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+}
+
+.customer-detail-type-send_only {
+  background-color: var(--color-chip-accent-bg);
+  color: var(--color-chip-accent-text);
+}
+
+.customer-detail-verify-verified {
+  background-color: var(--color-success-light);
+  color: var(--color-success);
+}
+
+.customer-detail-verify-pending {
+  background-color: var(--color-warning-light);
+  color: var(--color-warning);
+}
+
+.customer-detail-verify-failed {
+  background-color: var(--color-error-light);
+  color: var(--color-error);
+}
+
+.customer-detail-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+
+.customer-detail-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-3);
+}
+
+.customer-detail-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.customer-detail-field-label {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.customer-detail-textarea {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  resize: vertical;
+}
+
+.customer-detail-groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.customer-detail-group {
+  align-items: center;
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-3);
+  justify-content: space-between;
+  padding: var(--spacing-3) var(--spacing-4);
+}
+
+.customer-detail-group-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+.customer-detail-group-head .customer-detail-meta {
+  margin-top: 0;
+}
+
+.customer-detail-cidrs {
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
+}

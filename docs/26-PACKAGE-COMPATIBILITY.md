@@ -72,6 +72,7 @@ Phase 0 should maintain an implementation manifest such as:
 | TypeScript | ~5.6.2 | ecosystem support | typecheck | TBD | TBD |
 | TanStack Query | ^5.62.8 | React 18+ / supported TS | UI/integration | TBD | TBD |
 | Zod | ^3.24.1 | TS/tooling | form/API schema tests | TBD | TBD |
+| openidconnect (Rust OIDC relying party) | 4.0.1 (`Cargo.lock`) | reqwest + rustls, default features off | mail-core OIDC unit tests, ignored PostgreSQL suite, local ZITADEL v4.19.2 login | TBD | 2026-09-29 |
 
 The lockfile remains the authoritative exact dependency resolution.
 
@@ -86,6 +87,15 @@ Maintain:
 - feature flag review;
 - native/OpenSSL/system-library compatibility where applicable;
 - Postfix/Rspamd/ClamAV integration compatibility tests.
+
+Identity integration is deliberately a single reviewed crate: `openidconnect`
+is pinned in `Cargo.lock` with `default-features = false` and only
+`reqwest`/`rustls-tls`, so the relying party adds no second TLS stack and no
+async-runtime duplication. It parses untrusted assertion input (ID tokens and
+UserInfo responses) and is therefore covered by the upstream advisory and
+zero-day tracking in `docs/security/27-ZERO-DAY-INTELLIGENCE-RESPONSE.md`;
+upgrade it through this compatibility process, never by an ad-hoc version bump
+that changes TLS backends, HTTP clients or feature sets at the same time.
 
 Avoid duplicate incompatible crate versions when they materially increase risk/binary size or create conflicting protocol behavior.
 

@@ -1,0 +1,44 @@
+.admin-users-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-6);
+}
+
+.admin-users-subtitle {
+  color: var(--color-text-secondary);
+  margin-top: var(--spacing-2);
+}
+
+.admin-users-card {
+  padding: 0;
+  overflow-x: auto;
+}
+
+.admin-users-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.admin-users-table th,
+.admin-users-table td {
+  padding: var(--spacing-3) var(--spacing-4);
+  text-align: left;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.admin-users-table th {
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-text-secondary);
+}
+
+.admin-users-error {
+  color: var(--color-error);
+  font-size: var(--font-size-sm);
+}
+
+.admin-users-hint {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}

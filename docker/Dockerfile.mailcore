@@ -1,0 +1,34 @@
+# Nullapart Mail Core — multi-stage build
+FROM rust:1.96-slim-bookworm AS builder
+
+RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+
+RUN --mount=type=cache,id=nullapart-cargo-registry-v2,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=nullapart-mailcore-target-v2,target=/src/target,sharing=locked \
+    cargo build --release --bin mailcore-server --bin mailcore-filter && \
+    cp /src/target/release/mailcore-server /tmp/mailcore-server && \
+    cp /src/target/release/mailcore-filter /tmp/mailcore-filter && \
+    strip /tmp/mailcore-server /tmp/mailcore-filter
+
+# Runtime
+FROM debian:bookworm-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates libssl3 tesseract-ocr util-linux && \
+    rm -rf /var/lib/apt/lists/* && \
+    useradd -r -s /sbin/nologin mailcore
+
+COPY --from=builder /tmp/mailcore-server /usr/local/bin/
+COPY --from=builder /tmp/mailcore-filter /usr/local/bin/
+COPY docker/mailcore-entrypoint.sh /usr/local/bin/mailcore-entrypoint
+
+RUN install -d -o mailcore -g mailcore -m 0700 /var/lib/nullapart/artifacts && \
+    chmod 0755 /usr/local/bin/mailcore-entrypoint
+
+EXPOSE 8081
+
+ENTRYPOINT ["mailcore-entrypoint"]

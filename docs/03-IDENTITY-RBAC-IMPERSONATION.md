@@ -2,11 +2,59 @@
 
 ## Identity platform
 
-ZITADEL is the current leading identity candidate, subject to implementation, security and licensing validation.
+**Decision (recorded 2026-09-29, owner decision): ZITADEL is the accepted
+identity platform for Nullapart.** The AGPL-3.0 licensing terms of its server
+repository (with documented component exceptions) are accepted for a
+self-hosted deployment, and the security/licensing validation that was an open
+prerequisite is closed by this decision. Operational obligations carried by
+the decision: do not modify or fork the identity server, track upstream
+security advisories, and patch per the package-compatibility and zero-day
+policies (`docs/26-PACKAGE-COMPATIBILITY.md`,
+`docs/security/27-ZERO-DAY-INTELLIGENCE-RESPONSE.md`).
 
-ZITADEL is self-hostable and provides the multi-tenancy, MFA/passkey, OIDC/SAML and administrative capabilities needed by Nullapart. Its server repository is AGPL-3.0 with documented exceptions for some directories/components, so dependency/licensing review is required before it is locked as the production identity platform.
+ZITADEL is self-hostable and provides the multi-tenancy, MFA/passkey, OIDC/SAML and administrative capabilities needed by Nullapart.
+
+Integration follows the recorded IdP-agnostic BFF model
+(`docs/phases/PHASE-3-LOCAL-IMPLEMENTATION-PLAN.md`): OIDC authorization-code
+with PKCE exchanges assertions at the existing authenticated boundary, browser
+sessions stay server-side cookies, and Nullapart authorization (roles,
+permissions, impersonation, audit scope) remains server-side in Nullapart —
+identity-provider roles do not replace product authorization.
 
 The architecture should avoid modifying/forking the identity server unless necessary; product authorization remains in Nullapart.
+
+### Implemented OIDC relying party (Phase 3, 2026-09-29)
+
+Mail Core is a server-side OIDC relying party selected by the
+server-authoritative `NULLAPART_IDENTITY_PROVIDER` mode (`proxy_header` |
+`oidc`); the mode is configuration, never authorization.
+
+- `GET /api/v1/auth/login` starts an authorization-code flow with PKCE S256
+  and `state`/`nonce`; `GET /api/v1/auth/oidc/callback` completes it. The
+  callback is the protocol's explicitly designed alternative trust mechanism
+  and mints no session until the flow row, PKCE verifier, issuer, redirect URI
+  and ID token all verify. Flow rows hold no tokens, are claimed exactly once
+  and expire in ten minutes.
+- Additional ID-token audiences are accepted only when `azp` names this
+  client. Profile/e-mail claims are read from the ID token, or — when the
+  provider keeps them behind `userinfo` (OIDC Core 5.3) — from the UserInfo
+  endpoint, bound to the ID token's subject so a substituted profile can never
+  borrow another identity.
+- `admin_users.auth_subject` binds one IdP subject to at most one local admin
+  per deployment. Link-by-match links an existing unlinked local user; the
+  empty-deployment bootstrap invariant is unchanged; an unknown or
+  unprovisioned subject is refused with an audited `session_login` denial and
+  never creates a user.
+- Step-up re-authentication uses `prompt=login`
+  (`GET /api/v1/auth/reauth`, audited as `session_step_up`). Logout revokes
+  the local session first, then continues to the IdP end-session endpoint when
+  the provider publishes one; local revocation is always the security control.
+- Tokens are held server-side only; the browser keeps the opaque HttpOnly
+  session cookie. Roles, permissions, impersonation, audit scope and
+  row-level security are unchanged and remain Nullapart's own.
+
+Live evidence for this increment is recorded in
+`docs/phases/PHASE-3-LOCAL-IMPLEMENTATION-PLAN.md`.
 
 ## Administrative levels
 
@@ -14,11 +62,11 @@ Nullapart has no normal end-user portal.
 
 ### System Admin
 
-May manage regional platform settings, Support access, all tenants, all policy levels, scanners/capabilities, tenant lifecycle, cache refreshes, audited Customer Admin impersonation and full message content where explicitly permitted.
+May manage regional platform settings, Support access, all tenants, all policy levels, scanners/capabilities, tenant lifecycle, cache refreshes, audited customer entry (impersonation) and full message content where explicitly permitted.
 
 ### Support
 
-RBAC-controlled. Potential permissions include customer visibility, Customer/Support policy edits, send-only domain administration, routing/source IP groups, connector capabilities, tenant lifecycle, cache refresh and Customer Admin impersonation.
+RBAC-controlled. Potential permissions include customer visibility, Customer/Support policy edits, send-only domain administration, routing/source IP groups, connector capabilities, tenant lifecycle, cache refresh and audited customer entry (impersonation).
 
 Support cannot view message body, raw MIME or attachment content.
 
@@ -42,7 +90,7 @@ High-risk actions may require step-up authentication even when the session is al
 
 Examples:
 
-- impersonation;
+- customer entry (impersonation);
 - role/permission change;
 - send-only domain creation;
 - tenant suspension/termination;
@@ -66,13 +114,24 @@ Administrative sessions require:
 - session/device identity used in audit records;
 - reauthentication/step-up for sensitive actions where configured.
 
-## Impersonation
+## Customer entry (impersonation)
 
-Audit retains actor, impersonated subject, customer ID, reason, requested role, start/end, source session and relevant actions.
+System Admin and Support can enter ("log in to") a customer account for a
+reasoned, step-up-gated, rate-limited interval. Entry switches the session's
+customer scope to the entered customer; the real actor's roles and permissions
+remain exactly their own. Entry never intersects, reduces or extends the
+actor's permission set, so elevated rights (operations, cross-customer audit,
+user management) stay fully available while entered.
 
-The UI shows a persistent impersonation banner.
+Audit retains actor, entered customer, reason, start/end, source session and
+relevant actions.
 
-Impersonation must not grant permissions the real Support/System actor is not authorized to exercise. The effective authorization decision considers both impersonation scope and the real actor's platform permission.
+The UI shows a persistent banner naming the entered customer and the reason.
+
+Impersonation must not grant permissions the real Support/System actor is not
+authorized to exercise: during entry the effective permission set is precisely
+the real actor's own platform permission, scoped to the entered customer's
+tenant data.
 
 ## Resource ownership authorization
 
@@ -134,7 +193,7 @@ The customer owner controls which tenant roles may view the tenant audit log or 
 Every impersonated event retains both:
 
 - real actor;
-- impersonated subject.
+- entered customer (impersonated customer).
 
 Audit reads, filters, exports and high-risk views are themselves auditable.
 

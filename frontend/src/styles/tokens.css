@@ -1,71 +1,113 @@
-/* Nullapart Design Tokens - Neumorphic Design System */
+/* Nullapart Design Tokens — ACID LIME + MIDNIGHT
+ * Dark theme is the default (`:root`). Light theme overrides via
+ * `[data-theme="light"]`, set by the header toggle and persisted in
+ * localStorage["nullapart-theme"]. Both themes keep WCAG AA contrast.
+ * Brand board values are exact; derived shades are documented in
+ * DESIGN.md.
+ */
 
 :root {
-  /* Colors - Base */
-  --color-bg-primary: #e8ecf0;
-  --color-bg-secondary: #dde2e8;
-  --color-bg-tertiary: #d2d9e0;
-  --color-bg-elevated: #f0f4f8;
+  color-scheme: dark;
 
-  /* Colors - Text */
-  --color-text-primary: #1a2332;
-  --color-text-secondary: #4a5568;
-  --color-text-tertiary: #718096;
-  --color-text-inverse: #ffffff;
+  /* Brand core (brand board, exact) */
+  --lime: #a8ff00;
+  --midnight: #050505;
+  --pink: #ff006e;
+  --cyan: #00f5d4;
+  --blue: #0000d0;
+  --paper: #fafafa;
 
-  /* Colors - Brand */
-  --color-brand-50: #e6f2ff;
-  --color-brand-100: #b3d9ff;
-  --color-brand-200: #80bfff;
-  --color-brand-300: #4da6ff;
-  --color-brand-400: #1a8cff;
-  --color-brand-500: #0073e6;
-  --color-brand-600: #005bb3;
-  --color-brand-700: #004280;
-  --color-brand-800: #002a4d;
-  --color-brand-900: #00111a;
+  /* Surfaces */
+  --color-bg-primary: #050505;
+  --color-bg-secondary: #000d0d; /* board: Surface, Panels, UI */
+  --color-bg-tertiary: #141414;
+  --color-bg-elevated: #1a1a1a;
+  --color-bg-command: #030808;
+  --color-bg-glass: rgba(0, 13, 13, 0.86);
+  --color-bg-glass-strong: rgba(5, 18, 16, 0.94);
 
-  /* Colors - Semantic */
-  --color-success: #38a169;
-  --color-success-light: #c6f6d5;
-  --color-warning: #d69e2e;
-  --color-warning-light: #fefcbf;
-  --color-error: #e53e3e;
-  --color-error-light: #fed7d7;
-  --color-info: #3182ce;
-  --color-info-light: #bee3f8;
+  /* Text */
+  --color-text-primary: #fafafa;
+  --color-text-secondary: #b8bdc4;
+  --color-text-tertiary: #8a9199;
+  --color-text-inverse: #050505;
 
-  /* Colors - Severity */
-  --color-severity-critical: #9b2c2c;
-  --color-severity-high: #c53030;
-  --color-severity-medium: #dd6b20;
-  --color-severity-low: #d69e2e;
-  --color-severity-info: #3182ce;
+  /* Borders */
+  --color-border: rgba(250, 250, 250, 0.1);
+  --color-border-strong: rgba(250, 250, 250, 0.22);
+  --color-border-lime: rgba(168, 255, 0, 0.28);
+  --color-border-cyan: rgba(0, 245, 212, 0.22);
 
-  /* Neumorphic shadows */
+  /* Brand aliases (raw ramp kept for compatibility) */
+  --color-brand-50: #16220a;
+  --color-brand-200: #6f9e1c;
+  --color-brand-500: #a8ff00;
+  --color-brand-600: #8fe600;
+
+  /* Role tokens (fill vs text resolved per theme) */
+  --color-primary: #a8ff00;
+  --color-link: #a8ff00;
+  --color-link-hover: #c4ff4d;
+  --color-focus: #a8ff00;
+  --color-btn-primary-bg: #a8ff00;
+  --color-btn-primary-bg-hover: #8fe600;
+  --color-btn-primary-text: #050505;
+  --color-chip-accent-bg: #16220a;
+  --color-chip-accent-text: #a8ff00;
+  --color-chip-accent-border: rgba(168, 255, 0, 0.4);
+  --color-selected-bg: rgba(168, 255, 0, 0.14);
+  --color-selected-text: #fafafa;
+
+  /* Semantic status */
+  --color-success: #00f5d4;
+  --color-success-light: #06322b;
+  --color-warning: #ffb020;
+  --color-warning-light: #2e2107;
+  --color-error: #ff006e;
+  --color-error-light: #3a0620;
+  --color-info: #8e8eff;
+  --color-info-light: #12123a;
+
+  /* Severity */
+  --color-severity-critical: #ff006e;
+  --color-severity-high: #ff5c8a;
+  --color-severity-medium: #ffb020;
+  --color-severity-low: #a8ff00;
+  --color-severity-info: #00f5d4;
+
+  /* Elevation — neumorphic soft-UI (docs/12) on Midnight:
+   * deep shade bottom-right, paper tint top-left. Borders stay the
+   * readable boundary so depth never carries meaning alone. */
   --shadow-sm:
-    2px 2px 4px rgba(163, 177, 198, 0.6), -2px -2px 4px rgba(255, 255, 255, 0.8);
+    2px 2px 5px rgba(0, 0, 0, 0.65), -2px -2px 4px rgba(250, 250, 250, 0.07);
   --shadow-md:
-    4px 4px 8px rgba(163, 177, 198, 0.6), -4px -4px 8px rgba(255, 255, 255, 0.8);
+    4px 4px 10px rgba(0, 0, 0, 0.7), -3px -3px 8px rgba(250, 250, 250, 0.08);
   --shadow-lg:
-    6px 6px 12px rgba(163, 177, 198, 0.6),
-    -6px -6px 12px rgba(255, 255, 255, 0.8);
+    8px 8px 20px rgba(0, 0, 0, 0.75), -5px -5px 14px rgba(250, 250, 250, 0.09);
   --shadow-inset:
-    inset 2px 2px 4px rgba(163, 177, 198, 0.6),
-    inset -2px -2px 4px rgba(255, 255, 255, 0.8);
+    inset 2px 2px 5px rgba(0, 0, 0, 0.7),
+    inset -2px -2px 4px rgba(250, 250, 250, 0.06);
   --shadow-inset-md:
-    inset 4px 4px 8px rgba(163, 177, 198, 0.6),
-    inset -4px -4px 8px rgba(255, 255, 255, 0.8);
+    inset 4px 4px 9px rgba(0, 0, 0, 0.72),
+    inset -3px -3px 7px rgba(250, 250, 250, 0.07);
+  --shadow-glow-lime: 0 0 16px rgba(168, 255, 0, 0.3);
+  --shadow-glow-cyan: 0 0 20px rgba(0, 245, 212, 0.16);
+  --shadow-panel:
+    0 18px 50px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(250, 250, 250, 0.06);
+  --shadow-panel-lime:
+    0 18px 60px rgba(0, 0, 0, 0.5), 0 0 28px rgba(168, 255, 0, 0.1),
+    inset 0 1px 0 rgba(250, 250, 250, 0.07);
 
   /* Typography */
   --font-family-sans:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
-    Arial, sans-serif;
+    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
   --font-family-mono:
     "SF Mono", Monaco, "Cascadia Code", "Roboto Mono", Consolas, monospace;
 
   --font-size-xs: 0.75rem; /* 12px */
   --font-size-sm: 0.875rem; /* 14px */
+  --font-size-md: 0.9375rem; /* 15px */
   --font-size-base: 1rem; /* 16px */
   --font-size-lg: 1.125rem; /* 18px */
   --font-size-xl: 1.25rem; /* 20px */
@@ -77,6 +119,7 @@
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
   --font-weight-bold: 700;
+  --font-weight-extrabold: 800;
 
   --line-height-tight: 1.25;
   --line-height-normal: 1.5;
@@ -116,33 +159,153 @@
   --z-toast: 500;
 
   /* Focus */
-  --focus-ring: 0 0 0 3px rgba(0, 115, 230, 0.4);
+  --focus-ring: 0 0 0 3px rgba(168, 255, 0, 0.35);
+  --brand-beam:
+    linear-gradient(
+      112deg,
+      transparent 0 18%,
+      rgba(168, 255, 0, 0.16) 28%,
+      transparent 42%
+    ),
+    linear-gradient(
+      104deg,
+      transparent 0 42%,
+      rgba(0, 245, 212, 0.14) 56%,
+      transparent 72%
+    );
+  --brand-grid:
+    linear-gradient(rgba(168, 255, 0, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 245, 212, 0.035) 1px, transparent 1px);
+  /* Network-node atmosphere (brand board hero); alpha tuned per theme. */
+  --brand-network:
+    radial-gradient(
+      circle at 1px 1px,
+      rgba(168, 255, 0, 0.55) 1px,
+      transparent 1.9px
+    ),
+    radial-gradient(
+      circle at 13px 13px,
+      rgba(0, 245, 212, 0.4) 1px,
+      transparent 1.9px
+    );
+  --brand-network-size: 26px 26px;
+  --brand-network-opacity: 0.18;
 }
 
-/* Dark mode tokens (for future use) */
-@media (prefers-color-scheme: dark) {
+[data-theme="light"] {
+  color-scheme: light;
+
+  /* Surfaces (paper canvas, faint lime-tinted neutrals) */
+  --color-bg-primary: #fafafa;
+  --color-bg-secondary: #ffffff;
+  --color-bg-tertiary: #f0f3ea;
+  --color-bg-elevated: #ffffff;
+  --color-bg-command: #f7faef;
+  --color-bg-glass: rgba(255, 255, 255, 0.9);
+  --color-bg-glass-strong: rgba(255, 255, 255, 0.96);
+
+  /* Text */
+  --color-text-primary: #050505;
+  --color-text-secondary: #454b52;
+  --color-text-tertiary: #6b7178;
+  --color-text-inverse: #fafafa;
+
+  /* Borders */
+  --color-border: rgba(5, 5, 5, 0.12);
+  --color-border-strong: rgba(5, 5, 5, 0.28);
+  --color-border-lime: rgba(74, 122, 0, 0.24);
+  --color-border-cyan: rgba(0, 105, 92, 0.2);
+
+  /* Brand aliases */
+  --color-brand-50: #f0ffd1;
+  --color-brand-200: #b8e86a;
+  --color-brand-500: #a8ff00;
+  --color-brand-600: #8fe600;
+
+  /* Role tokens */
+  --color-primary: #4a7a00;
+  --color-link: #3d6600;
+  --color-link-hover: #2e5200;
+  --color-focus: #4a7a00;
+  --color-btn-primary-bg: #a8ff00;
+  --color-btn-primary-bg-hover: #95e600;
+  --color-btn-primary-text: #050505;
+  --color-chip-accent-bg: #f0ffd1;
+  --color-chip-accent-text: #3d6600;
+  --color-chip-accent-border: rgba(61, 102, 0, 0.35);
+  --color-selected-bg: #f0ffd1;
+  --color-selected-text: #3d6600;
+
+  /* Semantic status */
+  --color-success: #00695c;
+  --color-success-light: #d5f7f1;
+  --color-warning: #8a5a00;
+  --color-warning-light: #fff2da;
+  --color-error: #c7005a;
+  --color-error-light: #ffe3ee;
+  --color-info: #0000d0;
+  --color-info-light: #e4e4ff;
+
+  /* Severity */
+  --color-severity-critical: #c7005a;
+  --color-severity-high: #d4006a;
+  --color-severity-medium: #8a5a00;
+  --color-severity-low: #4a7a00;
+  --color-severity-info: #0000d0;
+
+  /* Elevation — classic paper neumorphism */
+  --shadow-sm: 3px 3px 6px rgba(5, 5, 5, 0.13), -2px -2px 5px #ffffff;
+  --shadow-md: 5px 5px 12px rgba(5, 5, 5, 0.15), -3px -3px 9px #ffffff;
+  --shadow-lg: 10px 10px 24px rgba(5, 5, 5, 0.17), -5px -5px 14px #ffffff;
+  --shadow-inset:
+    inset 3px 3px 6px rgba(5, 5, 5, 0.13), inset -2px -2px 5px #ffffff;
+  --shadow-inset-md:
+    inset 4px 4px 10px rgba(5, 5, 5, 0.16), inset -3px -3px 8px #ffffff;
+  --shadow-glow-lime: 0 0 16px rgba(168, 255, 0, 0.35);
+  --shadow-glow-cyan: 0 0 18px rgba(0, 105, 92, 0.12);
+  --shadow-panel:
+    0 18px 48px rgba(5, 5, 5, 0.11), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  --shadow-panel-lime:
+    0 18px 54px rgba(5, 5, 5, 0.12), 0 0 24px rgba(168, 255, 0, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+
+  /* Focus */
+  --focus-ring: 0 0 0 3px rgba(74, 122, 0, 0.35);
+  --brand-beam:
+    linear-gradient(
+      112deg,
+      transparent 0 18%,
+      rgba(74, 122, 0, 0.08) 28%,
+      transparent 42%
+    ),
+    linear-gradient(
+      104deg,
+      transparent 0 42%,
+      rgba(0, 105, 92, 0.07) 56%,
+      transparent 72%
+    );
+  --brand-grid:
+    linear-gradient(rgba(74, 122, 0, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 105, 92, 0.045) 1px, transparent 1px);
+  --brand-network:
+    radial-gradient(
+      circle at 1px 1px,
+      rgba(74, 122, 0, 0.55) 1px,
+      transparent 1.9px
+    ),
+    radial-gradient(
+      circle at 13px 13px,
+      rgba(0, 105, 92, 0.45) 1px,
+      transparent 1.9px
+    );
+  --brand-network-size: 26px 26px;
+  --brand-network-opacity: 0.14;
+}
+
+@media (prefers-reduced-motion: reduce) {
   :root {
-    --color-bg-primary: #1a2332;
-    --color-bg-secondary: #232f3e;
-    --color-bg-tertiary: #2d3a4a;
-    --color-bg-elevated: #1f2937;
-
-    --color-text-primary: #f0f4f8;
-    --color-text-secondary: #a0aec0;
-    --color-text-tertiary: #718096;
-    --color-text-inverse: #1a2332;
-
-    --shadow-sm:
-      2px 2px 4px rgba(0, 0, 0, 0.3), -2px -2px 4px rgba(255, 255, 255, 0.05);
-    --shadow-md:
-      4px 4px 8px rgba(0, 0, 0, 0.3), -4px -4px 8px rgba(255, 255, 255, 0.05);
-    --shadow-lg:
-      6px 6px 12px rgba(0, 0, 0, 0.3), -6px -6px 12px rgba(255, 255, 255, 0.05);
-    --shadow-inset:
-      inset 2px 2px 4px rgba(0, 0, 0, 0.3),
-      inset -2px -2px 4px rgba(255, 255, 255, 0.05);
-    --shadow-inset-md:
-      inset 4px 4px 8px rgba(0, 0, 0, 0.3),
-      inset -4px -4px 8px rgba(255, 255, 255, 0.05);
+    --transition-fast: 1ms;
+    --transition-base: 1ms;
+    --transition-slow: 1ms;
   }
 }

@@ -56,7 +56,8 @@ export function isSafeUrl(url: string): boolean {
 
 // Check if the current session is stored securely (no localStorage tokens)
 export function verifySecureSession(): boolean {
-  // Check that auth tokens are not in localStorage/sessionStorage/IndexedDB
+  // Check that auth tokens are not in localStorage/sessionStorage
+  // (IndexedDB cannot be enumerated synchronously; API clients never write it)
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
     if (key && /token|auth|session|jwt|refresh/i.test(key)) {

@@ -4,7 +4,7 @@
  * Modal dialog with focus trap, escape to close, and ARIA dialog semantics.
  */
 
-import { forwardRef, useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 
 export interface DialogProps {
   open: boolean;

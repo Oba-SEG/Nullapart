@@ -38,12 +38,10 @@ smtpd_client_recipient_rate_limit = 500
 smtpd_client_auth_rate_limit = 10
 
 smtpd_recipient_limit = 500
-smtpd_message_size_limit = 52428800  # 50MB
+message_size_limit = 52428800
 
 # Timeouts
 smtpd_timeout = 300
-smtp_timeout = 300
-mail_timeout = 600
 
 # ==============================================================================
 # HELO restrictions
@@ -107,6 +105,11 @@ milter_protocol = 6
 smtpd_milters = inet:localhost:11332
 non_smtpd_milters = inet:localhost:11332
 
+# The after-queue pipe receives only this explicit workload configuration.
+# Docker/local startup may override the milter address with postconf.
+import_environment = MAIL_CONFIG MAIL_DEBUG MAIL_LOGTAG TZ XAUTHORITY DISPLAY LANG=C PATH=/bin:/usr/bin:/usr/local/bin NULLAPART_HANDOFF_HMAC_SECRET NULLAPART_HANDOFF_HMAC_KEY_ID NULLAPART_MAILCORE_HANDOFF_URL NULLAPART_HANDOFF_MAX_BYTES
+export_environment = TZ LANG NULLAPART_HANDOFF_HMAC_SECRET NULLAPART_HANDOFF_HMAC_KEY_ID NULLAPART_MAILCORE_HANDOFF_URL NULLAPART_HANDOFF_MAX_BYTES
+
 # ==============================================================================
 # Queue durability
 # ==============================================================================
@@ -114,12 +117,6 @@ minimal_backoff_time = 300s
 maximal_backoff_time = 14400s
 maximal_queue_lifetime = 5d
 bounce_queue_lifetime = 5d
-maximal_triage_time = 0s
-
-# ==============================================================================
-# Queue cleanup
-# ==============================================================================
-maximal_tries = 10
 
 # ==============================================================================
 # After-queue content filter route

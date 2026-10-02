@@ -277,7 +277,11 @@ resource "aws_instance" "mail_node" {
     http_tokens   = "required"
   }
 
-  user_data = base64encode("# Bootstrap intentionally supplied by immutable image/config management before production commissioning.")
+  user_data = base64encode(templatefile("${path.module}/templates/mail-node-bootstrap.sh", {
+    deployment_id = var.deployment_id
+    environment   = var.environment
+    node_index    = count.index + 1
+  }))
 
   tags = {
     Name        = format("mxin-%s-%02d", var.environment, count.index + 1)
@@ -501,9 +505,215 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts" {
   
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.artifacts.arn
     }
   }
+}
+
+# KMS key for S3 artifact encryption
+resource "aws_kms_key" "artifacts" {
+  description             = "Nullapart artifact encryption key"
+  deletion_window_in_days = 30
+  enable_key_rotation     = true
+
+  tags = {
+    Name = "nullapart-artifacts-kms"
+  }
+}
+
+resource "aws_kms_alias" "artifacts" {
+  name          = "alias/nullapart-${var.environment}-artifacts"
+  target_key_id = aws_kms_key.artifacts.key_id
+}
+
+# SQS for durable async processing path
+resource "aws_sqs_queue" "mail_processing" {
+  name                       = "nullapart-${var.environment}-mail-processing"
+  visibility_timeout_seconds = 300
+  message_retention_seconds  = 1209600  # 14 days
+  receive_wait_time_seconds  = 10
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.mail_processing_dlq.arn
+    maxReceiveCount     = 3
+  })
+
+  tags = {
+    Name = "nullapart-mail-processing"
+  }
+}
+
+resource "aws_sqs_queue" "mail_processing_dlq" {
+  name                      = "nullapart-${var.environment}-mail-processing-dlq"
+  message_retention_seconds = 1209600
+
+  tags = {
+    Name = "nullapart-mail-processing-dlq"
+  }
+}
+
+# Application Load Balancer for Control Plane HTTPS
+resource "aws_lb" "control_plane" {
+  name               = "nullapart-${var.environment}-cp"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [module.security_groups["control-plane"].security_group_id]
+  subnets            = module.vpc.public_subnets
+
+  enable_deletion_protection = var.environment == "prod"
+
+  tags = {
+    Name = "nullapart-alb"
+  }
+}
+
+resource "aws_lb_target_group" "control_plane" {
+  name        = "nullapart-${var.environment}-cp"
+  port        = 8080
+  protocol    = "HTTP"
+  vpc_id      = module.vpc.vpc_id
+  target_type = "ip"
+
+  health_check {
+    path                = "/internal/health"
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+    interval            = 30
+    timeout             = 10
+  }
+}
+
+resource "aws_lb_listener" "control_plane_https" {
+  load_balancer_arn = aws_lb.control_plane.arn
+  port              = 443
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  certificate_arn   = var.acm_certificate_arn
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.control_plane.arn
+  }
+}
+
+# WAF Web ACL for Control Plane
+resource "aws_wafv2_web_acl" "control_plane" {
+  name        = "nullapart-${var.environment}-cp"
+  description = "WAF rules for Nullapart Control Plane"
+  scope       = "REGIONAL"
+
+  default_action {
+    allow {}
+  }
+
+  rule {
+    name     = "rate-limit"
+    priority = 1
+
+    action {
+      block {}
+    }
+
+    statement {
+      rate_based_statement {
+        limit              = 2000
+        aggregate_key_type = "IP"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "NullapartRateLimit"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  rule {
+    name     = "aws-managed-common"
+    priority = 2
+
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesCommonRuleSet"
+        vendor_name = "AWS"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "NullapartCommonRules"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    metric_name                = "NullapartWAF"
+    sampled_requests_enabled   = true
+  }
+}
+
+resource "aws_wafv2_web_acl_association" "control_plane" {
+  resource_arn = aws_lb.control_plane.arn
+  web_acl_arn  = aws_wafv2_web_acl.control_plane.arn
+}
+
+# VPC Flow Logs
+resource "aws_flow_log" "vpc" {
+  vpc_id                   = module.vpc.vpc_id
+  traffic_type             = "ALL"
+  log_destination_type     = "cloud-watch-logs"
+  log_destination          = aws_cloudwatch_log_group.vpc_flow_logs.arn
+  iam_role_arn             = aws_iam_role.vpc_flow_logs.arn
+  max_aggregation_interval = 60
+
+  tags = {
+    Name = "nullapart-vpc-flow-logs"
+  }
+}
+
+resource "aws_cloudwatch_log_group" "vpc_flow_logs" {
+  name              = "/aws/vpc/flow-logs/nullapart-${var.environment}"
+  retention_in_days = 30
+}
+
+resource "aws_iam_role" "vpc_flow_logs" {
+  name = "nullapart-${var.environment}-vpc-flow-logs"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = {
+        Service = "vpc-flow-logs.amazonaws.com"
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "vpc_flow_logs" {
+  name = "nullapart-vpc-flow-logs"
+  role = aws_iam_role.vpc_flow_logs.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents",
+        "logs:DescribeLogGroups",
+        "logs:DescribeLogStreams"
+      ]
+      Effect   = "Allow"
+      Resource = "*"
+    }]
+  })
 }
 
 resource "aws_s3_bucket_versioning" "artifacts" {

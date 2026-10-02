@@ -1,0 +1,13 @@
+# Nullapart Rspamd — milter-stage spam filtering
+FROM debian:bookworm-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends rspamd && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY infrastructure/rspamd/rspamd.conf /etc/rspamd/rspamd.conf
+COPY infrastructure/rspamd/local.d/ /etc/rspamd/local.d/
+
+EXPOSE 11332
+
+CMD ["rspamd", "-u", "_rspamd", "-g", "_rspamd", "-c", "/etc/rspamd/rspamd.conf", "-f"]

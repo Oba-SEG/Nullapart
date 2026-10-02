@@ -1,5 +1,8 @@
 allowBuilds:
-  esbuild: set this to true or false
-
-onlyBuiltDependencies:
-  - esbuild
+  esbuild: true
+networkConcurrency: 2
+fetchRetries: 5
+fetchRetryMintimeout: 20000
+fetchRetryMaxtimeout: 120000
+fetchTimeout: 300000
+fetchWarnTimeoutMs: 60000

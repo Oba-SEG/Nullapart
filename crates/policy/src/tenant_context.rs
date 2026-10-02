@@ -41,7 +41,9 @@ pub enum AuthenticationAssurance {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImpersonationContext {
     pub real_actor: ContextActor,
-    pub impersonated_subject: String,
+    /// The acted-as subject user. Customer entry has no subject user, so this
+    /// stays `None` while `impersonated_customer` names the entered tenant.
+    pub impersonated_subject: Option<String>,
     pub impersonated_customer: CustomerId,
     pub started_at: DateTime<Utc>,
     pub reason: String,
@@ -89,8 +91,9 @@ pub struct TenantContext {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CustomerLifecycle {
     Active,
+    Grace,
     Suspended,
-    Deprovisioned,
+    Terminated,
 }
 
 impl TenantContext {
@@ -208,7 +211,7 @@ mod tests {
         let mut ctx = test_context();
         ctx.impersonation = Some(ImpersonationContext {
             real_actor: ctx.actor.clone(),
-            impersonated_subject: "support-user".to_string(),
+            impersonated_subject: Some("support-user".to_string()),
             impersonated_customer: CustomerId("cust-002".to_string()),
             started_at: Utc::now(),
             reason: "debugging".to_string(),

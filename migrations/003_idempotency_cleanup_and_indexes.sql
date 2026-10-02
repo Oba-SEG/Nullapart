@@ -35,7 +35,7 @@ BEGIN
         PERFORM cron.schedule(
             'nullapart-idempotency-cleanup',
             '0 * * * *',  -- every hour
-            $$SELECT public.cleanup_expired_idempotency_keys()$$
+            $job$SELECT public.cleanup_expired_idempotency_keys()$job$
         );
     END IF;
 EXCEPTION WHEN OTHERS THEN
@@ -48,29 +48,27 @@ $$;
 -- Performance indexes for common query patterns
 -- ============================================================================
 
--- Index for handoff lookups by queue ID (trace API)
+-- Queue identifiers are retained as an array because one logical transaction
+-- may be re-queued by Postfix. GIN supports containment lookups used by trace.
 CREATE INDEX IF NOT EXISTS idx_transactions_postfix_queue_id
-    ON public.transactions (postfix_queue_id)
-    WHERE deleted_at IS NULL;
+    ON public.smtp_transactions USING GIN (postfix_queue_ids);
 
 -- Index for partition lookups by envelope sender domain
 CREATE INDEX IF NOT EXISTS idx_transactions_sender_domain
-    ON public.transactions (sender_domain)
-    WHERE deleted_at IS NULL;
+    ON public.smtp_transactions ((lower(split_part(envelope_sender, '@', 2))));
 
 -- Index for tenant-scoped feature override lookups
 CREATE INDEX IF NOT EXISTS idx_feature_overrides_scope
-    ON public.feature_overrides (scope, scope_id, feature_id)
-    WHERE expires_at IS NULL OR expires_at > now();
+    ON public.feature_overrides (scope, scope_id, feature_id, expires_at);
 
 -- Index for audit event queries by resource
 CREATE INDEX IF NOT EXISTS idx_audit_events_resource
-    ON public.audit_events (resource_type, resource_id)
-    WHERE deleted_at IS NULL;
+    ON public.audit_events (resource_type, resource_id);
 
--- Index for expired handoff cleanup
-CREATE INDEX IF NOT EXISTS idx_transactions_expired
-    ON public.transactions (expires_at)
-    WHERE expires_at IS NOT NULL AND deleted_at IS NULL;
+-- Handoff idempotency records are durable queue identity evidence. Index their
+-- creation time so an explicit, audited retention job can locate old records;
+-- this migration does not invent an expiry policy.
+CREATE INDEX IF NOT EXISTS idx_handoff_idempotency_created
+    ON public.handoff_idempotency (created_at);
 
 COMMIT;

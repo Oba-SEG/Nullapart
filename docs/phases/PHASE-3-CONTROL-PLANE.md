@@ -11,11 +11,13 @@ The Control Plane remains a modular monolith unless a demonstrated security/scal
 - Phase 1 mail runtime stable;
 - Phase 2 scanner/quarantine contracts stable;
 - Phase -1 access/audit/data rules accepted;
-- identity platform security/license decision made.
+- identity platform security/license decision made (satisfied 2026-09-29:
+  ZITADEL accepted, `docs/03-IDENTITY-RBAC-IMPERSONATION.md`).
 
 ## Identity
 
-Integrate selected identity platform (leading candidate ZITADEL).
+Integrate the selected identity platform: ZITADEL (decision recorded
+2026-09-29; `docs/03-IDENTITY-RBAC-IMPERSONATION.md`).
 
 Implement:
 
@@ -59,11 +61,12 @@ Implement:
 
 - reason required;
 - real actor retained;
-- acting-as subject retained;
+- entered customer retained (customer-entry semantics, docs/03);
 - visible persistent UI banner;
 - start/end audit;
-- every action audited under both identities;
-- effective authorization cannot exceed real actor's platform rights.
+- every action audited under the real actor and the entered customer;
+- effective authorization is the real actor's own roles/permissions and can
+  never exceed them.
 
 ## Customer/domain administration
 

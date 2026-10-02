@@ -1,0 +1,6 @@
+# Build artifacts from the host must never overwrite the Linux dependencies
+# installed by the previous layer: the host `node_modules` carries darwin
+# binaries for the native esbuild helper and would break `pnpm build`.
+node_modules
+dist
+.DS_Store

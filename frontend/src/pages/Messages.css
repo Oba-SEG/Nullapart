@@ -4,68 +4,73 @@
   gap: var(--spacing-6);
 }
 
-.page-header {
+.messages-subtitle {
+  color: var(--color-text-secondary);
+  margin-top: var(--spacing-2);
+  max-width: 60ch;
+}
+
+.messages-search {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  flex-wrap: wrap;
-  gap: var(--spacing-4);
-}
-
-.page-title {
-  font-size: var(--font-size-3xl);
-  font-weight: var(--font-weight-bold);
-  color: var(--color-text-primary);
-}
-
-.page-actions {
-  display: flex;
   gap: var(--spacing-3);
-  align-items: center;
+  flex-wrap: wrap;
 }
 
-.search-box {
-  position: relative;
+.messages-search-field {
+  flex: 1 1 20rem;
+}
+
+.messages-state {
+  align-items: center;
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
   display: flex;
-  align-items: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-4);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-sm);
 }
 
-.search-icon {
-  position: absolute;
-  left: var(--spacing-3);
-  color: var(--color-text-tertiary);
-  pointer-events: none;
+.messages-state.error {
+  color: var(--color-error);
 }
 
-.search-input {
-  padding-left: var(--spacing-8);
-  width: 300px;
+.messages-more {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.messages-table-wrap {
+  overflow-x: auto;
+  padding: 0;
 }
 
 .messages-table {
   width: 100%;
 }
 
-.messages-table th {
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-secondary);
-  background-color: var(--color-bg-tertiary);
-  text-transform: uppercase;
-  font-size: var(--font-size-xs);
-  letter-spacing: 0.05em;
-}
-
 .messages-table td {
-  font-size: var(--font-size-sm);
-}
-
-.messages-table tr:hover {
-  background-color: var(--color-bg-tertiary);
+  vertical-align: top;
 }
 
 .message-link {
   font-family: var(--font-family-mono);
   font-weight: var(--font-weight-medium);
+}
+
+.message-id-cell {
+  font-family: var(--font-family-mono);
+  overflow-wrap: anywhere;
+}
+
+.message-dispositions .badge + .badge {
+  margin-left: var(--spacing-1);
+}
+
+.message-dispositions .badge {
+  margin-top: var(--spacing-1);
 }
 
 .badge {
@@ -80,13 +85,13 @@
 }
 
 .badge.inbound {
-  background-color: var(--color-info-light);
-  color: var(--color-info);
+  background-color: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
 }
 
 .badge.outbound {
-  background-color: var(--color-brand-50);
-  color: var(--color-brand-600);
+  background-color: var(--color-chip-accent-bg);
+  color: var(--color-chip-accent-text);
 }
 
 .badge.success {

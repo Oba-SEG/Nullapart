@@ -1,0 +1,208 @@
+.policy-detail-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-6);
+}
+
+.policy-detail-back {
+  align-items: center;
+  display: inline-flex;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-sm);
+}
+
+.policy-detail-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+
+.policy-detail-heading {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-3);
+}
+
+.policy-detail-title {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-3xl);
+  font-weight: var(--font-weight-bold);
+}
+
+.policy-detail-hint {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  max-width: 70ch;
+}
+
+.policy-detail-error {
+  color: var(--color-error);
+  font-size: var(--font-size-sm);
+}
+
+.policy-detail-notice {
+  color: var(--color-success);
+  font-size: var(--font-size-sm);
+}
+
+.policy-detail-badge {
+  background-color: var(--color-bg-tertiary);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  display: inline-block;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: 0.05em;
+  padding: var(--spacing-1) var(--spacing-2);
+  text-transform: uppercase;
+}
+
+.policy-detail-level-customer {
+  background-color: var(--color-chip-accent-bg);
+  color: var(--color-chip-accent-text);
+}
+
+.policy-detail-level-support {
+  background-color: var(--color-warning-light);
+  color: var(--color-warning);
+}
+
+.policy-detail-level-system {
+  background-color: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+}
+
+.policy-detail-floor {
+  background-color: var(--color-success-light);
+  color: var(--color-success);
+}
+
+.policy-detail-disposition-allow {
+  background-color: var(--color-success-light);
+  color: var(--color-success);
+}
+
+.policy-detail-disposition-reject {
+  background-color: var(--color-error-light);
+  color: var(--color-error);
+}
+
+.policy-detail-disposition-quarantine,
+.policy-detail-disposition-hold,
+.policy-detail-disposition-defer {
+  background-color: var(--color-warning-light);
+  color: var(--color-warning);
+}
+
+.policy-detail-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+
+.policy-detail-panel h2 {
+  font-size: var(--font-size-xl);
+}
+
+.policy-detail-panel-head {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-4);
+  justify-content: space-between;
+}
+
+.policy-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-3);
+}
+
+.policy-detail-table-wrap {
+  overflow-x: auto;
+}
+
+.policy-detail-table td {
+  vertical-align: top;
+}
+
+.policy-detail-condition {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  max-width: 30rem;
+}
+
+.policy-detail-code {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+
+.policy-detail-status {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+}
+
+.policy-detail-status-active {
+  color: var(--color-success);
+  font-weight: var(--font-weight-semibold);
+}
+
+.policy-detail-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+}
+
+.policy-detail-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+}
+
+.policy-detail-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-3);
+}
+
+.policy-detail-fieldset {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  padding: var(--spacing-4);
+}
+
+.policy-detail-fieldset legend {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.05em;
+  padding: 0 var(--spacing-2);
+  text-transform: uppercase;
+}
+
+.policy-detail-checkset {
+  border: none;
+  padding: 0;
+}
+
+.policy-detail-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-3);
+}
+
+.policy-detail-check {
+  align-items: center;
+  display: inline-flex;
+  font-size: var(--font-size-sm);
+  gap: var(--spacing-2);
+}
+
+.policy-detail-check input {
+  box-shadow: none;
+}

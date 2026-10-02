@@ -16,7 +16,7 @@ The context contains at minimum:
 
 - deployment/region identity;
 - real authenticated actor;
-- impersonation subject/context where active;
+- customer-entry (impersonation) context where active;
 - active customer public identity;
 - internal customer/tenant key;
 - effective roles/permissions;
@@ -77,7 +77,7 @@ Instead:
 
 - cross-customer search/listing uses explicit platform permission and bounded query paths;
 - opening/acting on a specific customer establishes explicit customer scope;
-- impersonation preserves both real actor and acting-as identity;
+- impersonation preserves the real actor and the entered customer; the actor's own roles and permissions are unchanged;
 - customer-sensitive actions remain tenant scoped and audited;
 - Support content restrictions remain effective even when tenant scope is valid.
 

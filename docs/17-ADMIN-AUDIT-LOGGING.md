@@ -155,7 +155,10 @@ For actions against external systems that cannot be part of the same database tr
 
 ## Impersonation
 
-Every impersonated audit event preserves both identities.
+Every impersonation/entry audit event preserves the real actor and the
+entered customer. Customer entry has no acted-as subject identity, so
+`impersonated_subject` stays empty; legacy subject-based rows keep the
+original subject login.
 
 Example conceptual record:
 
@@ -167,7 +170,10 @@ actor_level:
   SUPPORT
 
 impersonated_subject:
-  admin@customer.example
+  (empty — customer entry has no subject identity)
+
+impersonated_customer:
+  CZA-81
 
 customer_id:
   CZA-81
@@ -185,7 +191,7 @@ result:
   SUCCESS
 ```
 
-No audit view may collapse the actor and impersonated subject into one identity.
+No audit view may collapse the real actor and the entered customer (or legacy acted-as subject) into one identity.
 
 ## Storage design
 

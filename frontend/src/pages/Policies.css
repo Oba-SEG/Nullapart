@@ -1,0 +1,141 @@
+.policies-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-6);
+}
+
+.policies-title {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-3xl);
+  font-weight: var(--font-weight-bold);
+}
+
+.policies-subtitle {
+  color: var(--color-text-secondary);
+  margin-top: var(--spacing-2);
+  max-width: 60ch;
+}
+
+.policies-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+}
+
+.policies-chip {
+  background-color: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  box-shadow: var(--shadow-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  padding: var(--spacing-1) var(--spacing-4);
+  transition:
+    color var(--transition-fast),
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.policies-chip:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-md);
+}
+
+.policies-chip-active {
+  background-color: var(--color-chip-accent-bg);
+  border-color: var(--color-chip-accent-border);
+  color: var(--color-chip-accent-text);
+  font-weight: var(--font-weight-semibold);
+  box-shadow:
+    var(--shadow-sm),
+    inset 0 1px 0 rgba(250, 250, 250, 0.12),
+    0 0 14px color-mix(in srgb, var(--lime) 12%, transparent);
+}
+
+.policies-state {
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-4);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-sm);
+}
+
+.policies-state.error {
+  color: var(--color-error);
+}
+
+.policies-table-wrap {
+  overflow-x: auto;
+  padding: 0;
+}
+
+.policies-table td {
+  vertical-align: top;
+}
+
+.policies-description {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  max-width: 36rem;
+}
+
+/* Management-level hierarchy (docs/12): system = primary signal,
+ * support = review tier, customer = neutral scope, floor = cyan guarantee. */
+.policies-badge {
+  background-color: var(--color-bg-tertiary);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  display: inline-block;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: 0.05em;
+  margin: 0 var(--spacing-1) var(--spacing-1) 0;
+  padding: var(--spacing-1) var(--spacing-2);
+  text-transform: uppercase;
+}
+
+.policies-level-customer {
+  background-color: var(--color-bg-tertiary);
+  border-color: var(--color-border-strong);
+  color: var(--color-text-secondary);
+}
+
+.policies-level-support {
+  background-color: var(--color-warning-light);
+  border-color: color-mix(in srgb, var(--color-warning) 45%, transparent);
+  color: var(--color-warning);
+}
+
+.policies-level-system {
+  background-color: var(--color-chip-accent-bg);
+  border-color: var(--color-chip-accent-border);
+  color: var(--color-chip-accent-text);
+}
+
+.policies-floor {
+  background-color: var(--color-success-light);
+  border-color: color-mix(in srgb, var(--color-success) 45%, transparent);
+  color: var(--color-success);
+}
+
+.policies-table td:first-child a {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+}
+
+.policies-revision {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+
+.policies-empty {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}

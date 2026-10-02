@@ -51,3 +51,8 @@ variable "mail_spool_volume_gib" {
   type        = number
   default     = 100
 }
+
+variable "acm_certificate_arn" {
+  description = "ACM certificate ARN for the Control Plane ALB HTTPS listener"
+  type        = string
+}

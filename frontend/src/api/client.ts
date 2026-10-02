@@ -5,6 +5,9 @@
  * Session cookies are server-managed; bearer tokens are never stored in browser storage.
  */
 
+import { getCsrfToken } from "../auth/csrf";
+import { randomUuid } from "../lib/ids";
+
 export interface ApiError {
   code: string;
   message: string;
@@ -20,7 +23,8 @@ interface ApiSuccessEnvelope<T> {
 }
 
 interface ApiErrorEnvelope {
-  error: string;
+  code?: string;
+  error?: string;
   message: string;
   trace_id?: string;
   api_version?: string;
@@ -32,12 +36,31 @@ export interface ApiClientConfig {
 }
 
 function generateCorrelationId(): string {
-  return crypto.randomUUID();
+  return randomUuid();
 }
 
-function getCsrfToken(): string | null {
-  const meta = document.querySelector('meta[name="csrf-token"]');
-  return meta?.getAttribute("content") ?? null;
+/**
+ * Whether this tab has ever held a server session. Lets the 401 handler
+ * distinguish "session expired" from "never signed in" without touching
+ * browser storage (the session cookie is HttpOnly).
+ */
+let sessionSeen = false;
+
+export function markSessionSeen(): void {
+  sessionSeen = true;
+}
+
+export function hasSeenSession(): boolean {
+  return sessionSeen;
+}
+
+function redirectToLogin(): void {
+  if (window.location.pathname.startsWith("/login")) return;
+  const suffix = sessionSeen ? "&reason=expired" : "";
+  const target = `/login?return_to=${encodeURIComponent(
+    window.location.pathname + window.location.search,
+  )}${suffix}`;
+  window.location.replace(target);
 }
 
 export function createApiClient(config: ApiClientConfig) {
@@ -50,6 +73,7 @@ export function createApiClient(config: ApiClientConfig) {
     options?: {
       signal?: AbortSignal;
       idempotencyKey?: string;
+      redirect?: RequestRedirect;
     },
   ): Promise<T> {
     const correlationId = generateCorrelationId();
@@ -71,9 +95,13 @@ export function createApiClient(config: ApiClientConfig) {
 
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
-    const signal = options?.signal
-      ? AbortSignal.any([options.signal, controller.signal])
-      : controller.signal;
+    const externalSignal = options?.signal;
+    const abortFromExternalSignal = () => controller.abort();
+    if (externalSignal?.aborted) {
+      controller.abort();
+    } else {
+      externalSignal?.addEventListener("abort", abortFromExternalSignal, { once: true });
+    }
 
     try {
       const response = await fetch(`${baseUrl}${path}`, {
@@ -81,8 +109,20 @@ export function createApiClient(config: ApiClientConfig) {
         headers,
         body: body !== undefined ? JSON.stringify(body) : undefined,
         credentials: "same-origin",
-        signal,
+        signal: controller.signal,
+        redirect: options?.redirect ?? "follow",
       });
+
+      // `redirect: "manual"` hides the 3xx itself: a navigation the caller
+      // must follow as a full-page load surfaces as an opaque redirect.
+      if (response.type === "opaqueredirect") {
+        throw {
+          code: "AUTH_REDIRECT",
+          message: "Authentication continues in the identity provider",
+          traceId: correlationId,
+          retryable: false,
+        } satisfies ApiError;
+      }
 
       if (response.status === 204) {
         return undefined as T;
@@ -92,8 +132,16 @@ export function createApiClient(config: ApiClientConfig) {
 
       if (!response.ok) {
         const errorBody = (json ?? {}) as Partial<ApiErrorEnvelope>;
+        const code = errorBody.code ?? errorBody.error ?? `HTTP_${response.status}`;
+        if (
+          response.status === 401 &&
+          !path.startsWith("/auth/") &&
+          (code === "UNAUTHENTICATED" || code === "unauthorized" || code === "HTTP_401")
+        ) {
+          redirectToLogin();
+        }
         throw {
-          code: errorBody.error ?? `HTTP_${response.status}`,
+          code,
           message: errorBody.message ?? response.statusText,
           traceId: errorBody.trace_id ?? correlationId,
           apiVersion: errorBody.api_version,
@@ -123,6 +171,7 @@ export function createApiClient(config: ApiClientConfig) {
       }
       throw error;
     } finally {
+      externalSignal?.removeEventListener("abort", abortFromExternalSignal);
       window.clearTimeout(timeoutId);
     }
   }
@@ -134,7 +183,11 @@ export function createApiClient(config: ApiClientConfig) {
     post<T>(
       path: string,
       body?: unknown,
-      options?: { signal?: AbortSignal; idempotencyKey?: string },
+      options?: {
+        signal?: AbortSignal;
+        idempotencyKey?: string;
+        redirect?: RequestRedirect;
+      },
     ) {
       return request<T>("POST", path, body, options);
     },
@@ -145,11 +198,15 @@ export function createApiClient(config: ApiClientConfig) {
     ) {
       return request<T>("PUT", path, body, options);
     },
-    patch<T>(path: string, body?: unknown, options?: { signal?: AbortSignal }) {
-      return request<T>("PATCH", path, body, { signal: options?.signal });
+    patch<T>(
+      path: string,
+      body?: unknown,
+      options?: { signal?: AbortSignal; idempotencyKey?: string },
+    ) {
+      return request<T>("PATCH", path, body, options);
     },
-    delete<T>(path: string, options?: { signal?: AbortSignal }) {
-      return request<T>("DELETE", path, undefined, { signal: options?.signal });
+    delete<T>(path: string, options?: { signal?: AbortSignal; idempotencyKey?: string }) {
+      return request<T>("DELETE", path, undefined, options);
     },
   };
 }

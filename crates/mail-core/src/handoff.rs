@@ -3,6 +3,7 @@
 //! The endpoint is private and authenticated before JSON parsing. The raw body,
 //! HTTP method and path are covered by the canonical Nullapart HMAC contract.
 
+use async_trait::async_trait;
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -13,6 +14,7 @@ use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use sqlx::PgPool;
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
@@ -21,8 +23,8 @@ use nullapart_mail_contracts::transaction::{
     DeploymentId, EnvelopeSender, Recipient, TransactionId,
 };
 
-const HANDOFF_PATH: &str = "/internal/handoff";
-const HANDOFF_METHOD: &str = "POST";
+pub(crate) const HANDOFF_PATH: &str = "/internal/handoff";
+pub(crate) const HANDOFF_METHOD: &str = "POST";
 
 #[derive(Debug, Clone)]
 pub struct HandoffConfig {
@@ -120,7 +122,7 @@ pub enum HandoffError {
 /// Derive a stable transaction identifier from facts that identify one accepted
 /// Postfix queue item. Persistence uses this ID as the idempotency key so retries
 /// cannot create a second transaction.
-fn deterministic_transaction_id(
+pub(crate) fn deterministic_transaction_id(
     config: &HandoffConfig,
     request: &AfterQueueHandoffRequest,
 ) -> TransactionId {
@@ -196,7 +198,7 @@ pub fn handoff_router(config: HandoffConfig) -> Router {
         .with_state(config)
 }
 
-fn verify_request_auth(
+pub(crate) fn verify_request_auth(
     config: &HandoffConfig,
     headers: &HeaderMap,
     body: &[u8],
@@ -262,6 +264,108 @@ async fn handle_handoff(
             StatusCode::BAD_REQUEST,
             "invalid handoff request".to_string(),
         )),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandoffIdempotencyResult {
+    pub transaction_id: TransactionId,
+    pub duplicate: bool,
+}
+
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum HandoffIdempotencyError {
+    #[error("invalid handoff idempotency input")]
+    InvalidInput,
+    #[error("handoff idempotency conflict")]
+    Conflict,
+    #[error("handoff idempotency store unavailable")]
+    Unavailable,
+}
+
+#[async_trait]
+pub trait HandoffIdempotencyStore: Send + Sync {
+    async fn create_or_get(
+        &self,
+        deployment_id: &DeploymentId,
+        postfix_queue_id: &str,
+        content_hash: &str,
+    ) -> Result<HandoffIdempotencyResult, HandoffIdempotencyError>;
+}
+
+#[derive(Clone)]
+pub struct PostgresHandoffIdempotencyStore {
+    pool: PgPool,
+}
+
+impl PostgresHandoffIdempotencyStore {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl HandoffIdempotencyStore for PostgresHandoffIdempotencyStore {
+    async fn create_or_get(
+        &self,
+        deployment_id: &DeploymentId,
+        postfix_queue_id: &str,
+        content_hash: &str,
+    ) -> Result<HandoffIdempotencyResult, HandoffIdempotencyError> {
+        let postfix_queue_id_len = postfix_queue_id.trim().len();
+        if !(1..=320).contains(&postfix_queue_id_len) {
+            return Err(HandoffIdempotencyError::InvalidInput);
+        }
+        let content_hash_len = content_hash.trim().len();
+        if !(1..=128).contains(&content_hash_len) {
+            return Err(HandoffIdempotencyError::InvalidInput);
+        }
+
+        let transaction_id = TransactionId::new();
+        let inserted = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO handoff_idempotency \
+             (deployment_id, postfix_queue_id, content_hash, transaction_id) \
+             VALUES ($1, $2, $3, $4) \
+             ON CONFLICT (deployment_id, postfix_queue_id) DO NOTHING \
+             RETURNING transaction_id",
+        )
+        .bind(&deployment_id.0)
+        .bind(postfix_queue_id)
+        .bind(content_hash)
+        .bind(transaction_id.0)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| HandoffIdempotencyError::Unavailable)?;
+
+        if let Some(transaction_id) = inserted {
+            return Ok(HandoffIdempotencyResult {
+                transaction_id: TransactionId(transaction_id),
+                duplicate: false,
+            });
+        }
+
+        let existing = sqlx::query_as::<_, (String, Uuid)>(
+            "SELECT content_hash, transaction_id \
+             FROM handoff_idempotency \
+             WHERE deployment_id = $1 AND postfix_queue_id = $2",
+        )
+        .bind(&deployment_id.0)
+        .bind(postfix_queue_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| HandoffIdempotencyError::Unavailable)?;
+
+        let (stored_hash, stored_transaction_id) =
+            existing.ok_or(HandoffIdempotencyError::Unavailable)?;
+
+        if stored_hash != content_hash {
+            return Err(HandoffIdempotencyError::Conflict);
+        }
+
+        Ok(HandoffIdempotencyResult {
+            transaction_id: TransactionId(stored_transaction_id),
+            duplicate: true,
+        })
     }
 }
 

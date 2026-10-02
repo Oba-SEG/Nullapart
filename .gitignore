@@ -8,6 +8,7 @@ dist/
 .env
 .env.*
 !.env.example
+!.env.local.example
 
 # IDE
 .vscode/
@@ -33,3 +34,6 @@ Thumbs.db
 # Build artifacts
 /build/
 /out/
+
+# Local-only runtime credential material written by compose.local.yml
+infrastructure/containers/.zitadel-bootstrap/

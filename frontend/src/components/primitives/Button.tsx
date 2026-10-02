@@ -8,7 +8,7 @@
 import { forwardRef, type ButtonHTMLAttributes } from "react";
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: "default" | "primary" | "danger" | "ghost";
+  variant?: "default" | "primary" | "danger" | "clean" | "ghost";
   size?: "sm" | "md" | "lg";
   loading?: boolean;
 }
@@ -19,6 +19,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       "btn",
       variant === "primary" ? "btn-primary" : "",
       variant === "danger" ? "btn-danger" : "",
+      variant === "clean" ? "btn-clean" : "",
       variant === "ghost" ? "btn-ghost" : "",
       size === "sm" ? "btn-sm" : "",
       size === "lg" ? "btn-lg" : "",

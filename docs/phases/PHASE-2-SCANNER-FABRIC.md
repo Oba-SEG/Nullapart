@@ -63,6 +63,9 @@ Document justification based on:
 
 Do not create a network service solely for conceptual neatness.
 
+The Phase 2 decisions recorded against this rule are in
+[Scanner Topology Decisions](PHASE-2-SCANNER-TOPOLOGY.md).
+
 ## Resource safety
 
 Per-scanner profiles define:

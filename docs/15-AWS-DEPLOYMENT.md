@@ -210,7 +210,7 @@ The OpenAI-compatible API contract is deliberately model/backend independent so 
 
 ## Identity and secrets
 
-- ZITADEL is the leading regional identity candidate, subject to licensing/security validation.
+- ZITADEL is the accepted regional identity platform (decision recorded 2026-09-29; see `docs/03-IDENTITY-RBAC-IMPERSONATION.md`).
 - OpenBao is the leading regional secrets/workload-PKI candidate.
 - AWS IAM roles are used for AWS resource access.
 - AWS KMS is used for regional key/encryption needs where appropriate.

@@ -32,7 +32,7 @@ flowchart LR
     Control -->|tables / filters / detail drawer| UI
 
     Note1[Support audit views never expose message body / raw MIME / attachment content]
-    Note2[Impersonation preserves real actor + acting-as subject]
+    Note2[Impersonation preserves real actor + entered customer]
     Note3[Mutation + audit + outbox commit atomically where possible]
     Note4[Audit DB + immutable checkpoints are authoritative; SegLumberjack is diagnostic]
 

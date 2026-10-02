@@ -1,0 +1,16 @@
+# Pinned training environment for ml/inline (Python 3.14, /home/ob1/mlvenv)
+# torch must be the cu126 build: pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cu126
+# (the default cu130 wheel ships no sm_61 kernels for the local GTX 1050 Ti)
+torch==2.14.1
+transformers==5.18.0
+tokenizers==0.23.2
+onnx==1.23.1
+onnxruntime==1.30.0
+onnxscript==0.7.2
+scikit-learn==1.9.1
+scipy==1.18.1
+pandas==3.0.6
+numpy==2.5.3
+openpyxl==3.1.5
+safetensors==0.8.0
+ruff==0.16.9

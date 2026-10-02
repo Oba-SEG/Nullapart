@@ -1,0 +1,250 @@
+name: nullapart-local
+
+services:
+  postgres:
+    image: postgres:16.6-alpine
+    environment:
+      POSTGRES_DB: ${NULLAPART_POSTGRES_DB:-nullapart}
+      POSTGRES_USER: ${NULLAPART_POSTGRES_USER:-nullapart}
+      POSTGRES_PASSWORD: ${NULLAPART_POSTGRES_PASSWORD:?set NULLAPART_POSTGRES_PASSWORD in .env.local}
+      NULLAPART_MAILCORE_DB_PASSWORD: ${NULLAPART_MAILCORE_DB_PASSWORD:?set NULLAPART_MAILCORE_DB_PASSWORD in .env.local}
+    ports:
+      - "127.0.0.1:${NULLAPART_POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./migrations:/opt/nullapart/migrations:ro
+      - ./infrastructure/containers/phase2-local-seed.sql:/opt/nullapart/phase2-local-seed.sql:ro
+      - ./infrastructure/containers/postgres-local-init.sh:/docker-entrypoint-initdb.d/010_nullapart_init.sh:ro
+      - ./infrastructure/containers/provision-local-runtime-role.sh:/opt/nullapart/provision-local-runtime-role.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 512m
+    cpus: 1.0
+    networks: [backend]
+
+  redis:
+    image: redis:7.4.2-alpine
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 256m
+    cpus: 0.5
+    networks: [backend]
+
+  mailcore:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mailcore
+    environment:
+      NULLAPART_DEPLOYMENT_ID: LOCAL-TEST
+      NULLAPART_NODE_ID: mailcore-local-01
+      NULLAPART_ENVIRONMENT: local
+      NULLAPART_ALLOW_PRIVATE_NETWORK_BIND: "true"
+      NULLAPART_MAILCORE_BIND: 0.0.0.0:8081
+      NULLAPART_HANDOFF_HMAC_SECRET: ${NULLAPART_HANDOFF_HMAC_SECRET:?set NULLAPART_HANDOFF_HMAC_SECRET in .env.local}
+      NULLAPART_HANDOFF_HMAC_KEY_ID: mail-handoff-v1
+      NULLAPART_ARTIFACT_ROOT: /var/lib/nullapart/artifacts
+      DATABASE_URL: postgresql://nullapart_mailcore:${NULLAPART_MAILCORE_DB_PASSWORD}@postgres:5432/${NULLAPART_POSTGRES_DB:-nullapart}
+      RUST_LOG: ${NULLAPART_MAILCORE_LOG_FILTER:-info}
+      NULLAPART_CLAMAV_ENDPOINT: clamav:3310
+      NULLAPART_POSTFIX_REINJECTION_ENDPOINT: postfix:10026
+      NULLAPART_LOCAL_CONTROL_TOKEN: ${NULLAPART_LOCAL_CONTROL_TOKEN:?set NULLAPART_LOCAL_CONTROL_TOKEN in .env.local}
+      NULLAPART_LOCAL_CONTROL_CUSTOMER_ID: local-customer
+      NULLAPART_TRACE_WORKLOAD_TOKEN: ${NULLAPART_TRACE_WORKLOAD_TOKEN:-}
+      NULLAPART_DNS_RESOLVER: ${NULLAPART_DNS_RESOLVER:-}
+      # Server-authoritative identity mode. proxy_header is the local/CI
+      # default; oidc is only usable once the NULLAPART_OIDC_* family is set.
+      # The OIDC variables stay empty in proxy_header mode and are ignored
+      # there, so CI and IdP-less development keep working unchanged.
+      NULLAPART_IDENTITY_PROVIDER: ${NULLAPART_IDENTITY_PROVIDER:-proxy_header}
+      NULLAPART_OIDC_ISSUER: ${NULLAPART_OIDC_ISSUER:-}
+      NULLAPART_OIDC_CLIENT_ID: ${NULLAPART_OIDC_CLIENT_ID:-}
+      NULLAPART_OIDC_CLIENT_SECRET: ${NULLAPART_OIDC_CLIENT_SECRET:-}
+      NULLAPART_OIDC_REDIRECT_URI: ${NULLAPART_OIDC_REDIRECT_URI:-}
+      NULLAPART_OIDC_SCOPES: ${NULLAPART_OIDC_SCOPES:-profile email}
+    ports:
+      - "${NULLAPART_BIND_ADDRESS:-127.0.0.1}:${NULLAPART_MAILCORE_PORT:-58081}:8081"
+    volumes:
+      - artifact-data:/var/lib/nullapart/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clamav:
+        condition: service_healthy
+    mem_limit: 768m
+    cpus: 2.0
+    networks:
+      backend:
+        ipv4_address: 172.30.0.10
+
+  clamav:
+    image: clamav/clamav:stable
+    volumes:
+      - clamav-data:/var/lib/clamav
+    healthcheck:
+      test: ["CMD", "clamdcheck.sh"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 90s
+    mem_limit: 3g
+    cpus: 2.0
+    networks: [backend]
+
+  rspamd:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.rspamd
+    mem_limit: 768m
+    cpus: 1.0
+    networks: [backend]
+
+  postfix:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.postfix
+    environment:
+      NULLAPART_HANDOFF_HMAC_SECRET: ${NULLAPART_HANDOFF_HMAC_SECRET:?set NULLAPART_HANDOFF_HMAC_SECRET in .env.local}
+      NULLAPART_HANDOFF_HMAC_KEY_ID: mail-handoff-v1
+      NULLAPART_MAILCORE_HANDOFF_URL: http://mailcore:8081/internal/handoff
+      NULLAPART_HANDOFF_MAX_BYTES: "52428800"
+      NULLAPART_RSPAMD_MILTER: inet:rspamd:11332
+      NULLAPART_RELAY_DOMAIN: phase2.test
+      NULLAPART_LOCAL_ACCEPT_ALL_RELAY_RECIPIENTS: "true"
+      NULLAPART_LOCAL_DISABLE_SMTP_TLS: "true"
+      NULLAPART_LOCAL_DISCARD_DOMAIN: phase2.test
+    ports:
+      - "${NULLAPART_BIND_ADDRESS:-127.0.0.1}:${NULLAPART_SMTP_PORT:-2525}:25"
+    volumes:
+      - postfix-spool:/var/spool/postfix
+    depends_on:
+      - mailcore
+      - rspamd
+    mem_limit: 512m
+    cpus: 1.0
+    networks: [backend]
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../docker/Dockerfile.frontend
+    ports:
+      - "${NULLAPART_BIND_ADDRESS:-127.0.0.1}:${NULLAPART_FRONTEND_PORT:-53080}:80"
+    environment:
+      NULLAPART_LOCAL_CONTROL_TOKEN: ${NULLAPART_LOCAL_CONTROL_TOKEN:?set NULLAPART_LOCAL_CONTROL_TOKEN in .env.local}
+      NULLAPART_LOCAL_UI_USER: ${NULLAPART_LOCAL_UI_USER:?set NULLAPART_LOCAL_UI_USER in .env.local}
+      NULLAPART_LOCAL_UI_PASSWORD: ${NULLAPART_LOCAL_UI_PASSWORD:?set NULLAPART_LOCAL_UI_PASSWORD in .env.local}
+      NGINX_ENVSUBST_FILTER: ^NULLAPART_LOCAL_CONTROL_TOKEN$
+    depends_on:
+      - mailcore
+    mem_limit: 256m
+    cpus: 0.5
+    networks: [backend]
+
+  # Local-only OIDC identity provider for the Phase 3 Control Plane. It is an
+  # authentication source, never an authorization source: Nullapart keeps its
+  # own RBAC, sessions, RLS and audit. Login V2 is deliberately disabled so the
+  # provider is a single container with its UI served by the API itself; no
+  # proxy, no docker socket and no second published container.
+  zitadel:
+    image: ghcr.io/zitadel/zitadel:v4.19.2
+    command: ["start-from-init", "--masterkeyFromEnv"]
+    user: "0"
+    environment:
+      ZITADEL_MASTERKEY: ${NULLAPART_ZITADEL_MASTERKEY:?set NULLAPART_ZITADEL_MASTERKEY in .env.local}
+      ZITADEL_PORT: "8080"
+      ZITADEL_EXTERNALDOMAIN: ${NULLAPART_BIND_ADDRESS:-127.0.0.1}
+      ZITADEL_EXTERNALPORT: ${NULLAPART_ZITADEL_PORT:-53090}
+      ZITADEL_EXTERNALSECURE: "false"
+      ZITADEL_TLS_ENABLED: "false"
+      ZITADEL_DATABASE_POSTGRES_HOST: zitadel-db
+      ZITADEL_DATABASE_POSTGRES_PORT: "5432"
+      ZITADEL_DATABASE_POSTGRES_DATABASE: zitadel
+      ZITADEL_DATABASE_POSTGRES_USER_USERNAME: zitadel
+      ZITADEL_DATABASE_POSTGRES_USER_PASSWORD: ${NULLAPART_ZITADEL_DB_PASSWORD:?set NULLAPART_ZITADEL_DB_PASSWORD in .env.local}
+      ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME: postgres
+      ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD: ${NULLAPART_ZITADEL_DB_PASSWORD:?set NULLAPART_ZITADEL_DB_PASSWORD in .env.local}
+      ZITADEL_DATABASE_POSTGRES_ADMIN_EXISTINGDATABASE: postgres
+      ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_REQUIRED: "false"
+      ZITADEL_DEFAULTINSTANCE_LOGINPOLICY_FORCEMFA: "true"
+      ZITADEL_DEFAULTINSTANCE_LOGINPOLICY_ALLOWREGISTER: "false"
+      ZITADEL_FIRSTINSTANCE_ORG_NAME: Nullapart
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_USERNAME: ${NULLAPART_ZITADEL_ADMIN_USERNAME:?set NULLAPART_ZITADEL_ADMIN_USERNAME in .env.local}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_FIRSTNAME: Nullapart
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_LASTNAME: Admin
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_EMAIL_ADDRESS: ${NULLAPART_ZITADEL_ADMIN_EMAIL:?set NULLAPART_ZITADEL_ADMIN_EMAIL in .env.local}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORD: ${NULLAPART_ZITADEL_ADMIN_PASSWORD:?set NULLAPART_ZITADEL_ADMIN_PASSWORD in .env.local}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORDCHANGEREQUIRED: "false"
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_USERNAME: ${NULLAPART_ZITADEL_BOOTSTRAP_USERNAME:?set NULLAPART_ZITADEL_BOOTSTRAP_USERNAME in .env.local}
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_NAME: Nullapart Local Bootstrap
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINEKEY_EXPIRATIONDATE: "2031-01-01T00:00:00Z"
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINEKEY_TYPE: "1"
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_PAT_EXPIRATIONDATE: "2031-01-01T00:00:00Z"
+      ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_MACHINE_USERNAME: ${NULLAPART_ZITADEL_LOGINCLIENT_USERNAME:?set NULLAPART_ZITADEL_LOGINCLIENT_USERNAME in .env.local}
+      ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_MACHINE_NAME: Nullapart Local Login Client
+      ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_PAT_EXPIRATIONDATE: "2031-01-01T00:00:00Z"
+      # First-run credentials are written to a host-side bootstrap directory
+      # instead of stdout so no token or machine key lands in the container logs.
+      ZITADEL_FIRSTINSTANCE_MACHINEKEYPATH: /zitadel/bootstrap/nullapart-machinekey.json
+      ZITADEL_FIRSTINSTANCE_PATPATH: /zitadel/bootstrap/nullapart-bootstrap.pat
+      ZITADEL_FIRSTINSTANCE_LOGINCLIENTPATPATH: /zitadel/bootstrap/nullapart-login-client.pat
+    ports:
+      - "${NULLAPART_BIND_ADDRESS:-127.0.0.1}:${NULLAPART_ZITADEL_PORT:-53090}:8080"
+    volumes:
+      - ./infrastructure/containers/.zitadel-bootstrap:/zitadel/bootstrap
+    depends_on:
+      zitadel-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/zitadel", "ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    mem_limit: 1g
+    cpus: 2.0
+    networks: [backend]
+
+  # Private datastore for the identity provider only: no published port and no
+  # shared instance with the authoritative Nullapart PostgreSQL.
+  zitadel-db:
+    image: postgres:17.11-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${NULLAPART_ZITADEL_DB_PASSWORD:?set NULLAPART_ZITADEL_DB_PASSWORD in .env.local}
+      POSTGRES_DB: postgres
+    volumes:
+      - zitadel-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 512m
+    cpus: 1.0
+    networks: [backend]
+
+networks:
+  # PostgreSQL is explicitly bound to loopback and Redis has no published port.
+  # Keep this bridge routable so Docker Desktop can forward the loopback
+  # PostgreSQL port for host-side integration tests.
+  backend:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  postgres-data:
+  redis-data:
+  artifact-data:
+  clamav-data:
+  postfix-spool:
+  zitadel-db-data:

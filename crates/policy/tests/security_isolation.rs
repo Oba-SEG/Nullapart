@@ -118,7 +118,7 @@ fn impersonated_context_tracks_real_actor() {
 
     ctx.impersonation = Some(ImpersonationContext {
         real_actor: ctx.actor.clone(),
-        impersonated_subject: "target-customer".to_string(),
+        impersonated_subject: Some("target-customer".to_string()),
         impersonated_customer: CustomerId::new("target-customer"),
         started_at: Utc::now(),
         reason: "support ticket".to_string(),
@@ -145,7 +145,7 @@ fn impersonation_audit_trail_preserves_real_actor() {
 
     ctx.impersonation = Some(ImpersonationContext {
         real_actor: ctx.actor.clone(),
-        impersonated_subject: "target-customer".to_string(),
+        impersonated_subject: Some("target-customer".to_string()),
         impersonated_customer: CustomerId::new("target-customer"),
         started_at: Utc::now(),
         reason: "debugging".to_string(),
@@ -375,7 +375,7 @@ fn trace_context_preserves_chain() {
 
     ctx.impersonation = Some(ImpersonationContext {
         real_actor: ctx.actor.clone(),
-        impersonated_subject: "target-customer".to_string(),
+        impersonated_subject: Some("target-customer".to_string()),
         impersonated_customer: CustomerId::new("target-customer"),
         started_at: Utc::now(),
         reason: "debugging".to_string(),
@@ -480,29 +480,13 @@ fn tenant_override_does_not_affect_other_tenants() {
 }
 
 // =============================================================================
-// RLS pattern validation (requires PostgreSQL - integration test)
+// RLS pattern validation
 // =============================================================================
-
-#[test]
-#[ignore = "requires PostgreSQL with RLS policies enabled"]
-fn rls_deployment_isolation_cross_tenant_query_blocked() {
-    todo!("Requires running PostgreSQL with RLS policies")
-}
-
-#[test]
-#[ignore = "requires PostgreSQL with RLS policies enabled"]
-fn rls_audit_events_cannot_be_modified_by_tenant() {
-    todo!("Requires running PostgreSQL with RLS policies")
-}
-
-#[test]
-#[ignore = "requires PostgreSQL with RLS policies enabled"]
-fn rls_outbox_events_scoped_to_deployment() {
-    todo!("Requires running PostgreSQL with RLS policies")
-}
-
-#[test]
-#[ignore = "requires PostgreSQL with RLS policies enabled"]
-fn rls_feature_overrides_cannot_self_escalate() {
-    todo!("Requires running PostgreSQL with RLS policies")
-}
+//
+// The database-backed RLS checks (`rls_deployment_isolation_cross_tenant_query_blocked`,
+// `rls_audit_events_cannot_be_modified_by_tenant`,
+// `rls_outbox_events_scoped_to_deployment`,
+// `rls_feature_overrides_cannot_self_escalate`) live in
+// `crates/mail-core/tests/postgres_rls_isolation.rs`, which owns the local
+// PostgreSQL harness. They replaced four `todo!()` stubs here that failed
+// whenever the ignored suite was run instead of proving the policy.
