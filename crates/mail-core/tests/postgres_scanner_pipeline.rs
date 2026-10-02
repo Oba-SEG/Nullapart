@@ -311,48 +311,60 @@ async fn late_quarantine_conflict_rolls_back_artifact_evidence_and_disposition()
         .expect("rollback artifact fixture cleanup");
 }
 
+struct FakeInlineRuntime {
+    ready: bool,
+    probabilities: Vec<f32>,
+}
+
+impl nullapart_mail_core::inline_ml::runtime::InlineModelRuntime for FakeInlineRuntime {
+    fn ready(&self) -> bool {
+        self.ready
+    }
+    fn representation_version(&self) -> u32 {
+        nullapart_mail_core::inline_ml::representation::INLINE_ML_REPRESENTATION_VERSION
+    }
+    fn identity(&self) -> nullapart_mail_core::inline_ml::runtime::ModelIdentity {
+        nullapart_mail_core::inline_ml::runtime::ModelIdentity {
+            model_id: "multilabel-v1".to_string(),
+            model_version: "1".to_string(),
+        }
+    }
+    fn infer(
+        &self,
+        _text: &str,
+    ) -> Result<
+        nullapart_mail_core::inline_ml::runtime::ModelInference,
+        nullapart_mail_core::inline_ml::runtime::ModelError,
+    > {
+        if !self.ready {
+            return Err(
+                nullapart_mail_core::inline_ml::runtime::ModelError::Unavailable(
+                    "fake runtime not ready".to_string(),
+                ),
+            );
+        }
+        Ok(nullapart_mail_core::inline_ml::runtime::ModelInference {
+            probabilities: self.probabilities.clone(),
+        })
+    }
+}
+
 fn inline_fake_runtime(
     ready: bool,
 ) -> Arc<dyn nullapart_mail_core::inline_ml::runtime::InlineModelRuntime> {
-    struct FakeInlineRuntime {
-        ready: bool,
-    }
-    impl nullapart_mail_core::inline_ml::runtime::InlineModelRuntime for FakeInlineRuntime {
-        fn ready(&self) -> bool {
-            self.ready
-        }
-        fn representation_version(&self) -> u32 {
-            nullapart_mail_core::inline_ml::representation::INLINE_ML_REPRESENTATION_VERSION
-        }
-        fn identity(&self) -> nullapart_mail_core::inline_ml::runtime::ModelIdentity {
-            nullapart_mail_core::inline_ml::runtime::ModelIdentity {
-                model_id: "multilabel-v1".to_string(),
-                model_version: "1".to_string(),
-            }
-        }
-        fn infer(
-            &self,
-            _text: &str,
-        ) -> Result<
-            nullapart_mail_core::inline_ml::runtime::ModelInference,
-            nullapart_mail_core::inline_ml::runtime::ModelError,
-        > {
-            if !self.ready {
-                return Err(
-                    nullapart_mail_core::inline_ml::runtime::ModelError::Unavailable(
-                        "fake runtime not ready".to_string(),
-                    ),
-                );
-            }
-            Ok(nullapart_mail_core::inline_ml::runtime::ModelInference {
-                probabilities: vec![
-                    0.01;
-                    nullapart_mail_core::inline_ml::runtime::INLINE_ML_LABELS.len()
-                ],
-            })
-        }
-    }
-    Arc::new(FakeInlineRuntime { ready })
+    Arc::new(FakeInlineRuntime {
+        ready,
+        probabilities: vec![0.01; nullapart_mail_core::inline_ml::runtime::INLINE_ML_LABELS.len()],
+    })
+}
+
+fn inline_scored_runtime(
+    probabilities: Vec<f32>,
+) -> Arc<dyn nullapart_mail_core::inline_ml::runtime::InlineModelRuntime> {
+    Arc::new(FakeInlineRuntime {
+        ready: true,
+        probabilities,
+    })
 }
 
 async fn scanner_result_row(
@@ -596,6 +608,138 @@ async fn inline_ml_stage_unavailable_runtime_surfaces_explicit_unknown_failure()
     assert_eq!(
         scoped_counts(&pool, &fixture).await,
         (1, 2, 1, 0, 0, "allow".to_string())
+    );
+
+    tokio::fs::remove_dir_all(root)
+        .await
+        .expect("artifact fixture cleanup");
+}
+
+#[tokio::test]
+#[ignore = "requires migrated local PostgreSQL through 014_policy_administration.sql and NULLAPART_TEST_DATABASE_URL"]
+async fn inline_ml_scores_become_findings_and_quarantine_via_local_policy() {
+    let database_url = env::var("NULLAPART_TEST_DATABASE_URL")
+        .expect("NULLAPART_TEST_DATABASE_URL must target local test PostgreSQL");
+    let pool = PgPool::connect(&database_url)
+        .await
+        .expect("local PostgreSQL must connect");
+    let fixture = seed_tenant(&pool, "allow").await;
+
+    // Publish the threshold policy for this exact scope: one active
+    // tenant revision of ml_threat_classification with operating points.
+    let rules = serde_json::json!([
+        {
+            "id": "22222222-2222-2222-2222-222222222222",
+            "name": "inline ml operating points",
+            "priority": 10,
+            "condition": { "scope": "transaction" },
+            "action": {
+                "disposition": "quarantine",
+                "reason_code": "QUARANTINE_MALWARE",
+                "metadata": {
+                    "thresholds": {
+                        "version": 1,
+                        "classes": {
+                            "malware": { "low": 0.4, "medium": 0.7, "high": 0.9 }
+                        }
+                    }
+                }
+            },
+            "enabled": true
+        }
+    ]);
+    let mut transaction = pool.begin().await.expect("thresholds transaction");
+    sqlx::query(
+        "INSERT INTO policy_revisions \
+            (id, deployment_id, customer_id, family_id, scope_level, revision_number, \
+             rules, published_by, published_at, activated_at) \
+         VALUES ($1, $2, $3, 'ml_threat_classification', 'tenant', 1, $4, \
+                 'integration-test', now(), now())",
+    )
+    .bind(uuid::Uuid::new_v4())
+    .bind(&fixture.deployment.0)
+    .bind(&fixture.customer.0)
+    .bind(rules)
+    .execute(&mut *transaction)
+    .await
+    .expect("threshold revision must insert");
+    transaction.commit().await.expect("thresholds commit");
+
+    // Malware score 0.96 is above the high operating point of 0.9.
+    let mut scores = vec![0.01; nullapart_mail_core::inline_ml::runtime::INLINE_ML_LABELS.len()];
+    scores[0] = 0.96;
+    let root = env::temp_dir().join(format!(
+        "nullapart-pipeline-inline-policy-{}",
+        fixture.tenant_message_id.0
+    ));
+    let store = FilesystemArtifactStore::try_new(root.clone(), FilesystemArtifactRuntime::Test)
+        .await
+        .expect("filesystem store must initialize");
+    let stage = nullapart_mail_core::inline_ml::stage::InlineMlStage::with_runtime(
+        pool.clone(),
+        inline_scored_runtime(scores),
+    )
+    .expect("single inline ml registration must satisfy fabric validation");
+    let pipeline = DurableScannerPipeline::new(store, scanner_fabric(), pool.clone())
+        .with_inline_ml(Some(Arc::new(stage)));
+
+    // The real production consequence: the reviewed local finding policy
+    // that mailcore applies after scanning.
+    let outcome = pipeline
+        .process_with_policy(
+            context(&fixture),
+            benign_message(),
+            ContentType::new("message/rfc822"),
+            |scan| {
+                nullapart_mail_core::phase2_handoff::local_finding_policy(
+                    scan,
+                    PolicyRevisionId::new(),
+                )
+            },
+        )
+        .await
+        .expect("durable workflow with thresholds must complete");
+    assert_eq!(
+        outcome.disposition,
+        Disposition::Quarantine,
+        "a finding above threshold must quarantine through local policy"
+    );
+    assert!(outcome.quarantine_created);
+
+    let inline_row = scanner_result_row(&pool, &fixture, "inline-ml-classifier")
+        .await
+        .expect("pass-2 inline scanner result must persist");
+    assert_eq!(
+        inline_row.0, "threat",
+        "the fabric escalates definite findings in the scanner row"
+    );
+
+    let findings = finding_rows(&pool, &fixture).await;
+    assert_eq!(
+        findings,
+        vec![("inline_ml".to_string(), "malware".to_string())],
+        "the above-threshold score becomes exactly one normalized finding"
+    );
+
+    let (severity, band, score): (String, String, f64) = sqlx::query_as(
+        "SELECT severity, details ->> 'band', (details ->> 'score')::float8 \
+         FROM security_findings WHERE tenant_message_id = $1",
+    )
+    .bind(fixture.tenant_message_id.0)
+    .fetch_one(&pool)
+    .await
+    .expect("finding detail must persist");
+    assert_eq!(severity, "high", "band severity rides the finding");
+    assert_eq!(band, "high");
+    assert!(
+        (score - 0.96).abs() < 1e-6,
+        "score must round-trip: {score}"
+    );
+
+    assert_eq!(
+        scoped_counts(&pool, &fixture).await,
+        (1, 2, 1, 1, 1, "quarantine".to_string()),
+        "artifact, both scanner rows, the finding, quarantine, envelope and disposition persist"
     );
 
     tokio::fs::remove_dir_all(root)

@@ -1,7 +1,10 @@
 # Phase 4 Local Implementation Plan — Inline ML
 
-**Status:** plan active (started 2026-10-01); increments 1, 2, 3 and 4
-complete and evidence-backed below (increment 4 closed 2026-10-02: registry
+**Status:** plan active (started 2026-10-01); increments 1, 2, 3, 4 and 5
+complete and evidence-backed below (increment 5 closed 2026-10-02: thresholds
+as policy data with publish validation, scan-time resolution, evidence-to-
+policy wiring proven end to end, full ignored PostgreSQL gate 58/58, workspace
+gates green; increment 4 closed 2026-10-02: registry
 table + audited system admin API with approval/activation/rollback, full
 ignored PostgreSQL gate 56/56, workspace gates green; increment 3 closed
 2026-10-02: stage wired behind `inline_ml_classification`, gates green,
@@ -207,6 +210,30 @@ increment 9: security test battery + canonical gates + local live evidence + rep
     counts. Minority/majority class counts recorded per split; dedup =
     ordered global train→validation→test normalized-text dedup.
 
+17. **Thresholds live in policy data (owner ruling, increment 5).**
+    Operating points are rows in the existing `ml_threat_classification`
+    policy family: one `thresholds` key inside a rule's
+    `action.metadata`, published through the existing audited policy API
+    (no new endpoint, no schema change, no feature-switch auth
+    shortcuts). The stage resolves the active revision at scan time with
+    the FeatureSwitchResolver pattern (transaction, server-side RLS
+    scope, fail-closed `None`).
+
+18. **Unconfigured is explicit, never invented (owner ruling, feature
+    ON, no thresholds).** When the feature runs but no valid threshold
+    payload resolves for the scope, the stage logs an explicit `WARN`
+    and scores stay evidence-only — no numeric defaults are synthesized
+    from anywhere. The runbook step is to publish thresholds through the
+    policy API.
+
+19. **All bands feed the existing binary local policy (owner ruling).**
+    Thresholds map scores to `Low`/`Medium`/`High` bands (severity on
+    the finding, with the score, band and operating points in the
+    bounded `details` JSONB), and every non-false-positive finding —
+    regardless of band — flows into the reviewed binary
+    `local_finding_policy` (finding → quarantine). Bands are severity
+    metadata, not a second disposition engine.
+
 ## Exit criteria mapping
 
 | `PHASE-4-INLINE-ML.md` exit criterion | Where evidenced |
@@ -216,7 +243,7 @@ increment 9: security test battery + canonical gates + local live evidence + rep
 | input/output contract versioned | increments 1–3 |
 | runtime failure safe | increment 3 failure battery |
 | model registry/rollback works | increment 4 |
-| policy treats ML as evidence | increment 5 |
+| policy treats ML as evidence | increment 5 (evidenced below) |
 | feedback does not self-train | increment 6 + adversarial test |
 | security/privacy evaluation passes | increment 9 battery (adversarial text, HTML noise, prompt-like text, truncation, Unicode/obfuscation, QR/OCR lure, unavailable, malformed representation, version mismatch, tenant-context leakage, training-data authorization) |
 
@@ -226,8 +253,8 @@ increment 9: security test battery + canonical gates + local live evidence + rep
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo test --workspace`
 - `cd frontend && pnpm check-all`
-- ignored DB suite against local Postgres (56 tests across 15 suites after
-  increment 4; grows with this phase; run serially via SSH tunnel)
+- ignored DB suite against local Postgres (58 tests across 15 suites after
+  increment 5; grows with this phase; run serially via SSH tunnel)
 
 ## Increment 1 evidence — versioned input representation
 
@@ -491,6 +518,85 @@ Complete (2026-10-02).
   rollback does not move artifacts on disk, no thresholds or score→policy
   wiring (increment 5), no UI (increment 8).
 
+## Increment 5 evidence — thresholds as policy + evidence-to-policy wiring
+
+Complete (2026-10-02).
+
+- **Owner rulings applied:** decisions 17–19 above (policy-data storage,
+  explicit-unconfigured semantics, binary local policy for all bands).
+- **Payload and validation** (`crates/mail-core/src/inline_ml/thresholds.rs`):
+  exactly one metadata key `thresholds` with
+  `{"version":1,"classes":{"<snake_case category>":{"low","medium","high"}}}`;
+  keys must be canonical `FindingCategory` names (PascalCase labels are
+  lowered through `label_to_category`/`category_key` so model labels and
+  policy keys can never drift), every value in `(0,1]` and
+  `low ≤ medium ≤ high`, version must be the current one. The family
+  publish path validates `ml_threat_classification` rules before the
+  idempotency claim and before the high-risk bucket:
+  invalid payloads → `400 INVALID_THRESHOLDS` with no revision, no audit
+  success, no token consumption; a publish **without** threshold metadata
+  stays legal (that is the explicit unconfigured state from decision 18).
+  Enabled rules win by descending priority (mirrors the rule evaluator
+  sort), first definition of a class applies.
+- **Scan-time resolution:** `MlThresholdResolver` runs one transaction,
+  sets the RLS scope through `policy_admin::set_scope`, reads the active
+  tenant revision (`deactivated_at IS NULL`, deployment + customer bound,
+  newest revision), and returns `None` for every failure mode (absent
+  family revision, invalid payload, scope/database error) — the stage
+  logs `inline ml thresholds are not configured for this scope; scores
+  remain evidence only...` in that case.
+- **No scanner-sdk/fabric contract change:** thresholds ride
+  `InlineMlScanParams.thresholds` (stage resolves async → params →
+  adapter converts synchronously). `threshold_findings` builds one
+  normalized finding per above-threshold configured class: severity =
+  band, `description` carries the score and operating points, `details`
+  JSONB is bounded (model id/version, category, band, score, thresholds,
+  full score vector); the fabric's `escalate_definite_status` promotes
+  the scanner row to `threat`. Scores below every operating point and
+  classes without a payload never flag — they stay in the result
+  details as evidence.
+- **Evidence-to-policy proof:** `local_finding_policy` is now `pub` so
+  integration tests assert the real production consequence instead of a
+  stub. `tests/postgres_scanner_pipeline.rs::inline_ml_scores_become_
+  findings_and_quarantine_via_local_policy` seeds the actual
+  `ml_threat_classification` revision for the message's scope, runs a
+  0.96 malware score through the durable pipeline with
+  `process_with_policy(..., |scan| local_finding_policy(scan, ...))`,
+  and asserts: disposition `Quarantine`, `quarantine_created`, one
+  (`inline_ml`,`malware`) finding with severity/band `high` and the
+  score round-tripped in details, scanner row status `threat`, and
+  scoped counts (artifact 1, scanner rows 2, findings 1, quarantine 1,
+  reinjection envelope 1, disposition `quarantine`).
+- **Tests:** 8 resolver/validation/band unit tests + 4 adapter unit
+  tests (above-threshold findings with both configured classes,
+  below-threshold evidence-only, unconfigured class never flags even at
+  0.99, params round-trip without thresholds) + 2 ignored PostgreSQL
+  tests (publish validation matrix with no-write-on-refusal and
+  success-only audit counts; the end-to-end evidence-to-policy proof
+  above). Stage skip/override/unavailable-runtime paths keep their
+  existing evidence-only guarantees.
+- **Runbook step (decision 18):** publish thresholds through the normal
+  audited policy API before relying on findings, e.g.
+  `POST /api/v1/policies/ml_threat_classification/revisions` with an
+  idempotency key and body `{"rules":[{"...","action":{"disposition":
+  "quarantine","reason_code":"QUARANTINE_MALWARE","metadata":
+  {"thresholds":{"version":1,"classes":{"malware":{"low":0.4,
+  "medium":0.7,"high":0.9}}}}}}]}`; a later publish without the
+  metadata key intentionally clears active thresholds (stage returns to
+  WARN / evidence-only).
+- **Gates (2026-10-02):** `cargo fmt --all -- --check` green;
+  `cargo clippy --workspace --all-targets -- -D warnings` green;
+  `cargo test --workspace` green (410 mail-core lib tests, 0 failures);
+  `cd frontend && pnpm check-all` green (84 tests);
+  **full ignored PostgreSQL gate 58/58** across all 15 suites, run
+  serially via SSH tunnel against the `.4` scratch database.
+- **Not claimed (increment 5):** no threshold editing UI (increment 8 —
+  including the explicit confirmation needed when a UI rules publish
+  would clear thresholds), no per-class threshold tuning workflow
+  (increment 7), no feedback-driven retraining (increment 6), no new
+  public endpoint, schema change, or disposition logic beyond the
+  existing reviewed binary local policy.
+
 ## Superseded work — binary pilot (not counted as increment 2)
 
 Before the owner rulings in decisions 13–16, a single-label
@@ -511,4 +617,8 @@ was never run in the pilot.
 - no production-trained or customer-data-derived model in this phase;
 - no Deep AI / LLM in the mail hot path (Phase 7 boundary);
 - no autonomous remediation or model-driven disposition;
-- external benchmark/leaderboard claims — only local harness evidence.
+- external benchmark/leaderboard claims — only local harness evidence;
+- no threshold UI; a `ml_threat_classification` publish without the
+  `thresholds` metadata intentionally clears active thresholds (the stage
+  returns to explicit WARN / evidence-only) — increment 8 must confirm
+  that consequence before saving.

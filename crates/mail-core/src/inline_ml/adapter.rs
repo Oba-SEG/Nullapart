@@ -1,11 +1,12 @@
 //! Inline ML scanner adapter: pass-2 representation, tokenized inference
 //! and explicit outcome evidence behind the Scanner SDK contract.
 //!
-//! The adapter performs NO policy work and emits NO classification findings
-//! in this increment: a successful run reports `Clean` plus a versioned
-//! `details` payload (model identity, argmax, per-class scores); converting
-//! scores into findings/threshold policy is increment 5 by design
-//! (`docs/phases/PHASE-4-LOCAL-IMPLEMENTATION-PLAN.md`). Model failures are
+//! The adapter performs NO disposition policy work: a successful run always
+//! reports `Clean` plus a versioned `details` payload (model identity,
+//! argmax, per-class scores). Scores become classification findings only
+//! when the stage supplies policy-published thresholds
+//! ([`super::thresholds::MlThresholdConfig`], the `ml_threat_classification`
+//! family); without them the run stays evidence-only. Model failures are
 //! typed [`ScanError`]s so the fabric synthesizes Unknown/Error evidence
 //! that can never be mistaken for clean.
 
@@ -27,6 +28,7 @@ use super::representation::{
     INLINE_ML_REPRESENTATION_VERSION,
 };
 use super::runtime::{InlineModelRuntime, ModelError, INLINE_ML_CLASS_COUNT, INLINE_ML_LABELS};
+use super::thresholds::{band_for, band_label, category_key, label_to_category, MlThresholdConfig};
 use crate::scanner_adapters::read_content_bounded;
 
 /// Stable scanner identity for the inline ML classifier.
@@ -52,18 +54,24 @@ pub struct InlineMlScanParams {
     /// Authorized VIP context, present only when the caller supplies it.
     #[serde(default)]
     pub vip: Option<VipSignal>,
+    /// Policy-published thresholds for this scope. Absent means scores
+    /// stay evidence only (no classification findings).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thresholds: Option<MlThresholdConfig>,
 }
 
 /// Build the `ScanRequest::params` payload for one pass-2 stage run.
 pub fn inline_ml_params(
     envelope_sender: &str,
     findings: &[nullapart_mail_contracts::SecurityFinding],
+    thresholds: Option<&MlThresholdConfig>,
 ) -> serde_json::Value {
     serde_json::json!({
         PARAMS_KEY: InlineMlScanParams {
             envelope_sender: Some(envelope_sender.to_string()),
             findings: findings.to_vec(),
             vip: None,
+            thresholds: thresholds.cloned(),
         }
     })
 }
@@ -88,22 +96,83 @@ impl InlineMlScanner {
     }
 }
 
+/// Convert scores into classification findings using policy-published
+/// thresholds. One finding per configured class whose score reached the
+/// `low` operating point; the band (Low/Medium/High) comes from the same
+/// thresholds and lands on the finding's severity. Order is the canonical
+/// label order, so repeated runs over identical scores are identical.
+fn threshold_findings(
+    probabilities: &[f32],
+    all_scores: &serde_json::Map<String, serde_json::Value>,
+    thresholds: &MlThresholdConfig,
+    identity: &super::runtime::ModelIdentity,
+) -> Vec<nullapart_scanner_sdk::types::ScannerFinding> {
+    use nullapart_scanner_sdk::types::ScannerFinding;
+    let mut findings = Vec::new();
+    for (index, label) in INLINE_ML_LABELS.iter().enumerate() {
+        let Some(category) = label_to_category(label) else {
+            continue;
+        };
+        let key = category_key(category);
+        let Some(threshold) = thresholds.classes.get(&key) else {
+            continue;
+        };
+        let score = probabilities[index];
+        let Some(band) = band_for(score, threshold) else {
+            continue;
+        };
+        findings.push(ScannerFinding {
+            id: uuid::Uuid::new_v4(),
+            severity: band,
+            category: key.clone(),
+            description: format!(
+                "Inline ML score {score:.4} for {key} is in the {} band (thresholds low {:.4}, medium {:.4}, high {:.4})",
+                band_label(band),
+                threshold.low,
+                threshold.medium,
+                threshold.high,
+            ),
+            details: Some(serde_json::json!({
+                "model": {
+                    "id": identity.model_id,
+                    "version": identity.model_version,
+                },
+                "category": key,
+                "band": band_label(band),
+                "score": score,
+                "thresholds": {
+                    "low": threshold.low,
+                    "medium": threshold.medium,
+                    "high": threshold.high,
+                },
+                "scores": serde_json::Value::Object(all_scores.clone()),
+            })),
+            indicators: Vec::new(),
+            false_positive: false,
+        });
+    }
+    findings
+}
+
 fn result_with_details(
     scanner: &InlineMlScanner,
     request: &ScanRequest,
-    status: ScannerStatus,
+    findings: Vec<nullapart_scanner_sdk::types::ScannerFinding>,
     details: Option<serde_json::Value>,
     started: Instant,
     started_at: DateTime<Utc>,
     model_version: &str,
 ) -> ScanResult {
+    // A completed inline run is `Clean` at the scanner-status level:
+    // band severity on the findings is escalated by the fabric, never
+    // synthesized here.
     ScanResult {
         request_id: request.request_id,
         contract_version: request.contract_version,
         scanner_id: scanner.id(),
-        status,
+        status: ScannerStatus::Clean,
         message: None,
-        findings: Vec::new(),
+        findings,
         completed_at: Utc::now(),
         duration_ms: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
         details,
@@ -283,14 +352,28 @@ impl Scanner for InlineMlScanner {
             "inference": {
                 "argmax": argmax_label,
                 "argmax_score": argmax_score,
-                "scores": serde_json::Value::Object(scores),
+                "scores": serde_json::Value::Object(scores.clone()),
             },
         });
+
+        let findings = match params.thresholds.as_ref() {
+            Some(thresholds) => {
+                threshold_findings(&inference.probabilities, &scores, thresholds, &identity)
+            },
+            None => Vec::new(),
+        };
+        if !findings.is_empty() {
+            tracing::info!(
+                stage = PARAMS_KEY,
+                count = findings.len(),
+                "inline ml scores converted to classification findings"
+            );
+        }
 
         Ok(result_with_details(
             self,
             &request,
-            ScannerStatus::Clean,
+            findings,
             Some(details),
             started,
             started_at,
@@ -439,7 +522,7 @@ mod tests {
             timeout_ms,
             limits: ResourceLimits::bounded_defaults(),
             requested_at: Utc::now(),
-            params: inline_ml_params("bounce@example.test", &[]),
+            params: inline_ml_params("bounce@example.test", &[], None),
         }
     }
 
@@ -619,7 +702,7 @@ mod tests {
         let runtime = Arc::new(FakeRuntime::healthy());
         let scanner = scanner(Arc::clone(&runtime));
         let mut req = request(5000);
-        req.params = inline_ml_params("bounce@example.test", std::slice::from_ref(&finding));
+        req.params = inline_ml_params("bounce@example.test", std::slice::from_ref(&finding), None);
         scanner
             .scan(req, content(sample_mime()))
             .await
@@ -636,6 +719,162 @@ mod tests {
         assert_eq!(captured.first().expect("captured text"), &expected);
         assert!(!expected.contains("denied host matched"));
         assert!(expected.contains("Subject: verify your account"));
+    }
+
+    fn test_thresholds() -> MlThresholdConfig {
+        let mut classes = std::collections::BTreeMap::new();
+        classes.insert(
+            "malware".to_string(),
+            super::super::thresholds::ClassThreshold {
+                low: 0.4,
+                medium: 0.7,
+                high: 0.9,
+            },
+        );
+        classes.insert(
+            "phishing".to_string(),
+            super::super::thresholds::ClassThreshold {
+                low: 0.5,
+                medium: 0.75,
+                high: 0.95,
+            },
+        );
+        MlThresholdConfig {
+            version: super::super::thresholds::INLINE_ML_THRESHOLDS_VERSION,
+            classes,
+        }
+    }
+
+    fn runtime_with_scores(probabilities: Vec<f32>) -> Arc<FakeRuntime> {
+        Arc::new(FakeRuntime {
+            ready: true,
+            representation_version: INLINE_ML_REPRESENTATION_VERSION,
+            probabilities: Some(probabilities),
+            error: None,
+            delay_ms: 0,
+            captured: Mutex::new(Vec::new()),
+        })
+    }
+
+    fn request_with_thresholds(
+        timeout_ms: u64,
+        thresholds: Option<&MlThresholdConfig>,
+    ) -> ScanRequest {
+        ScanRequest {
+            params: inline_ml_params("bounce@example.test", &[], thresholds),
+            ..request(timeout_ms)
+        }
+    }
+
+    #[tokio::test]
+    async fn configured_scores_over_threshold_become_banded_findings() {
+        let mut scores = vec![0.01; INLINE_ML_CLASS_COUNT];
+        scores[0] = 0.96; // Malware -> high band
+        scores[1] = 0.6; // Phishing -> low band (0.5 <= 0.6 < 0.75)
+        let scanner = scanner(runtime_with_scores(scores));
+        let thresholds = test_thresholds();
+        let result = scanner
+            .scan(
+                request_with_thresholds(5000, Some(&thresholds)),
+                content(sample_mime()),
+            )
+            .await
+            .expect("scan must run");
+        assert_eq!(result.status, ScannerStatus::Clean);
+        assert_eq!(result.findings.len(), 2, "both configured classes flag");
+        let malware = &result.findings[0];
+        assert_eq!(malware.category, "malware");
+        assert_eq!(malware.severity, FindingSeverity::High);
+        assert!(!malware.false_positive);
+        let details = malware.details.as_ref().expect("finding details");
+        assert_eq!(details["band"], "high");
+        let score = details["score"].as_f64().expect("score is a number");
+        assert!(
+            (score - 0.96).abs() < 1e-6,
+            "score must round-trip: {score}"
+        );
+        assert_eq!(details["model"]["id"], "fake-model");
+        let configured_low = details["thresholds"]["low"]
+            .as_f64()
+            .expect("low is a number");
+        assert!(
+            (configured_low - 0.4).abs() < 1e-6,
+            "threshold must round-trip: {configured_low}"
+        );
+        assert_eq!(
+            details["scores"].as_object().expect("scores").len(),
+            INLINE_ML_CLASS_COUNT
+        );
+        let phishing = &result.findings[1];
+        assert_eq!(phishing.category, "phishing");
+        assert_eq!(phishing.severity, FindingSeverity::Low);
+        assert_eq!(phishing.details.as_ref().expect("details")["band"], "low");
+        let details = result.details.expect("result details stay present");
+        assert_eq!(
+            details["inference"]["scores"]
+                .as_object()
+                .expect("scores")
+                .len(),
+            INLINE_ML_CLASS_COUNT
+        );
+    }
+
+    #[tokio::test]
+    async fn scores_below_every_threshold_stay_evidence_only() {
+        let scanner = scanner(FakeRuntime::healthy().into());
+        let thresholds = test_thresholds();
+        let result = scanner
+            .scan(
+                request_with_thresholds(5000, Some(&thresholds)),
+                content(sample_mime()),
+            )
+            .await
+            .expect("clean run");
+        assert_eq!(result.status, ScannerStatus::Clean);
+        assert!(
+            result.findings.is_empty(),
+            "scores under every operating point never flag"
+        );
+        assert!(result.details.expect("details remain evidence").is_object());
+    }
+
+    #[tokio::test]
+    async fn unconfigured_classes_never_flag_even_at_high_scores() {
+        let mut scores = vec![0.01; INLINE_ML_CLASS_COUNT];
+        scores[0] = 0.99; // Malware is not configured in this payload
+        scores[2] = 0.99; // Spam is the only configured class
+        let scanner = scanner(runtime_with_scores(scores));
+        let mut classes = std::collections::BTreeMap::new();
+        classes.insert(
+            "spam".to_string(),
+            super::super::thresholds::ClassThreshold {
+                low: 0.5,
+                medium: 0.8,
+                high: 0.95,
+            },
+        );
+        let thresholds = MlThresholdConfig {
+            version: super::super::thresholds::INLINE_ML_THRESHOLDS_VERSION,
+            classes,
+        };
+        let result = scanner
+            .scan(
+                request_with_thresholds(5000, Some(&thresholds)),
+                content(sample_mime()),
+            )
+            .await
+            .expect("clean run");
+        assert_eq!(result.findings.len(), 1, "only the configured class flags");
+        assert_eq!(result.findings[0].category, "spam");
+        assert_eq!(result.findings[0].severity, FindingSeverity::High);
+    }
+
+    #[tokio::test]
+    async fn missing_thresholds_argument_still_builds_evidence_only_params() {
+        let params = inline_ml_params("bounce@example.test", &[], None);
+        let envelope: InlineMlScanEnvelope =
+            serde_json::from_value(params).expect("params must decode");
+        assert!(envelope.inline_ml.thresholds.is_none());
     }
 
     #[tokio::test]

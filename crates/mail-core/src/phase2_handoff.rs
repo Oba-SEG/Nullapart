@@ -140,7 +140,11 @@ async fn handle_durable_handoff(
     ))
 }
 
-fn local_finding_policy(
+/// The local reviewed finding policy: any normalized, non-false-positive
+/// finding quarantines; complete clean required coverage allows. This is
+/// the production consequence of inline ML evidence, asserted directly by
+/// the pipeline integration tests.
+pub fn local_finding_policy(
     scan: &crate::scanner_fabric::ScannerFabricResult,
     policy_revision: PolicyRevisionId,
 ) -> PolicyEvaluationResult {

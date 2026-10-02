@@ -525,6 +525,146 @@ async fn publish_writes_revision_audit_and_outbox_and_advances() {
     cleanup(&pool, &fixture).await;
 }
 
+fn ml_publish_request(uri: &str, key: &str, action_json: &str, rule_id: &str) -> Request<Body> {
+    let rule = format!(
+        "{{\"id\":\"{rule_id}\",\"name\":\"ml thresholds\",\"priority\":10,\
+         \"condition\":{{\"scope\":\"transaction\"}},\
+         \"action\":{action_json},\
+         \"enabled\":true}}"
+    );
+    Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("x-idempotency-key", key)
+        .body(Body::from(format!("{{\"rules\":[{rule}]}}")))
+        .expect("test request must build")
+}
+
+#[tokio::test]
+#[ignore = "requires migrated local PostgreSQL through 014_policy_administration.sql"]
+async fn ml_family_publish_validates_threshold_metadata() {
+    let pool = connect().await;
+    ensure_request_role(&pool).await;
+    let fixture = seed(&pool).await;
+    let state = AdminPolicyState::new(pool.clone(), fixture.deployment_a.clone());
+    let request_context = context(&fixture);
+    let config_publisher = request_context.actor.actor_id.0.to_string();
+    let app = policy_admin_router(state).layer(Extension(request_context));
+    let uri = "/api/v1/policies/ml_threat_classification/revisions";
+
+    let valid_action = r#"{"disposition":"quarantine","reason_code":"QUARANTINE_MALWARE",
+        "metadata":{"thresholds":{"version":1,"classes":{
+            "malware":{"low":0.4,"medium":0.7,"high":0.9},
+            "phishing":{"low":0.5,"medium":0.75,"high":0.95}}}}}"#;
+    let inverted_action = r#"{"disposition":"quarantine","reason_code":"QUARANTINE_MALWARE",
+        "metadata":{"thresholds":{"version":1,"classes":{
+            "malware":{"low":0.9,"medium":0.7,"high":0.5}}}}}"#;
+    let bare_action = r#"{"disposition":"allow","reason_code":"ALLOWED"}"#;
+
+    let revision_count = || async {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM policy_revisions WHERE family_id = 'ml_threat_classification' AND customer_id = $1",
+        )
+        .bind(&fixture.customer_a.0)
+        .fetch_one(&pool)
+        .await
+        .expect("the revision count must run");
+        count
+    };
+
+    // Inverted bands are refused with a specific, safe error code and no write.
+    let response = app
+        .clone()
+        .oneshot(ml_publish_request(
+            uri,
+            &format!("{}-inverted", fixture.suffix),
+            inverted_action,
+            "33333333-3333-3333-3333-333333333333",
+        ))
+        .await
+        .expect("the invalid publish must answer");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(response).await;
+    assert_eq!(body["code"], json!("INVALID_THRESHOLDS"));
+    assert_eq!(
+        revision_count().await,
+        0,
+        "a refused threshold payload must not store a revision"
+    );
+
+    // A valid threshold payload publishes through the normal audited path.
+    let response = app
+        .clone()
+        .oneshot(ml_publish_request(
+            uri,
+            &format!("{}-valid", fixture.suffix),
+            valid_action,
+            "22222222-2222-2222-2222-222222222222",
+        ))
+        .await
+        .expect("the valid publish must answer");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = json_body(response).await;
+    assert_eq!(body["data"]["revision_number"], json!(1));
+    let stored: Option<serde_json::Value> = sqlx::query_scalar(
+        "SELECT rules -> 0 -> 'action' -> 'metadata' FROM policy_revisions WHERE family_id = 'ml_threat_classification' AND customer_id = $1 AND deactivated_at IS NULL",
+    )
+    .bind(&fixture.customer_a.0)
+    .fetch_optional(&pool)
+    .await
+    .expect("the stored metadata must be readable");
+    assert_eq!(
+        stored
+            .as_ref()
+            .and_then(|m| m["thresholds"]["classes"]["malware"]["low"].as_f64()),
+        Some(0.4),
+        "the published thresholds must round-trip"
+    );
+
+    // The family stays publishable without thresholds: the stage treats
+    // that as explicit unconfigured state (WARN, scores stay evidence).
+    let response = app
+        .clone()
+        .oneshot(ml_publish_request(
+            uri,
+            &format!("{}-bare", fixture.suffix),
+            bare_action,
+            "44444444-4444-4444-4444-444444444444",
+        ))
+        .await
+        .expect("the unconfigured publish must answer");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(
+        revision_count().await,
+        2,
+        "both successful publishes must be stored"
+    );
+
+    let audit_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_events WHERE deployment_id = $1 AND action = 'policy_published' AND result = 'success' AND resource_type = 'policy_family'",
+    )
+    .bind(&fixture.deployment_a.0)
+    .fetch_one(&pool)
+    .await
+    .expect("the audit assertion must run");
+    assert_eq!(
+        audit_count, 2,
+        "only successful publishes are audited as successes"
+    );
+
+    sqlx::query(
+        "DELETE FROM config_revisions WHERE scope = 'tenant' AND scope_id = $1 AND config ->> 'source' = 'policy_publish' AND published_by = $2",
+    )
+    .bind(&fixture.customer_a.0)
+    .bind(&config_publisher)
+    .execute(&pool)
+    .await
+    .expect("the config revision fixture must be removable");
+
+    cleanup(&pool, &fixture).await;
+}
+
 #[tokio::test]
 #[ignore = "requires migrated local PostgreSQL through 014_policy_administration.sql"]
 async fn tenant_revisions_are_scoped_to_their_customer_and_system_rows_to_the_deployment() {

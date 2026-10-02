@@ -20,6 +20,7 @@ use super::runtime::{
     InlineMlRuntimeConfig, InlineModelRuntime, OrtModelRuntime, UnavailableRuntime,
 };
 use super::switch::FeatureSwitchResolver;
+use super::thresholds::MlThresholdResolver;
 use crate::scanner_fabric::{
     ScanArtifact, ScannerFabric, ScannerFabricConfig, ScannerFabricResult, ScannerProfile,
     ScannerRegistration, ScannerRequirement, ScannerResourceLimits,
@@ -43,6 +44,7 @@ pub const INLINE_ML_STAGE_MAX_INPUT: u64 = 50 * 1024 * 1024;
 pub struct InlineMlStage {
     fabric: ScannerFabric,
     switches: FeatureSwitchResolver,
+    thresholds: MlThresholdResolver,
     feature_id: FeatureId,
 }
 
@@ -73,7 +75,8 @@ impl InlineMlStage {
         )?;
         Ok(Self {
             fabric,
-            switches: FeatureSwitchResolver::new(pool),
+            switches: FeatureSwitchResolver::new(pool.clone()),
+            thresholds: MlThresholdResolver::new(pool),
             feature_id: FeatureId::new(INLINE_ML_FEATURE_ID),
         })
     }
@@ -151,10 +154,27 @@ impl InlineMlStage {
         if !self.should_run(context).await {
             return None;
         }
+        // Thresholds are policy for this exact scope. Absent or invalid
+        // configuration never invents numbers: scores stay evidence only
+        // and the gap is an explicit, greppable WARN.
+        let thresholds = self
+            .thresholds
+            .resolve(&context.deployment_id, &context.customer_id)
+            .await;
+        if thresholds.is_none() {
+            tracing::warn!(
+                family = crate::inline_ml::thresholds::ML_THREAT_CLASSIFICATION_FAMILY,
+                "inline ml thresholds are not configured for this scope; scores remain evidence only and are not converted to findings"
+            );
+        }
         let mut artifact = pass1_artifact.clone();
         artifact.request_id =
             Uuid::new_v5(&pass1_artifact.request_id, b"nullapart-inline-ml-pass2");
-        artifact.params = inline_ml_params(&context.envelope_sender, &pass1.findings);
+        artifact.params = inline_ml_params(
+            &context.envelope_sender,
+            &pass1.findings,
+            thresholds.as_ref(),
+        );
         let started = Instant::now();
         let pass2 = self.fabric.scan(artifact, content).await;
         tracing::info!(
