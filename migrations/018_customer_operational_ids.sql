@@ -22,10 +22,11 @@
 -- populate both (see `admin_customers::next_customer_id`).
 --
 -- The whole file runs in one transaction so a failure restores both data and
--- trigger/RLS state. `audit_events` carries an append-only trigger and several
--- children carry `FORCE ROW LEVEL SECURITY`; both are disabled for the
--- rewrite and restored before commit. Owner privileges are required (the
--- canonical migration runner is the table owner).
+-- trigger/RLS state. `audit_events` carries an append-only trigger, and FORCE
+-- ROW LEVEL SECURITY covers several children plus `outbox_events`,
+-- `feature_overrides`, and `config_revisions`; all of them are held open for
+-- the rewrite and restored in one step before commit. Owner privileges are
+-- required (the canonical migration runner is the table owner).
 
 BEGIN;
 
@@ -101,8 +102,17 @@ JOIN pg_attribute a
 WHERE c.contype = 'f'
   AND c.confrelid = 'customers'::regclass;
 
--- Disable RI triggers on both sides and FORCE RLS on the children so the
--- owning migration role sees every row.
+-- Forced tables rewritten below that carry no foreign key to customers, so
+-- their FORCE state is captured outside `customer_id_fks`.
+CREATE TEMP TABLE customer_id_forced_extra (
+    tbl regclass PRIMARY KEY,
+    was_forced boolean NOT NULL
+) ON COMMIT DROP;
+
+-- Disable RI triggers on both sides, lift FORCE RLS on every table rewritten
+-- in this file, and keep `audit_events`'s append-only guard off for the whole
+-- window so the owning migration role sees every row and the identity
+-- maintenance is not rejected as an audit mutation.
 DO $$
 DECLARE
     child RECORD;
@@ -112,6 +122,17 @@ BEGIN
         EXECUTE format('ALTER TABLE %s NO FORCE ROW LEVEL SECURITY', child.tbl);
     END LOOP;
     ALTER TABLE customers DISABLE TRIGGER ALL;
+    INSERT INTO customer_id_forced_extra (tbl, was_forced)
+    SELECT c.oid, c.relforcerowsecurity
+    FROM pg_class c
+    WHERE c.oid = ANY (ARRAY[
+        'outbox_events'::regclass,
+        'feature_overrides'::regclass,
+        'config_revisions'::regclass
+    ]);
+    ALTER TABLE outbox_events NO FORCE ROW LEVEL SECURITY;
+    ALTER TABLE feature_overrides NO FORCE ROW LEVEL SECURITY;
+    ALTER TABLE config_revisions NO FORCE ROW LEVEL SECURITY;
 END $$;
 
 DO $$
@@ -133,23 +154,9 @@ SET id = m.new_id
 FROM customer_id_remap m
 WHERE c.id = m.old_id;
 
--- Restore RI triggers (and FORCE RLS where it was set) before touching the
--- non-referencing columns.
-DO $$
-DECLARE
-    child RECORD;
-BEGIN
-    FOR child IN SELECT DISTINCT tbl FROM customer_id_fks ORDER BY tbl LOOP
-        EXECUTE format('ALTER TABLE %s ENABLE TRIGGER ALL', child.tbl);
-    END LOOP;
-    ALTER TABLE customers ENABLE TRIGGER ALL;
-    FOR child IN
-        SELECT tbl, was_forced FROM customer_id_fks WHERE was_forced ORDER BY tbl
-    LOOP
-        EXECUTE format('ALTER TABLE %s FORCE ROW LEVEL SECURITY', child.tbl);
-    END LOOP;
-END $$;
-
+-- The window opened above stays in force across every rewrite below
+-- (including the append-only `audit_events` statements) and is restored in
+-- one step immediately before COMMIT.
 -- Outbox events reference customers without a foreign key.
 UPDATE outbox_events o
 SET customer_id = m.new_id
@@ -233,5 +240,27 @@ SET result = replace(
 FROM customer_id_remap m
 WHERE i.result IS NOT NULL
   AND i.result::text LIKE '%"' || m.old_id || '"%';
+
+-- Restore every trigger and FORCE RLS flag captured when the window opened.
+DO $$
+DECLARE
+    child RECORD;
+BEGIN
+    FOR child IN SELECT DISTINCT tbl FROM customer_id_fks ORDER BY tbl LOOP
+        EXECUTE format('ALTER TABLE %s ENABLE TRIGGER ALL', child.tbl);
+    END LOOP;
+    ALTER TABLE customers ENABLE TRIGGER ALL;
+    FOR child IN
+        SELECT tbl, was_forced FROM customer_id_fks WHERE was_forced ORDER BY tbl
+    LOOP
+        EXECUTE format('ALTER TABLE %s FORCE ROW LEVEL SECURITY', child.tbl);
+    END LOOP;
+    FOR child IN
+        SELECT tbl, was_forced FROM customer_id_forced_extra
+        WHERE was_forced ORDER BY tbl
+    LOOP
+        EXECUTE format('ALTER TABLE %s FORCE ROW LEVEL SECURITY', child.tbl);
+    END LOOP;
+END $$;
 
 COMMIT;
