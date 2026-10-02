@@ -57,7 +57,10 @@ services:
       NULLAPART_CLAMAV_ENDPOINT: clamav:3310
       NULLAPART_POSTFIX_REINJECTION_ENDPOINT: postfix:10026
       NULLAPART_LOCAL_CONTROL_TOKEN: ${NULLAPART_LOCAL_CONTROL_TOKEN:?set NULLAPART_LOCAL_CONTROL_TOKEN in .env.local}
-      NULLAPART_LOCAL_CONTROL_CUSTOMER_ID: CZA-1
+      # Defaults to the seeded fresh-install identity (CZA-1); existing
+      # databases must set NULLAPART_LOCAL_CONTROL_CUSTOMER_ID in .env.local
+      # to the migrated operational ID of the local Phase 2 customer.
+      NULLAPART_LOCAL_CONTROL_CUSTOMER_ID: ${NULLAPART_LOCAL_CONTROL_CUSTOMER_ID:-CZA-1}
       NULLAPART_TRACE_WORKLOAD_TOKEN: ${NULLAPART_TRACE_WORKLOAD_TOKEN:-}
       NULLAPART_DNS_RESOLVER: ${NULLAPART_DNS_RESOLVER:-}
       # Server-authoritative identity mode. proxy_header is the local/CI
