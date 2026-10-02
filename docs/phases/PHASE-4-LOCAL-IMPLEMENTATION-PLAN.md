@@ -3,8 +3,9 @@
 **Status:** plan active (started 2026-10-01); increments 1, 2, 3, 4 and 5
 complete and evidence-backed below (increment 5 closed 2026-10-02: thresholds
 as policy data with publish validation, scan-time resolution, evidence-to-
-policy wiring proven end to end, full ignored PostgreSQL gate 58/58, workspace
-gates green; increment 4 closed 2026-10-02: registry
+policy wiring proven end to end in the ignored suite **and live on `.4`**
+(authenticated publish 201 → band findings → quarantine → WARN restored),
+full ignored PostgreSQL gate 58/58, workspace gates green; increment 4 closed 2026-10-02: registry
 table + audited system admin API with approval/activation/rollback, full
 ignored PostgreSQL gate 56/56, workspace gates green; increment 3 closed
 2026-10-02: stage wired behind `inline_ml_classification`, gates green,
@@ -584,6 +585,28 @@ Complete (2026-10-02).
   "medium":0.7,"high":0.9}}}}}}]}`; a later publish without the
   metadata key intentionally clears active thresholds (stage returns to
   WARN / evidence-only).
+- **Live smoke on `.4` (2026-10-02, HMAC-signed `POST /internal/handoff`
+  plus the real authenticated publish API through the local proxy):**
+  - unconfigured: handoff 200, explicit stage WARN
+    `inline ml thresholds are not configured for this scope; scores
+    remain evidence only...`, `pass2_findings=0`, allow — decision 18 at
+    runtime;
+  - publish #1 (realistic operating points) via `POST /api/v1/
+    policies/ml_threat_classification/revisions` as the logged-in
+    `system_admin` (session carries `policies:manage` and customer
+    `CZA-3`, matching the message scope): **201, revision_number 1**;
+  - configured/below-threshold: handoff 200, **no WARN**, `pass2_findings=0`
+    — scores stay evidence only under realistic operating points;
+  - publish #2 (all 13 classes at `0.001/0.002/0.003`): **201,
+    revision_number 2**; handoff 200 with `pass2_findings=3` →
+    finding rows `(inline_ml, phishing, high, band=high, score 0.1404)`,
+    `(inline_ml, spam, high, band=high, score 0.0170)`,
+    `(inline_ml, auth_failure, low, band=low, score 0.0013)`, inline
+    scanner row **threat** (required=false), disposition
+    **quarantine** + 1 quarantine case — evidence-to-policy proven live;
+  - cleanup: smoke revisions removed (family restored to empty), final
+    handoff 200 returns to WARN + `pass2_findings=0`; audit rows from the
+    two publishes are retained as the truthful record.
 - **Gates (2026-10-02):** `cargo fmt --all -- --check` green;
   `cargo clippy --workspace --all-targets -- -D warnings` green;
   `cargo test --workspace` green (410 mail-core lib tests, 0 failures);
