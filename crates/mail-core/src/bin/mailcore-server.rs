@@ -16,6 +16,7 @@ use nullapart_mail_core::artifact_recovery::recover_persisted_artifacts;
 use nullapart_mail_core::artifact_store::{FilesystemArtifactRuntime, FilesystemArtifactStore};
 use nullapart_mail_core::handoff::HandoffConfig;
 use nullapart_mail_core::inline_ml::stage::InlineMlStage;
+use nullapart_mail_core::model_registry::{model_registry_router, ModelRegistryState};
 use nullapart_mail_core::operations_api::{operations_router, OperationsState};
 use nullapart_mail_core::phase2_handoff::{durable_handoff_router, DurableHandoffState};
 use nullapart_mail_core::policy_admin::{policy_admin_router, AdminPolicyState};
@@ -192,7 +193,7 @@ async fn validate_database_role(pool: &PgPool) -> Result<(), Box<dyn std::error:
                           'artifacts', 'scanner_results', 'security_findings', \
                           'quarantine_cases', 'quarantine_reinjection_envelopes', \
                           'reinjection_deliveries', 'reinjection_dead_letters', \
-                          'audit_events', 'outbox_events' \
+                          'audit_events', 'outbox_events', 'inline_ml_models' \
                       ) \
                       AND class.relowner = role.oid \
                 ) AS owns_protected_table \
@@ -275,6 +276,10 @@ async fn local_quarantine_api(
             deployment_id.clone(),
         )))
         .merge(policy_admin_router(AdminPolicyState::new(
+            pool.clone(),
+            deployment_id.clone(),
+        )))
+        .merge(model_registry_router(ModelRegistryState::new(
             pool.clone(),
             deployment_id.clone(),
         )))

@@ -1,9 +1,11 @@
 # Phase 4 Local Implementation Plan — Inline ML
 
-**Status:** plan active (started 2026-10-01); increments 1, 2 and 3 complete
-and evidence-backed below (increment 3 closed 2026-10-02: stage wired behind
-`inline_ml_classification`, gates green, profiled, live smoke positive +
-fail-closed negative on `.4`).
+**Status:** plan active (started 2026-10-01); increments 1, 2, 3 and 4
+complete and evidence-backed below (increment 4 closed 2026-10-02: registry
+table + audited system admin API with approval/activation/rollback, full
+ignored PostgreSQL gate 56/56, workspace gates green; increment 3 closed
+2026-10-02: stage wired behind `inline_ml_classification`, gates green,
+profiled, live smoke positive + fail-closed negative on `.4`).
 Increment 2 was resequenced by owner direction:
 model fine-tuning comes first (executed on the local workstation `.4`),
 inference wiring follows as increment 3. Increment 2 was then redefined by
@@ -13,7 +15,7 @@ sources plus Nullapart-owned synthetic fixtures for the 8 classes without
 permissive data, and five agreed baseline targets. Source survey is
 complete and approved; dataset fetch/prepare/train/eval/export under the
 new architecture is complete (evidence in increment 2 below). Next up:
-model registry and audited admin API (increment 4).
+thresholds as policy/config + evidence-to-policy wiring (increment 5).
 Increments are completed and
 evidence-backed one at a time; checked work is evidence-backed, not
 inferred from the presence of a module.
@@ -224,7 +226,8 @@ increment 9: security test battery + canonical gates + local live evidence + rep
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo test --workspace`
 - `cd frontend && pnpm check-all`
-- ignored DB suite against local Postgres (46 tests today; grows with this phase)
+- ignored DB suite against local Postgres (56 tests across 15 suites after
+  increment 4; grows with this phase; run serially via SSH tunnel)
 
 ## Increment 1 evidence — versioned input representation
 
@@ -405,6 +408,88 @@ unavailable/unknown evidence on model failure.
   (increment 5), no registry (4), no UI (8), probability vectors not
   persisted (schema change considered with increment 5), profiling is a
   debug build on the local workstation unless stated, no customer data.
+
+## Increment 4 evidence — model registry persistence + audited system admin API
+
+Complete (2026-10-02).
+
+- **Persistence:** `migrations/019_inline_ml_models.sql` — one system-scoped
+  registry table carrying the tracking fields required by
+  `PHASE-4-INLINE-ML.md` (model id/version, input schema version, training
+  dataset version, code commit, metrics, approval state/actor/timestamps/
+  note, deployment regions, activation actor/timestamps, rollback target,
+  deactivation actor/timestamp/reason), CHECK constraints enforcing the
+  approval/activation/deactivation/rollback invariants, `UNIQUE
+  (deployment_id, model_id, model_version)`, a partial unique index enforcing
+  **exactly one active model per deployment**, `ENABLE + FORCE ROW LEVEL
+  SECURITY` with a deployment-isolation policy, and the guarded
+  `GRANT ... TO nullapart_mailcore` role pattern (mirrored in
+  `provision-local-runtime-role.sh`). Applied on `.4` to both the live
+  `nullapart` and `nullapart_scratch` databases with `ON_ERROR_STOP=1`;
+  the mailcore role's INSERT privilege was verified after the grant.
+- **Admin API** (`crates/mail-core/src/model_registry.rs`; router mounted in
+  `mailcore-server` after `policy_admin_router`):
+  - `GET /api/v1/admin/models` (list), `GET .../:model_id/:model_version`,
+    `POST /api/v1/admin/models` (register), `POST .../:model_id/:model_version/approve|reject|activate|rollback`;
+  - permissions `models:view` (system_admin + support) and `models:manage`
+    (system_admin only) added to `BUILTIN_ROLES` (regenerated on every
+    login with `ON CONFLICT DO NOTHING`, so no permission migration is
+    needed), plus an explicit `SYSTEM_ADMIN_ROLE` check on every mutation;
+  - request order: body + validation → route → idempotency key required on
+    every POST → authorize (permission → lifecycle → deployment) →
+    `require_system_admin` → step-up plus the shared fail-closed
+    permission-change bucket (`HighRiskLimits::permission_change()`, 5
+    tokens + burst/min) for approve/activate/rollback only → transaction;
+  - idempotency operations `model:register:<id>:<version>`,
+    `model:approved|rejected:<id>:<version>`,
+    `model:activate:<id>:<version>`, `model:rollback:<deployment>`; a
+    completed claim replays the stored response without re-executing;
+  - state machine: pending → approved | rejected (terminal); approved →
+    activated (records the previous active as `rollback_model_id/version`
+    with deactivation reason `superseded`); rollback re-activates only the
+    active model's recorded rollback target (409 if the active model has
+    none or the requested pair differs), deactivating it with reason
+    `rollback`; all other transitions are 409 conflicts;
+  - concurrency: transaction-scoped advisory locks
+    `inline_ml_models:<deployment>` (activate/rollback) and
+    `inline_ml_model:<id>:<version>` (register/approve/reject) plus the
+    partial one-active unique index;
+  - audit: `AuditEventRecord` + `PostgresAuditStore::insert_record` written
+    **in the same transaction** as the mutation for
+    `model_registered|model_approved|model_rejected|model_activated|model_rolled_back`,
+    and stateless `denied` events for permission/lifecycle/deployment/role/
+    step-up refusals; resource `inline_ml_model`, customer id from the
+    authenticated context, outcome `success|denied`, safe error codes only.
+- **Tests:** 8 unit tests in `model_registry.rs` (transition matrix,
+  permission matrices, validation bounds, idempotency operation shapes) plus
+  6 ignored PostgreSQL tests (`tests/postgres_model_registry.rs`) covering:
+  register→approve→activate lifecycle with in-transaction audit counts and
+  idempotent replay (stored response, no duplicate audit), activation
+  predecessor recording + rollback restoration, every transition conflict
+  (pending activate, approve-after-reject, duplicate register, first
+  activation rollback, re-activation), RBAC denials (2 audited denied rows,
+  zero side effects), deployment scope fail-closed + cross-deployment list
+  separation, and missing-idempotency-key rejection.
+- **Gates (2026-10-02):** `cargo fmt --all -- --check` green;
+  `cargo clippy --workspace --all-targets -- -D warnings` green;
+  `cargo test --workspace` green (398 mail-core lib tests, 0 failures);
+  `cd frontend && pnpm check-all` green (84 tests);
+  **full ignored PostgreSQL gate 56/56** across all 15 suites, run serially
+  via SSH tunnel against the `.4` scratch database.
+- **Defects found and fixed during this increment:** the approval/rejection
+  UPDATE ran with an unreplaced `{cols}` placeholder (surfaced as HTTP 503;
+  fixed); a test fixture used a non-hex digest character (validation
+  correctly rejected it); the registry-count test helper now filters by
+  deployment explicitly because the owner/superuser test pool bypasses RLS;
+  the transition-guard test continues on a fresh router state after the
+  deliberately tiny high-risk budget (5/state, shared across conflict-path
+  calls) is exhausted.
+- **Not claimed (increment 4):** no outbox events (the registry is not yet
+  consumed by the runtime; shadow evaluation is increment 7), no live
+  authenticated HTTP smoke (the admin API requires a real bearer + session
+  pair; the ignored PostgreSQL suite is the established evidence pattern),
+  rollback does not move artifacts on disk, no thresholds or score→policy
+  wiring (increment 5), no UI (increment 8).
 
 ## Superseded work — binary pilot (not counted as increment 2)
 

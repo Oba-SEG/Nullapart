@@ -13,6 +13,7 @@ pub mod dns_txt;
 pub mod handoff;
 pub mod idempotency;
 pub mod inline_ml;
+pub mod model_registry;
 pub mod node;
 pub mod oidc;
 pub mod operations_api;
