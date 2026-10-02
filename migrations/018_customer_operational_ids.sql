@@ -164,7 +164,7 @@ SET payload = replace(
     )::jsonb
 FROM customer_id_remap m
 WHERE o.payload IS NOT NULL
-  AND o.payload::text LIKE '%" || m.old_id || '"%';
+  AND o.payload::text LIKE '%"' || m.old_id || '"%';
 
 -- Audit: scope column, impersonated customer, customer-resource IDs, and any
 -- detail payload that echoes a customer identity verbatim.
@@ -192,7 +192,7 @@ SET details = replace(
     )::jsonb
 FROM customer_id_remap m
 WHERE a.details IS NOT NULL
-  AND a.details::text LIKE '%" || m.old_id || '"%';
+  AND a.details::text LIKE '%"' || m.old_id || '"%';
 
 -- Tenant-scoped overrides and revisions key on the customer identity.
 UPDATE feature_overrides f
@@ -232,6 +232,6 @@ SET result = replace(
     )::jsonb
 FROM customer_id_remap m
 WHERE i.result IS NOT NULL
-  AND i.result::text LIKE '%" || m.old_id || '"%';
+  AND i.result::text LIKE '%"' || m.old_id || '"%';
 
 COMMIT;
