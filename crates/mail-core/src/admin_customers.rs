@@ -36,8 +36,9 @@ pub const CUSTOMERS_MANAGE_PERMISSION: &str = "admin:customers:manage";
 pub const DOMAINS_MANAGE_PERMISSION: &str = "admin:domains:manage";
 
 const IDEMPOTENCY_HEADER: &str = "x-idempotency-key";
-const CUSTOMER_ID_PREFIX: &str = "cust-";
 const CUSTOMER_ID_MAX_LEN: usize = 128;
+/// Advisory-lock namespace for regional customer sequence allocation.
+const CUSTOMER_ID_LOCK_NAMESPACE: &str = "nullapart:customer-id:";
 const DISPLAY_NAME_MAX_LEN: usize = 128;
 const GROUP_NAME_MAX_LEN: usize = 128;
 const DOMAIN_MAX_LEN: usize = 253;
@@ -91,8 +92,14 @@ const GROUPS_LIST_SQL: &str = "SELECT id, name, cidrs, created_at FROM source_ip
      WHERE customer_id = $1 AND deployment_id = $2 ORDER BY name, id";
 const CUSTOMER_STATE_SQL: &str =
     "SELECT lifecycle FROM customers WHERE id = $1 AND deployment_id = $2";
-const CUSTOMER_INSERT_SQL: &str = "INSERT INTO customers (id, deployment_id, display_name) \
-     VALUES ($1, $2, $3) RETURNING internal_key, created_at, updated_at";
+const CUSTOMER_INSERT_SQL: &str = "INSERT INTO customers \
+     (id, deployment_id, display_name, region_code, sequence_no) \
+     VALUES ($1, $2, $3, $4, $5) \
+     RETURNING internal_key, created_at, updated_at";
+const CUSTOMER_REGION_SQL: &str = "SELECT region FROM deployments WHERE id = $1";
+const CUSTOMER_LOCK_SQL: &str = "SELECT pg_advisory_xact_lock(hashtext($1))";
+const CUSTOMER_NEXT_SEQUENCE_SQL: &str =
+    "SELECT COALESCE(max(sequence_no), 0) + 1 FROM customers WHERE region_code = $1";
 const CUSTOMER_PATCH_SQL: &str = "UPDATE customers SET lifecycle = $3, updated_at = now() \
      WHERE id = $1 AND deployment_id = $2 \
      RETURNING display_name, internal_key, created_at, updated_at";
@@ -639,6 +646,45 @@ async fn begin_claim(
         .map_err(|_| unavailable())
 }
 
+/// Mints the next operational customer identity for the deployment's region:
+/// `"C" + region code + "-" + sequence` (docs/02-REGIONS-TENANCY-NAMING.md,
+/// for example `CZA-1`), returning `(id, region_code, sequence_no)` so the
+/// structured fields are stored beside the visible ID.
+///
+/// The sequence is allocated under a transaction-scoped advisory lock keyed by
+/// region, so concurrent creations serialize until commit and two callers can
+/// never mint the same identity. A deployment whose region is not a canonical
+/// docs/02 code fails closed instead of producing an identity no parser will
+/// accept.
+pub async fn next_customer_id(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    deployment_id: &str,
+) -> Result<(String, String, i64), Response> {
+    let region: Option<String> = sqlx::query_scalar(CUSTOMER_REGION_SQL)
+        .bind(deployment_id)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(|_| unavailable())?
+        .map(|raw: String| raw.to_ascii_uppercase());
+    let Some(region) = region else {
+        return Err(unavailable());
+    };
+    if !valid_region_code(&region) {
+        return Err(unavailable());
+    }
+    sqlx::query(CUSTOMER_LOCK_SQL)
+        .bind(format!("{CUSTOMER_ID_LOCK_NAMESPACE}{region}"))
+        .execute(&mut **transaction)
+        .await
+        .map_err(|_| unavailable())?;
+    let sequence: i64 = sqlx::query_scalar(CUSTOMER_NEXT_SEQUENCE_SQL)
+        .bind(&region)
+        .fetch_one(&mut **transaction)
+        .await
+        .map_err(|_| unavailable())?;
+    Ok((format_customer_id(&region, sequence), region, sequence))
+}
+
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
@@ -649,6 +695,16 @@ fn valid_path_id(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
+/// Canonical docs/02 region code: two or three uppercase ASCII letters
+/// (`ZA`, `ZAB`, `ZAC`, `EU`, `UK`, `US`).
+fn valid_region_code(region: &str) -> bool {
+    (2..=3).contains(&region.len()) && region.bytes().all(|byte| byte.is_ascii_uppercase())
+}
+
+fn format_customer_id(region: &str, sequence: i64) -> String {
+    format!("C{region}-{sequence}")
 }
 
 fn has_control_characters(value: &str) -> bool {
@@ -872,17 +928,32 @@ async fn create_customer(
     if !valid_display_name(display_name) {
         return invalid_request();
     }
-    let customer_id = format!("{CUSTOMER_ID_PREFIX}{}", Uuid::new_v4());
+    let key = match require_idempotency_key(&headers) {
+        Ok(key) => key,
+        Err(rejection) => return idempotency_rejection_response(rejection),
+    };
+    let mut transaction = match state.0.pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(_) => return unavailable(),
+    };
+    // Mint the operational identity inside the caller's transaction: the
+    // regional sequence lock is held until commit, so two concurrent creations
+    // can never claim the same `C{REGION}-{sequence}` (docs/02).
+    let (customer_id, region_code, sequence_no) =
+        match next_customer_id(&mut transaction, &state.0.deployment_id.0).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    if let Err(response) = set_scope(&mut transaction, &state.0.deployment_id.0, &customer_id).await
+    {
+        return response;
+    }
     let route = Route {
         action: ACTION_CUSTOMER_CREATED,
         resource_type: RESOURCE_CUSTOMER,
         resource_id: Some(customer_id.clone()),
         permission: CUSTOMERS_MANAGE_PERMISSION,
         target: None,
-    };
-    let key = match require_idempotency_key(&headers) {
-        Ok(key) => key,
-        Err(rejection) => return idempotency_rejection_response(rejection),
     };
     if let Err(response) = authorize(&state, &context, &headers, &route).await {
         return response;
@@ -900,14 +971,6 @@ async fn create_customer(
     if let Err(response) = require_high_risk(&state, &context, &headers, &route).await {
         return response;
     }
-    let mut transaction = match state.0.pool.begin().await {
-        Ok(transaction) => transaction,
-        Err(_) => return unavailable(),
-    };
-    if let Err(response) = set_scope(&mut transaction, &state.0.deployment_id.0, &customer_id).await
-    {
-        return response;
-    }
     let operation = format!("admin:customer:create:{}", state.0.deployment_id.0);
     let outcome = match begin_claim(&mut transaction, &key, &operation).await {
         Ok(outcome) => outcome,
@@ -923,6 +986,8 @@ async fn create_customer(
         .bind(&customer_id)
         .bind(&state.0.deployment_id.0)
         .bind(display_name)
+        .bind(&region_code)
+        .bind(sequence_no)
         .fetch_one(&mut *transaction)
         .await
     {
@@ -1814,6 +1879,23 @@ mod tests {
 
     use super::*;
     use crate::admin_rbac::CUSTOMER_ADMIN_ROLE;
+
+    #[test]
+    fn operational_region_codes_accept_the_canonical_docs_02_set() {
+        for region in ["ZA", "ZAB", "ZAC", "EU", "UK", "US"] {
+            assert!(valid_region_code(region), "{region} must be accepted");
+        }
+        for region in ["local", "LOCAL", "Z", "ZAAA", "zA", "Z1"] {
+            assert!(!valid_region_code(region), "{region} must be rejected");
+        }
+    }
+
+    #[test]
+    fn operational_customer_ids_follow_the_docs_02_scheme() {
+        assert_eq!(format_customer_id("ZA", 1), "CZA-1");
+        assert_eq!(format_customer_id("ZAB", 42), "CZAB-42");
+        assert!(valid_path_id(&format_customer_id("EU", 7)));
+    }
 
     fn state() -> AdminCustomersState {
         // A short acquire timeout keeps failure paths deterministic: the

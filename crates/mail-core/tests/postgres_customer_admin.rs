@@ -688,3 +688,71 @@ async fn patch_enforces_database_lifecycle_transitions_and_replays() {
         })
     );
 }
+
+#[tokio::test]
+#[ignore = "requires migrated local PostgreSQL through 018_customer_operational_ids.sql"]
+async fn next_customer_id_mints_regional_operational_identities() {
+    let pool = connect().await;
+    ensure_request_role(&pool).await;
+
+    let suffix = format!("local-custid-{}", Uuid::new_v4().simple());
+    let deployment = DeploymentId::new(&suffix.to_uppercase());
+    sqlx::query(
+        "INSERT INTO deployments (id, region, display_name) VALUES ($1, 'ZA', $2) \
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(&deployment.0)
+    .bind(&suffix)
+    .execute(&pool)
+    .await
+    .expect("the canonical-region deployment fixture must be created");
+
+    let mut transaction = begin_scoped(&pool, Some(&deployment.0), None).await;
+    let (first, region, sequence) =
+        nullapart_mail_core::admin_customers::next_customer_id(&mut transaction, &deployment.0)
+            .await
+            .expect("the first operational identity must mint");
+    assert_eq!(
+        region, "ZA",
+        "the deployment region must be surfaced structured"
+    );
+    assert_eq!(sequence, 1, "the regional sequence must start at one");
+    assert_eq!(
+        first, "CZA-1",
+        "the identity must follow the docs/02 scheme"
+    );
+
+    sqlx::query(
+        "INSERT INTO customers (id, deployment_id, display_name, region_code, sequence_no) \
+         VALUES ($1, $2, 'operational identity probe', $3, $4)",
+    )
+    .bind(&first)
+    .bind(&deployment.0)
+    .bind(&region)
+    .bind(sequence)
+    .execute(&mut *transaction)
+    .await
+    .expect("the minted identity must be a valid customer primary key");
+
+    let (second, _, next) =
+        nullapart_mail_core::admin_customers::next_customer_id(&mut transaction, &deployment.0)
+            .await
+            .expect("the second operational identity must mint");
+    assert_eq!(next, 2, "the sequence must advance within the region");
+    assert_eq!(second, "CZA-2", "each identity must be unique");
+
+    sqlx::query("UPDATE deployments SET region = 'local' WHERE id = $1")
+        .bind(&deployment.0)
+        .execute(&mut *transaction)
+        .await
+        .expect("the non-canonical region fixture must apply");
+    let rejected =
+        nullapart_mail_core::admin_customers::next_customer_id(&mut transaction, &deployment.0)
+            .await;
+    assert!(
+        rejected.is_err(),
+        "a non-canonical region must fail closed instead of minting an unusable identity"
+    );
+
+    drop(transaction);
+}
