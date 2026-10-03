@@ -138,3 +138,35 @@ not a completion claim.
 - **Known limitations of this local proof**: the local filesystem artifact
   backend is deliberately rejected for production runtimes; full production
   S3/KMS/IAM proof remains outside Phase 2 local scope.
+
+## Review addendum (2026-10-03 local stack on 192.168.8.4)
+
+- **Phase 2 review defect found and fixed**: after Phase 4 inline-ML work was
+  enabled locally, the Phase 2 quarantine API still projected raw
+  `security_findings.description` values. Live quarantine list responses could
+  therefore expose model/scanner internals such as score and threshold text.
+  The API projection now preserves category/severity and emits a normalized
+  customer-safe finding summary instead of returning persisted raw diagnostic
+  prose. The storage record remains intact for internal evidence paths.
+- **Commit**: `af2ff70 Sanitize quarantine finding projections`.
+- **Verification after the fix**:
+  - `cargo fmt --all -- --check` passed.
+  - `cargo clippy -p nullapart-mail-core --lib -- -D warnings` passed.
+  - `cargo test -p nullapart-mail-core --lib
+    finding_projection_does_not_expose_engine_or_model_details` passed after
+    freeing rebuildable Rust target artifacts from the full local disk.
+  - Phase 2 PostgreSQL suites over an SSH tunnel to the
+    `192.168.8.4` database passed: quarantine release, quarantine detail,
+    invalid reinjection event dead-lettering, scanner-pipeline atomic
+    persist/rollback checks, and RLS isolation.
+  - `docker compose --env-file .env.local -f compose.local.yml build mailcore`
+    and `up -d --no-deps --force-recreate mailcore` passed on
+    `ob1@192.168.8.4`.
+- **Fresh live end-to-end proof**: an EICAR message submitted to
+  `192.168.8.4:2525` with SMTP null reverse-path was accepted, scanned,
+  quarantined as case `a75b5363-4a07-597d-9e7d-1f902240a3ec` with
+  `QUARANTINE_MALWARE`, projected through
+  `GET /api/v1/quarantine/{id}` with `leaks=[]` for model/scanner terms, then
+  released through the authenticated API. Reinjection succeeded with Postfix
+  queue id `43C7662246A`, the outbox event was published, and
+  `reinjection_dead_letters` remained `0`.
