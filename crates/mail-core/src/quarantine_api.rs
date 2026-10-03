@@ -18,7 +18,8 @@ use serde::{Deserialize, Serialize};
 use nullapart_policy::TenantContext;
 
 use crate::quarantine::{
-    AuthorizedQuarantineRelease, QuarantineError, QuarantineReleaseRequest, QuarantineService,
+    AuthorizedQuarantineRelease, QuarantineError, QuarantineFindingSummary,
+    QuarantineReleaseRequest, QuarantineService,
 };
 
 const IDEMPOTENCY_HEADER: &str = "x-idempotency-key";
@@ -61,6 +62,19 @@ pub struct QuarantineFindingResponse {
     pub severity: String,
     pub description: String,
     pub created_at: DateTime<Utc>,
+}
+
+impl QuarantineFindingResponse {
+    fn from_summary(finding: QuarantineFindingSummary) -> Self {
+        let description = safe_finding_description(&finding.category, &finding.severity);
+        Self {
+            id: finding.id.to_string(),
+            category: finding.category,
+            severity: finding.severity,
+            description,
+            created_at: finding.created_at,
+        }
+    }
 }
 
 /// Safe detail projection for one case. It adds retention state, audit
@@ -114,13 +128,7 @@ impl QuarantineCaseResponse {
             findings: item
                 .findings
                 .into_iter()
-                .map(|finding| QuarantineFindingResponse {
-                    id: finding.id.to_string(),
-                    category: finding.category,
-                    severity: finding.severity,
-                    description: finding.description,
-                    created_at: finding.created_at,
-                })
+                .map(QuarantineFindingResponse::from_summary)
                 .collect(),
             quarantined_at: case.quarantined_at,
             released_at: case.released_at,
@@ -361,6 +369,26 @@ fn api_error(
     (status, Json(ApiErrorBody { code, message })).into_response()
 }
 
+fn safe_finding_description(category: &str, severity: &str) -> String {
+    format!(
+        "{} {} evidence was recorded for this message.",
+        safe_label(severity),
+        safe_label(category)
+    )
+}
+
+fn safe_label(value: &str) -> String {
+    let normalized = value
+        .chars()
+        .map(|character| match character {
+            'a'..='z' | 'A'..='Z' | '0'..='9' => character.to_ascii_lowercase(),
+            '-' | '_' | ' ' => ' ',
+            _ => ' ',
+        })
+        .collect::<String>();
+    normalized.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -529,6 +557,29 @@ mod tests {
             body.as_ref(),
             br#"{"code":"INVALID_REQUEST","message":"Request is invalid"}"#
         );
+    }
+
+    #[test]
+    fn finding_projection_does_not_expose_engine_or_model_details() {
+        let response = QuarantineFindingResponse::from_summary(QuarantineFindingSummary {
+            id: uuid::Uuid::new_v4(),
+            category: "phishing".to_string(),
+            severity: "high".to_string(),
+            description: "Inline ML score 0.1404 for phishing is in the high band (thresholds low 0.0010, medium 0.0020, high 0.0030); clamav/static-rule unavailable".to_string(),
+            created_at: Utc::now(),
+        });
+
+        assert_eq!(
+            response.description,
+            "high phishing evidence was recorded for this message."
+        );
+        for forbidden in ["Inline ML", "score", "threshold", "clamav", "static-rule"] {
+            assert!(
+                !response.description.contains(forbidden),
+                "finding projection leaked {forbidden}: {}",
+                response.description
+            );
+        }
     }
 
     #[tokio::test]
