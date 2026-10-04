@@ -50,6 +50,8 @@ GRANT SELECT ON policy_families, feature_definitions TO nullapart_mailcore;
 GRANT SELECT, INSERT, UPDATE ON policy_revisions, config_revisions, feature_overrides
 TO nullapart_mailcore;
 GRANT SELECT, INSERT, UPDATE ON inline_ml_models TO nullapart_mailcore;
+GRANT SELECT, INSERT, UPDATE ON ml_feedback_candidates TO nullapart_mailcore;
+GRANT SELECT, INSERT ON inline_ml_shadow_evaluations TO nullapart_mailcore;
 GRANT SELECT, INSERT, UPDATE ON admin_users, admin_sessions TO nullapart_mailcore;
 GRANT SELECT, INSERT, UPDATE ON admin_impersonations TO nullapart_mailcore;
 GRANT SELECT, INSERT ON admin_roles TO nullapart_mailcore;

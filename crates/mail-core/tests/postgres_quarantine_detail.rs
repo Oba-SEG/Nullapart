@@ -253,6 +253,11 @@ async fn postgres_detail_projects_retention_scanner_results_and_audit() {
         .execute(&pool)
         .await
         .unwrap();
+    sqlx::query("DELETE FROM ml_feedback_candidates WHERE tenant_message_id = $1")
+        .bind(tenant_message_id.0)
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::query("DELETE FROM quarantine_cases WHERE tenant_message_id = $1")
         .bind(tenant_message_id.0)
         .execute(&pool)

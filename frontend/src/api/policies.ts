@@ -221,6 +221,7 @@ export interface RuleAction {
   disposition: Disposition;
   reason_code: string;
   notify?: NotifyTarget[];
+  metadata?: Record<string, unknown>;
 }
 
 export interface Rule {
@@ -267,6 +268,7 @@ export interface RuleDraft {
   disposition: Disposition;
   reasonCode: string;
   notify: NotifyTarget[];
+  actionMetadata?: Record<string, unknown>;
 }
 
 const REASON_CODE_PATTERN = /^[A-Z0-9_]{1,64}$/;
@@ -347,6 +349,9 @@ function toAction(draft: RuleDraft): RuleAction {
     reason_code: draft.reasonCode,
   };
   if (draft.notify.length > 0) action.notify = draft.notify;
+  if (draft.actionMetadata && hasEntries(draft.actionMetadata)) {
+    action.metadata = structuredClone(draft.actionMetadata);
+  }
   return action;
 }
 
@@ -400,6 +405,7 @@ export function draftFromRule(rule: Rule): RuleDraft {
     disposition: rule.action.disposition,
     reasonCode: rule.action.reason_code,
     notify: rule.action.notify ?? [],
+    actionMetadata: rule.action.metadata ? structuredClone(rule.action.metadata) : undefined,
   };
 }
 
@@ -431,6 +437,7 @@ export function newRuleDraft(): RuleDraft {
     disposition: "quarantine",
     reasonCode: "",
     notify: [],
+    actionMetadata: undefined,
   };
 }
 

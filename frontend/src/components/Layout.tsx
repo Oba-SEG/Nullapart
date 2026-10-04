@@ -3,6 +3,7 @@ import { Outlet, Link, useRouterState } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 import {
   Building2,
+  BrainCircuit,
   LayoutDashboard,
   LogOut,
   Mail,
@@ -143,6 +144,12 @@ export function Layout() {
             >
               <SlidersHorizontal size={17} aria-hidden="true" />
               <span>Policies</span>
+            </Link>
+          ) : null}
+          {can("models:view") ? (
+            <Link to="/models" className="nav-link" activeProps={{ className: "nav-link active" }}>
+              <BrainCircuit size={17} aria-hidden="true" />
+              <span>Models</span>
             </Link>
           ) : null}
           {can("operations:view") ? (

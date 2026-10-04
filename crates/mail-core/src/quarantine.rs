@@ -632,6 +632,11 @@ impl QuarantineRepository for PostgresQuarantineRepository {
             .begin()
             .await
             .map_err(|_| QuarantineError::PersistenceFailed)?;
+        sqlx::query("SELECT set_config('app.current_deployment_id', $1, true)")
+            .bind(&authorization.deployment_id.0)
+            .execute(&mut *database_transaction)
+            .await
+            .map_err(|_| QuarantineError::PersistenceFailed)?;
         sqlx::query("SELECT set_config('app.current_customer_id', $1, true)")
             .bind(&authorization.customer_id.0)
             .execute(&mut *database_transaction)
@@ -691,6 +696,22 @@ impl QuarantineRepository for PostgresQuarantineRepository {
             "reason_code": case.reason_code.0,
             "release_reason": request.release_reason,
         }))
+        .execute(&mut *database_transaction)
+        .await
+        .map_err(|_| QuarantineError::PersistenceFailed)?;
+        sqlx::query(
+            "INSERT INTO ml_feedback_candidates \
+             (deployment_id, customer_id, tenant_message_id, transaction_id, source, proposed_label, actor_login, reason) \
+             VALUES ($1, $2, $3, $4, 'quarantine_release', 'false_positive', $5, $6) \
+             ON CONFLICT (deployment_id, tenant_message_id, source) \
+             WHERE tenant_message_id IS NOT NULL DO NOTHING",
+        )
+        .bind(&authorization.deployment_id.0)
+        .bind(&authorization.customer_id.0)
+        .bind(request.tenant_message_id.0)
+        .bind(case.transaction_id.0)
+        .bind(&authorization.actor_login)
+        .bind(&request.release_reason)
         .execute(&mut *database_transaction)
         .await
         .map_err(|_| QuarantineError::PersistenceFailed)?;

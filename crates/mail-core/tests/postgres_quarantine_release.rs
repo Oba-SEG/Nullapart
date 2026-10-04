@@ -15,7 +15,7 @@ use nullapart_policy::{
 use sqlx::postgres::PgPoolOptions;
 
 #[tokio::test]
-#[ignore = "requires migrated local PostgreSQL through 003_quarantine.sql"]
+#[ignore = "requires migrated local PostgreSQL through 020_inline_ml_feedback_shadow.sql"]
 async fn postgres_release_is_tenant_scoped_idempotent_and_audited() {
     let database_url = std::env::var("NULLAPART_TEST_DATABASE_URL")
         .expect("NULLAPART_TEST_DATABASE_URL must point at migrated local PostgreSQL");
@@ -152,10 +152,42 @@ async fn postgres_release_is_tenant_scoped_idempotent_and_audited() {
         .unwrap(),
         1
     );
+    let feedback = sqlx::query_as::<_, (String, String, String, String)>(
+        "SELECT source, proposed_label, curator_state, reason \
+         FROM ml_feedback_candidates WHERE tenant_message_id = $1",
+    )
+    .bind(tenant_message_id.0)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        feedback,
+        (
+            "quarantine_release".to_string(),
+            "false_positive".to_string(),
+            "pending".to_string(),
+            "Validated false positive".to_string()
+        )
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM ml_feedback_candidates WHERE tenant_message_id = $1",
+        )
+        .bind(tenant_message_id.0)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        1
+    );
 
     // The release event must go with the fixture: a leftover unpublished
     // event would stall the live reinjection worker on a case that no longer
     // exists. Audit rows are append-only and stay.
+    sqlx::query("DELETE FROM ml_feedback_candidates WHERE tenant_message_id = $1")
+        .bind(tenant_message_id.0)
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::query("DELETE FROM outbox_events WHERE idempotency_key = $1")
         .bind(format!("quarantine-release:{}", request.idempotency_key))
         .execute(&pool)

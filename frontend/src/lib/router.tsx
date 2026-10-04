@@ -166,6 +166,13 @@ const featureOverridesRoute = createRoute({
   component: lazyRouteComponent(() => import("../pages/FeatureOverrides"), "FeatureOverrides"),
 });
 
+const modelsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/models",
+  beforeLoad: () => requirePermission("models:view"),
+  component: lazyRouteComponent(() => import("../pages/Models"), "Models"),
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   loginRoute,
@@ -183,6 +190,7 @@ const routeTree = rootRoute.addChildren([
   policiesRoute,
   policyFamilyDetailRoute,
   featureOverridesRoute,
+  modelsRoute,
 ]);
 
 export const router = createRouter({ routeTree });

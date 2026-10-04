@@ -142,6 +142,40 @@
   padding: 0;
 }
 
+.detail-threat-analysis {
+  display: grid;
+  gap: var(--spacing-3);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.detail-threat-analysis li {
+  align-items: flex-start;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  display: flex;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3) var(--spacing-4);
+}
+
+.detail-threat-analysis div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+.detail-threat-analysis strong {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+}
+
+.detail-threat-description {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
 .detail-findings {
   display: flex;
   flex-direction: column;

@@ -1,6 +1,6 @@
 //! Local PostgreSQL coverage for the Phase 4 increment 4 model registry.
 //!
-//! Requires PostgreSQL migrated through `019_inline_ml_models.sql` with
+//! Requires PostgreSQL migrated through `020_inline_ml_feedback_shadow.sql` with
 //! `NULLAPART_TEST_DATABASE_URL` pointing at it. Every test is `#[ignore]`d
 //! so the default suite stays offline; run them explicitly with
 //! `cargo test --test postgres_model_registry -- --ignored`.
@@ -24,6 +24,9 @@
 //!    FORCE policy applies to the owner too.
 //! 6. **Idempotency**: a mutating request without `x-idempotency-key`
 //!    answers 400 `IDEMPOTENCY_REQUIRED`.
+//! 7. **Shadow evaluation**: a candidate version can record bounded
+//!    comparison evidence against the active model; list returns the evidence,
+//!    and a non-existent active model pair is rejected.
 
 use axum::{
     body::{to_bytes, Body},
@@ -436,6 +439,11 @@ async fn cleanup(pool: &PgPool, fixture: &Fixture) {
         .await
         .expect("the append-only trigger must be restored");
     for deployment in [&fixture.deployment_a, &fixture.deployment_b] {
+        sqlx::query("DELETE FROM inline_ml_shadow_evaluations WHERE deployment_id = $1")
+            .bind(&deployment.0)
+            .execute(&mut *transaction)
+            .await
+            .expect("the shadow evaluation fixture must be removable");
         sqlx::query("DELETE FROM inline_ml_models WHERE deployment_id = $1")
             .bind(&deployment.0)
             .execute(&mut *transaction)
@@ -466,7 +474,7 @@ async fn cleanup(pool: &PgPool, fixture: &Fixture) {
 }
 
 #[tokio::test]
-#[ignore = "requires migrated local PostgreSQL through 019_inline_ml_models.sql"]
+#[ignore = "requires migrated local PostgreSQL through 020_inline_ml_feedback_shadow.sql"]
 async fn register_approve_and_activate_are_audited_and_idempotent() {
     let pool = connect().await;
     ensure_request_role(&pool).await;
@@ -569,7 +577,7 @@ async fn register_approve_and_activate_are_audited_and_idempotent() {
 }
 
 #[tokio::test]
-#[ignore = "requires migrated local PostgreSQL through 019_inline_ml_models.sql"]
+#[ignore = "requires migrated local PostgreSQL through 020_inline_ml_feedback_shadow.sql"]
 async fn activation_records_predecessor_and_rollback_restores_it() {
     let pool = connect().await;
     ensure_request_role(&pool).await;
@@ -645,7 +653,7 @@ async fn activation_records_predecessor_and_rollback_restores_it() {
 }
 
 #[tokio::test]
-#[ignore = "requires migrated local PostgreSQL through 019_inline_ml_models.sql"]
+#[ignore = "requires migrated local PostgreSQL through 020_inline_ml_feedback_shadow.sql"]
 async fn transitions_are_guarded() {
     let pool = connect().await;
     ensure_request_role(&pool).await;
@@ -762,7 +770,7 @@ async fn transitions_are_guarded() {
 }
 
 #[tokio::test]
-#[ignore = "requires migrated local PostgreSQL through 019_inline_ml_models.sql"]
+#[ignore = "requires migrated local PostgreSQL through 020_inline_ml_feedback_shadow.sql"]
 async fn denials_are_denied_and_audited() {
     let pool = connect().await;
     ensure_request_role(&pool).await;
@@ -830,7 +838,7 @@ async fn denials_are_denied_and_audited() {
 }
 
 #[tokio::test]
-#[ignore = "requires migrated local PostgreSQL through 019_inline_ml_models.sql"]
+#[ignore = "requires migrated local PostgreSQL through 020_inline_ml_feedback_shadow.sql"]
 async fn deployment_scope_fails_closed_and_separates_deployments() {
     let pool = connect().await;
     ensure_request_role(&pool).await;
@@ -892,7 +900,7 @@ async fn deployment_scope_fails_closed_and_separates_deployments() {
 }
 
 #[tokio::test]
-#[ignore = "requires migrated local PostgreSQL through 019_inline_ml_models.sql"]
+#[ignore = "requires migrated local PostgreSQL through 020_inline_ml_feedback_shadow.sql"]
 async fn register_requires_idempotency_key() {
     let pool = connect().await;
     ensure_request_role(&pool).await;
@@ -916,6 +924,113 @@ async fn register_requires_idempotency_key() {
         models_visible_to(&pool, Some(&fixture.deployment_a.0)).await,
         0
     );
+
+    cleanup(&pool, &fixture).await;
+}
+
+#[tokio::test]
+#[ignore = "requires migrated local PostgreSQL through 020_inline_ml_feedback_shadow.sql"]
+async fn shadow_evaluation_records_comparison_evidence_only() {
+    let pool = connect().await;
+    ensure_request_role(&pool).await;
+    let fixture = seed(&pool).await;
+    let app = app_with_pool(&pool, base_context(&fixture), fixture.deployment_a.clone());
+
+    activate_first_model(&app, &fixture, "active-v1", "1", 'a').await;
+    let candidate = app
+        .clone()
+        .oneshot(register_request(
+            "/api/v1/admin/models",
+            &format!("{}-shadow-candidate", fixture.suffix),
+            register_body("candidate-v2", "2", 'b'),
+        ))
+        .await
+        .expect("candidate register must answer");
+    assert_eq!(candidate.status(), StatusCode::CREATED);
+
+    let uri = "/api/v1/admin/models/candidate-v2/2/shadow-evaluations";
+    let body = json!({
+        "evaluation_set_id": "shadow-local-2026-10-04",
+        "active_model_id": "active-v1",
+        "active_model_version": "1",
+        "input_schema_version": 1,
+        "metrics": {"macro_f1": 0.991, "ham_false_positive_rate": 0.003},
+        "comparison": {"macro_f1_delta": 0.014, "rollback_rehearsal": "passed"},
+        "result": "candidate_better",
+    });
+    let recorded = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            uri,
+            Some(&format!("{}-shadow-record", fixture.suffix)),
+            Some(body),
+        ))
+        .await
+        .expect("shadow evaluation must answer");
+    assert_eq!(recorded.status(), StatusCode::CREATED);
+    let recorded_body = json_body(recorded).await;
+    assert_eq!(
+        recorded_body["data"]["candidate_model_id"],
+        json!("candidate-v2")
+    );
+    assert_eq!(recorded_body["data"]["active_model_id"], json!("active-v1"));
+    assert_eq!(recorded_body["data"]["result"], json!("candidate_better"));
+
+    let listed = app
+        .clone()
+        .oneshot(json_request(Method::GET, uri, None, None))
+        .await
+        .expect("shadow evaluation list must answer");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed_body = json_body(listed).await;
+    assert_eq!(
+        listed_body["data"]["evaluations"].as_array().unwrap().len(),
+        1
+    );
+    assert_eq!(
+        listed_body["data"]["evaluations"][0]["evaluation_set_id"],
+        json!("shadow-local-2026-10-04")
+    );
+
+    let bad_active = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            uri,
+            Some(&format!("{}-shadow-bad-active", fixture.suffix)),
+            Some(json!({
+                "evaluation_set_id": "shadow-local-bad-active",
+                "active_model_id": "missing-model",
+                "active_model_version": "1",
+                "input_schema_version": 1,
+                "metrics": {"macro_f1": 0.5},
+                "comparison": {"macro_f1_delta": -0.4},
+                "result": "candidate_worse",
+            })),
+        ))
+        .await
+        .expect("missing active model reference must answer");
+    assert_eq!(bad_active.status(), StatusCode::BAD_REQUEST);
+
+    assert_eq!(
+        audit_count(
+            &pool,
+            &fixture.deployment_a.0,
+            "model_shadow_evaluation_recorded",
+            "success",
+        )
+        .await,
+        1
+    );
+    let shadow_rows = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM inline_ml_shadow_evaluations WHERE deployment_id = $1",
+    )
+    .bind(&fixture.deployment_a.0)
+    .fetch_one(&pool)
+    .await
+    .expect("the shadow row count must run");
+    assert_eq!(shadow_rows, 1);
 
     cleanup(&pool, &fixture).await;
 }

@@ -7,6 +7,7 @@ import type { ApiError } from "../api/client";
 import {
   getMessageContent,
   getTraceTransaction,
+  type TraceFinding,
   type TraceFlowStage,
   type TraceTransaction,
 } from "../api/trace";
@@ -94,6 +95,18 @@ function orderedStages(stages: TraceFlowStage[]): TraceFlowStage[] {
   );
 }
 
+function isThreatAnalysisFinding(finding: TraceFinding): boolean {
+  return finding.scanner_type === "threat_analysis";
+}
+
+function sourceLabel(finding: TraceFinding): string {
+  return isThreatAnalysisFinding(finding) ? "Threat analysis" : `Scanner ${finding.scanner_type}`;
+}
+
+function threatAnalysisSummary(findings: TraceFinding[]): TraceFinding[] {
+  return findings.filter(isThreatAnalysisFinding);
+}
+
 export function MessageDetail() {
   const { messageId = "" } = useParams({ from: "/messages/$messageId" });
   const [contentOpen, setContentOpen] = useState(false);
@@ -120,6 +133,7 @@ export function MessageDetail() {
 
   const data: TraceTransaction | undefined = detail.data;
   const stages = data ? orderedStages(data.flow_stages) : [];
+  const threatFindings = data ? threatAnalysisSummary(data.findings) : [];
 
   return (
     <div className="detail-page">
@@ -249,6 +263,27 @@ export function MessageDetail() {
             </dl>
           </section>
 
+          <section className="card" aria-label="Threat analysis">
+            <h2 className="detail-section-title">Threat analysis</h2>
+            {threatFindings.length === 0 ? (
+              <p className="detail-subtitle">
+                No ML-assisted threat analysis finding is visible for this transaction.
+              </p>
+            ) : (
+              <ul className="detail-threat-analysis">
+                {threatFindings.map((finding) => (
+                  <li key={finding.id}>
+                    <StatusPill tone={severityTone(finding.severity)} label={finding.severity} />
+                    <div>
+                      <strong>{finding.category}</strong>
+                      <span className="detail-threat-description">{finding.description}</span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
           <section className="card" aria-label="Postfix queue ids">
             <h2 className="detail-section-title">Postfix queue IDs</h2>
             {data.postfix_queue_ids.length === 0 ? (
@@ -352,7 +387,7 @@ export function MessageDetail() {
                     </span>
                     <span>{finding.description}</span>
                     <span className="detail-meta">
-                      Scanner {finding.scanner_type} · {formatTimestamp(finding.created_at)}
+                      {sourceLabel(finding)} · {formatTimestamp(finding.created_at)}
                     </span>
                     {finding.false_positive && (
                       <span className="detail-false-positive">False positive</span>

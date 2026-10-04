@@ -90,6 +90,23 @@ function revisionRulesLabel(revision: PolicyRevision): string {
   return "—";
 }
 
+function ruleCarriesMlThresholds(rule: Rule): boolean {
+  const metadata = rule.action.metadata;
+  return (
+    typeof metadata === "object" &&
+    metadata !== null &&
+    Object.prototype.hasOwnProperty.call(metadata, "thresholds")
+  );
+}
+
+function publishWouldClearMlThresholds(familyKey: string, rules: Rule[] | null): boolean {
+  return (
+    familyKey === "ml_threat_classification" &&
+    rules !== null &&
+    !rules.some(ruleCarriesMlThresholds)
+  );
+}
+
 function toggleInList<T>(values: T[], value: T): T[] {
   return values.includes(value) ? values.filter((entry) => entry !== value) : [...values, value];
 }
@@ -272,6 +289,7 @@ export function PolicyFamilyDetail() {
   }
 
   const errors = editing ? draftErrors(editing) : {};
+  const thresholdClearWarning = publishWouldClearMlThresholds(familyKey, rules);
   const nameError =
     showErrors || (editing !== null && editing.name.length > 0) ? errors.name : undefined;
   const priorityError =
@@ -769,6 +787,13 @@ export function PolicyFamilyDetail() {
             Publishing is audited and versioned. The new revision becomes active immediately and
             supersedes the previous revision for this family.
           </p>
+          {thresholdClearWarning ? (
+            <p className="policy-detail-warning" role="alert">
+              This draft has no Inline ML threshold metadata. Publishing it will clear active ML
+              thresholds for this scope and the inline analysis stage will return to evidence-only
+              WARN behavior until thresholds are republished.
+            </p>
+          ) : null}
           {publish.isError ? (
             <>
               <p className="policy-detail-error" role="alert">

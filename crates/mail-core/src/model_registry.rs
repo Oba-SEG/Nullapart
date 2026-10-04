@@ -66,6 +66,7 @@ const APPROVAL_NOTE_MIN_LEN: usize = 10;
 const APPROVAL_NOTE_MAX_LEN: usize = 500;
 const INPUT_SCHEMA_VERSION_MAX: i32 = 1000;
 const SHA256_HEX_LEN: usize = 64;
+const EVALUATION_SET_ID_MAX_LEN: usize = 128;
 
 const ADMIN_MODELS_PATH: &str = "/api/v1/admin/models";
 const ADMIN_MODEL_PATH: &str = "/api/v1/admin/models/:model_id/:model_version";
@@ -73,6 +74,8 @@ const ADMIN_MODEL_APPROVE_PATH: &str = "/api/v1/admin/models/:model_id/:model_ve
 const ADMIN_MODEL_REJECT_PATH: &str = "/api/v1/admin/models/:model_id/:model_version/reject";
 const ADMIN_MODEL_ACTIVATE_PATH: &str = "/api/v1/admin/models/:model_id/:model_version/activate";
 const ADMIN_MODEL_ROLLBACK_PATH: &str = "/api/v1/admin/models/:model_id/:model_version/rollback";
+const ADMIN_MODEL_SHADOW_EVALUATIONS_PATH: &str =
+    "/api/v1/admin/models/:model_id/:model_version/shadow-evaluations";
 
 const ACTION_MODEL_LIST: &str = "model_list";
 const ACTION_MODEL_DETAIL: &str = "model_detail";
@@ -81,8 +84,10 @@ const ACTION_MODEL_APPROVED: &str = "model_approved";
 const ACTION_MODEL_REJECTED: &str = "model_rejected";
 const ACTION_MODEL_ACTIVATED: &str = "model_activated";
 const ACTION_MODEL_ROLLED_BACK: &str = "model_rolled_back";
+const ACTION_MODEL_SHADOW_EVALUATION_RECORDED: &str = "model_shadow_evaluation_recorded";
 
 const RESOURCE_INLINE_ML_MODEL: &str = "inline_ml_model";
+const RESOURCE_INLINE_ML_SHADOW_EVALUATION: &str = "inline_ml_shadow_evaluation";
 
 const APPROVAL_PENDING: &str = "pending";
 const APPROVAL_APPROVED: &str = "approved";
@@ -129,6 +134,17 @@ const ACTIVATE_SQL: &str = "UPDATE inline_ml_models \
          deactivated_at = NULL, deactivated_by = NULL, deactivation_reason = NULL, \
          rollback_model_id = $3, rollback_model_version = $4, updated_at = now() \
      WHERE id = $1 RETURNING {cols}";
+const SHADOW_EVALUATION_COLUMNS: &str = "id, deployment_id, candidate_model_id, \
+     candidate_model_version, active_model_id, active_model_version, input_schema_version, \
+     evaluation_set_id, metrics, comparison, result, created_by, created_at";
+const LIST_SHADOW_EVALUATIONS_SQL: &str = "SELECT {cols} FROM inline_ml_shadow_evaluations \
+     WHERE deployment_id = $1 AND candidate_model_id = $2 AND candidate_model_version = $3 \
+     ORDER BY created_at DESC, id DESC LIMIT 25";
+const INSERT_SHADOW_EVALUATION_SQL: &str = "INSERT INTO inline_ml_shadow_evaluations \
+     (deployment_id, candidate_model_id, candidate_model_version, active_model_id, \
+      active_model_version, input_schema_version, evaluation_set_id, metrics, comparison, \
+      result, created_by) \
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING {cols}";
 
 // ---------------------------------------------------------------------------
 // State
@@ -259,6 +275,41 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for ModelRecord {
     }
 }
 
+#[derive(Debug, Clone)]
+struct ShadowEvaluationRecord {
+    id: Uuid,
+    candidate_model_id: String,
+    candidate_model_version: String,
+    active_model_id: Option<String>,
+    active_model_version: Option<String>,
+    input_schema_version: i32,
+    evaluation_set_id: String,
+    metrics: Value,
+    comparison: Value,
+    result: String,
+    created_by: String,
+    created_at: DateTime<Utc>,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for ShadowEvaluationRecord {
+    fn from_row(row: &'r sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            candidate_model_id: row.try_get("candidate_model_id")?,
+            candidate_model_version: row.try_get("candidate_model_version")?,
+            active_model_id: row.try_get("active_model_id")?,
+            active_model_version: row.try_get("active_model_version")?,
+            input_schema_version: row.try_get("input_schema_version")?,
+            evaluation_set_id: row.try_get("evaluation_set_id")?,
+            metrics: row.try_get("metrics")?,
+            comparison: row.try_get("comparison")?,
+            result: row.try_get("result")?,
+            created_by: row.try_get("created_by")?,
+            created_at: row.try_get("created_at")?,
+        })
+    }
+}
+
 #[derive(Serialize)]
 struct ModelResponse {
     id: Uuid,
@@ -322,6 +373,46 @@ impl TryFrom<ModelRecord> for ModelResponse {
 }
 
 #[derive(Serialize)]
+struct ShadowEvaluationResponse {
+    id: Uuid,
+    candidate_model_id: String,
+    candidate_model_version: String,
+    active_model_id: Option<String>,
+    active_model_version: Option<String>,
+    input_schema_version: i32,
+    evaluation_set_id: String,
+    metrics: Value,
+    comparison: Value,
+    result: String,
+    created_by: String,
+    created_at: DateTime<Utc>,
+}
+
+impl From<ShadowEvaluationRecord> for ShadowEvaluationResponse {
+    fn from(record: ShadowEvaluationRecord) -> Self {
+        Self {
+            id: record.id,
+            candidate_model_id: record.candidate_model_id,
+            candidate_model_version: record.candidate_model_version,
+            active_model_id: record.active_model_id,
+            active_model_version: record.active_model_version,
+            input_schema_version: record.input_schema_version,
+            evaluation_set_id: record.evaluation_set_id,
+            metrics: record.metrics,
+            comparison: record.comparison,
+            result: record.result,
+            created_by: record.created_by,
+            created_at: record.created_at,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct ShadowEvaluationListResponse {
+    evaluations: Vec<ShadowEvaluationResponse>,
+}
+
+#[derive(Serialize)]
 struct ModelListResponse {
     models: Vec<ModelResponse>,
 }
@@ -345,6 +436,18 @@ struct RegisterBody {
 #[serde(deny_unknown_fields)]
 struct RejectBody {
     reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ShadowEvaluationBody {
+    evaluation_set_id: String,
+    active_model_id: Option<String>,
+    active_model_version: Option<String>,
+    input_schema_version: i32,
+    metrics: Value,
+    comparison: Value,
+    result: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -824,6 +927,28 @@ fn valid_metrics(metrics: &Value) -> bool {
     }
 }
 
+fn valid_evaluation_set_id(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty()
+        && trimmed == value
+        && value.len() <= EVALUATION_SET_ID_MAX_LEN
+        && !has_control_characters(value)
+}
+
+fn valid_shadow_result(value: &str) -> bool {
+    matches!(
+        value,
+        "candidate_better" | "candidate_worse" | "inconclusive" | "rollback_rehearsed"
+    )
+}
+
+fn valid_json_object(value: &Value) -> bool {
+    matches!(value, Value::Object(map) if !map.is_empty())
+        && serde_json::to_vec(value)
+            .map(|bytes| bytes.len() <= METRICS_MAX_BYTES)
+            .unwrap_or(false)
+}
+
 fn valid_note(value: &str) -> bool {
     let trimmed = value.trim();
     trimmed.len() >= APPROVAL_NOTE_MIN_LEN
@@ -857,6 +982,10 @@ pub fn model_registry_router(state: ModelRegistryState) -> Router {
         .route(ADMIN_MODEL_REJECT_PATH, post(reject_model))
         .route(ADMIN_MODEL_ACTIVATE_PATH, post(activate_model))
         .route(ADMIN_MODEL_ROLLBACK_PATH, post(rollback_model))
+        .route(
+            ADMIN_MODEL_SHADOW_EVALUATIONS_PATH,
+            get(list_shadow_evaluations).post(record_shadow_evaluation),
+        )
         .with_state(state)
 }
 
@@ -979,6 +1108,251 @@ async fn get_model(
         return unavailable();
     }
     (StatusCode::OK, Json(ApiEnvelope { data: response })).into_response()
+}
+
+async fn list_shadow_evaluations(
+    State(state): State<ModelRegistryState>,
+    Path((model_id, model_version)): Path<(String, String)>,
+    headers: HeaderMap,
+    context: Option<Extension<TenantContext>>,
+) -> Response {
+    let Some(Extension(context)) = context else {
+        return unauthenticated();
+    };
+    if !valid_model_ref(&model_id, MODEL_ID_MAX_LEN)
+        || !valid_model_ref(&model_version, MODEL_VERSION_MAX_LEN)
+    {
+        return not_found("Model was not found");
+    }
+    let route = Route::new(
+        ACTION_MODEL_DETAIL,
+        RESOURCE_INLINE_ML_SHADOW_EVALUATION,
+        MODELS_VIEW_PERMISSION,
+    )
+    .with_resource(format!("{model_id}:{model_version}"));
+    if let Err(response) = authorize(&state, &context, &headers, &route).await {
+        return response;
+    }
+    let mut transaction = match state.0.pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(_) => return unavailable(),
+    };
+    if let Err(response) = set_scope(
+        &mut transaction,
+        &state.0.deployment_id.0,
+        &context.customer_id.0,
+    )
+    .await
+    {
+        return response;
+    }
+    let model_exists = match select_model(
+        &mut transaction,
+        &state.0.deployment_id.0,
+        &model_id,
+        &model_version,
+    )
+    .await
+    {
+        Ok(Some(_)) => true,
+        Ok(None) => false,
+        Err(response) => return response,
+    };
+    if !model_exists {
+        return not_found("Model was not found");
+    }
+    let sql = LIST_SHADOW_EVALUATIONS_SQL.replace("{cols}", SHADOW_EVALUATION_COLUMNS);
+    let rows = match sqlx::query_as::<_, ShadowEvaluationRecord>(&sql)
+        .bind(&state.0.deployment_id.0)
+        .bind(&model_id)
+        .bind(&model_version)
+        .fetch_all(&mut *transaction)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(_) => return unavailable(),
+    };
+    if transaction.commit().await.is_err() {
+        return unavailable();
+    }
+    (
+        StatusCode::OK,
+        Json(ApiEnvelope {
+            data: ShadowEvaluationListResponse {
+                evaluations: rows
+                    .into_iter()
+                    .map(ShadowEvaluationResponse::from)
+                    .collect(),
+            },
+        }),
+    )
+        .into_response()
+}
+
+async fn record_shadow_evaluation(
+    State(state): State<ModelRegistryState>,
+    Path((model_id, model_version)): Path<(String, String)>,
+    headers: HeaderMap,
+    context: Option<Extension<TenantContext>>,
+    body: Result<Json<ShadowEvaluationBody>, JsonRejection>,
+) -> Response {
+    let Some(Extension(context)) = context else {
+        return unauthenticated();
+    };
+    let Ok(Json(body)) = body else {
+        return invalid_request();
+    };
+    if !valid_model_ref(&model_id, MODEL_ID_MAX_LEN)
+        || !valid_model_ref(&model_version, MODEL_VERSION_MAX_LEN)
+        || !valid_evaluation_set_id(&body.evaluation_set_id)
+        || !(1..=INPUT_SCHEMA_VERSION_MAX).contains(&body.input_schema_version)
+        || !valid_json_object(&body.metrics)
+        || !valid_json_object(&body.comparison)
+        || !valid_shadow_result(&body.result)
+        || body
+            .active_model_id
+            .as_ref()
+            .is_some_and(|value| !valid_model_ref(value, MODEL_ID_MAX_LEN))
+        || body
+            .active_model_version
+            .as_ref()
+            .is_some_and(|value| !valid_model_ref(value, MODEL_VERSION_MAX_LEN))
+        || body.active_model_id.is_some() != body.active_model_version.is_some()
+    {
+        return invalid_request();
+    }
+    let route = Route::new(
+        ACTION_MODEL_SHADOW_EVALUATION_RECORDED,
+        RESOURCE_INLINE_ML_SHADOW_EVALUATION,
+        MODELS_MANAGE_PERMISSION,
+    )
+    .with_resource(format!("{model_id}:{model_version}"));
+    let key = match require_idempotency_key(&headers) {
+        Ok(key) => key,
+        Err(rejection) => return idempotency_rejection_response(rejection),
+    };
+    if let Err(response) = authorize(&state, &context, &headers, &route).await {
+        return response;
+    }
+    if let Err(response) = require_system_admin(&state, &context, &headers, &route).await {
+        return response;
+    }
+    let mut transaction = match state.0.pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(_) => return unavailable(),
+    };
+    if let Err(response) = set_scope(
+        &mut transaction,
+        &state.0.deployment_id.0,
+        &context.customer_id.0,
+    )
+    .await
+    {
+        return response;
+    }
+    let operation = format!("model:shadow-evaluation:{model_id}:{model_version}");
+    let outcome = match begin_claim(&mut transaction, &key, &operation).await {
+        Ok(outcome) => outcome,
+        Err(response) => return response,
+    };
+    match outcome {
+        ClaimOutcome::Fresh => {},
+        ClaimOutcome::Replay(value) => return replay_response(value),
+        ClaimOutcome::InProgress => return conflict("Request is already in progress"),
+        ClaimOutcome::OperationMismatch => return invalid_request(),
+    }
+    let candidate = match select_model(
+        &mut transaction,
+        &state.0.deployment_id.0,
+        &model_id,
+        &model_version,
+    )
+    .await
+    {
+        Ok(Some(record)) => record,
+        Ok(None) => return not_found("Model was not found"),
+        Err(response) => return response,
+    };
+    if candidate.input_schema_version != body.input_schema_version {
+        return invalid_request();
+    }
+    if let (Some(active_model_id), Some(active_model_version)) =
+        (&body.active_model_id, &body.active_model_version)
+    {
+        let active = match select_model(
+            &mut transaction,
+            &state.0.deployment_id.0,
+            active_model_id,
+            active_model_version,
+        )
+        .await
+        {
+            Ok(Some(record)) => record,
+            Ok(None) => return invalid_request(),
+            Err(response) => return response,
+        };
+        if active.activated_at.is_none() || active.deactivated_at.is_some() {
+            return invalid_request();
+        }
+    }
+    let sql = INSERT_SHADOW_EVALUATION_SQL.replace("{cols}", SHADOW_EVALUATION_COLUMNS);
+    let row = match sqlx::query_as::<_, ShadowEvaluationRecord>(&sql)
+        .bind(&state.0.deployment_id.0)
+        .bind(&model_id)
+        .bind(&model_version)
+        .bind(&body.active_model_id)
+        .bind(&body.active_model_version)
+        .bind(body.input_schema_version)
+        .bind(&body.evaluation_set_id)
+        .bind(sqlx::types::Json(body.metrics.clone()))
+        .bind(sqlx::types::Json(body.comparison.clone()))
+        .bind(&body.result)
+        .bind(context.actor.actor_id.0.to_string())
+        .fetch_one(&mut *transaction)
+        .await
+    {
+        Ok(row) => row,
+        Err(_) => return unavailable(),
+    };
+    if let Err(response) = write_event(
+        &mut transaction,
+        &state.0.deployment_id,
+        &context,
+        &headers,
+        "success",
+        AuditFields {
+            action: ACTION_MODEL_SHADOW_EVALUATION_RECORDED,
+            resource_type: RESOURCE_INLINE_ML_SHADOW_EVALUATION,
+            resource_id: Some(format!("{model_id}:{model_version}")),
+            customer_id: context.customer_id.0.clone(),
+            details: json!({
+                "candidate_model_id": model_id,
+                "candidate_model_version": model_version,
+                "active_model_id": body.active_model_id,
+                "active_model_version": body.active_model_version,
+                "evaluation_set_id": body.evaluation_set_id,
+                "result": body.result,
+            }),
+        },
+    )
+    .await
+    {
+        return response;
+    }
+    let response = ShadowEvaluationResponse::from(row);
+    let Some(value) = envelope(&response) else {
+        return unavailable();
+    };
+    if complete(&mut transaction, &key, &operation, value)
+        .await
+        .is_err()
+    {
+        return unavailable();
+    }
+    if transaction.commit().await.is_err() {
+        return unavailable();
+    }
+    (StatusCode::CREATED, Json(ApiEnvelope { data: response })).into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -1791,5 +2165,26 @@ mod tests {
         );
         assert_eq!(ApprovalState::parse("unknown"), None);
         assert_eq!(ApprovalState::Approved.as_str(), "approved");
+    }
+
+    #[test]
+    fn shadow_evaluation_inputs_are_bounded_and_enumerated() {
+        assert!(valid_evaluation_set_id("shadow-eval-2026-10-04"));
+        assert!(!valid_evaluation_set_id(""));
+        assert!(!valid_evaluation_set_id(" leading"));
+        assert!(!valid_evaluation_set_id("bad\nset"));
+        assert!(!valid_evaluation_set_id(
+            &"x".repeat(EVALUATION_SET_ID_MAX_LEN + 1)
+        ));
+
+        assert!(valid_shadow_result("candidate_better"));
+        assert!(valid_shadow_result("candidate_worse"));
+        assert!(valid_shadow_result("inconclusive"));
+        assert!(valid_shadow_result("rollback_rehearsed"));
+        assert!(!valid_shadow_result("activate_candidate"));
+
+        assert!(valid_json_object(&json!({"macro_f1_delta": 0.021})));
+        assert!(!valid_json_object(&json!({})));
+        assert!(!valid_json_object(&json!("not an object")));
     }
 }

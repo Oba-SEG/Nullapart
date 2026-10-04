@@ -1,15 +1,21 @@
 # Phase 4 Local Implementation Plan — Inline ML
 
-**Status:** plan active (started 2026-10-01); increments 1, 2, 3, 4 and 5
-complete and evidence-backed below (increment 5 closed 2026-10-02: thresholds
-as policy data with publish validation, scan-time resolution, evidence-to-
-policy wiring proven end to end in the ignored suite **and live on `.4`**
-(authenticated publish 201 → band findings → quarantine → WARN restored),
-full ignored PostgreSQL gate 58/58, workspace gates green; increment 4 closed 2026-10-02: registry
-table + audited system admin API with approval/activation/rollback, full
-ignored PostgreSQL gate 56/56, workspace gates green; increment 3 closed
+**Status:** complete for the Phase 4 local evidence-layer scope (started
+2026-10-01; closed 2026-10-04). Increments 1–9 are implemented and
+evidence-backed below. Increment 9 closed on `.4` with migration
+`020_inline_ml_feedback_shadow.sql`, release-created feedback candidates,
+shadow-evaluation registry evidence, customer-safe threat-analysis trace
+projection, Models diagnostics UI, canonical workspace gates, full ignored
+PostgreSQL gate, rebuilt `mailcore`/`frontend`, and live API/UI proof.
+Increment 5 closed 2026-10-02: thresholds as policy data with publish
+validation, scan-time resolution, evidence-to-policy wiring proven end to
+end in the ignored suite **and live on `.4`** (authenticated publish 201 →
+band findings → quarantine → WARN restored), full ignored PostgreSQL gate
+58/58, workspace gates green. Increment 4 closed 2026-10-02: registry table
+and audited system admin API with approval/activation/rollback, full ignored
+PostgreSQL gate 56/56, workspace gates green. Increment 3 closed
 2026-10-02: stage wired behind `inline_ml_classification`, gates green,
-profiled, live smoke positive + fail-closed negative on `.4`).
+profiled, live smoke positive + fail-closed negative on `.4`.
 Increment 2 was resequenced by owner direction:
 model fine-tuning comes first (executed on the local workstation `.4`),
 inference wiring follows as increment 3. Increment 2 was then redefined by
@@ -18,11 +24,9 @@ owner rulings (decisions 13–16): multi-label training over all 13 canonical
 sources plus Nullapart-owned synthetic fixtures for the 8 classes without
 permissive data, and five agreed baseline targets. Source survey is
 complete and approved; dataset fetch/prepare/train/eval/export under the
-new architecture is complete (evidence in increment 2 below). Next up:
-thresholds as policy/config + evidence-to-policy wiring (increment 5).
-Increments are completed and
-evidence-backed one at a time; checked work is evidence-backed, not
-inferred from the presence of a module.
+new architecture is complete (evidence in increment 2 below). Increments
+were completed and evidence-backed one at a time; checked work is
+evidence-backed, not inferred from the presence of a module.
 
 ## Prerequisite check (from `PHASE-4-INLINE-ML.md`)
 
@@ -620,6 +624,128 @@ Complete (2026-10-02).
   public endpoint, schema change, or disposition logic beyond the
   existing reviewed binary local policy.
 
+## Increment 6 evidence — feedback candidates, not self-training
+
+Complete (2026-10-04).
+
+- **Persistence:** `migrations/020_inline_ml_feedback_shadow.sql` creates
+  `ml_feedback_candidates` with deployment/customer scope, optional
+  tenant-message and transaction references (`ON DELETE SET NULL`, so
+  feedback evidence does not block message retention), source enum
+  (`quarantine_release`, `user_report`, `admin_adjudication`), canonical
+  proposed labels plus `false_positive`, curation state
+  (`pending|accepted|rejected`), reason/actor fields, curation integrity
+  CHECK, deployment/customer RLS with `ENABLE + FORCE ROW LEVEL SECURITY`,
+  and a partial unique index for one tenant-message/source candidate.
+- **Runtime writer:** `PostgresQuarantineRepository::release` sets both
+  `app.current_deployment_id` and `app.current_customer_id`, writes the
+  release audit row, inserts a `quarantine_release` candidate with
+  proposed label `false_positive`, then writes the release outbox event in
+  the same transaction. Idempotent release replay returns the existing case
+  without duplicating feedback.
+- **Tests:** `tests/postgres_quarantine_release.rs` now asserts the
+  feedback row (`quarantine_release`, `false_positive`, `pending`, release
+  reason) and count=1. `tests/postgres_quarantine_detail.rs` cleanup covers
+  the feedback candidate, and the full ignored suite caught and closed the
+  retention FK issue.
+- **Security boundary:** there is still no code path from
+  `ml_feedback_candidates` to training data, registry state, thresholds, or
+  model artifacts. Candidates remain curation inputs only. The table allows
+  future `user_report`/`admin_adjudication` producers, but the current
+  product flow implemented in this phase is quarantine release; the missing
+  user-report/adjudication product workflows are not silently claimed.
+
+## Increment 7 evidence — shadow evaluation, comparison and rollback controls
+
+Complete (2026-10-04).
+
+- **Persistence:** `020_inline_ml_feedback_shadow.sql` creates
+  `inline_ml_shadow_evaluations` with deployment RLS, candidate model
+  reference, optional active model pair, input schema version, evaluation
+  set id, bounded JSON object metrics/comparison, result enum
+  (`candidate_better|candidate_worse|inconclusive|rollback_rehearsed`),
+  creator and timestamp.
+- **Admin API:** `model_registry.rs` adds
+  `GET|POST /api/v1/admin/models/:model_id/:model_version/shadow-evaluations`.
+  Reads require `models:view`; writes require idempotency,
+  `models:manage`, system-admin role and a valid candidate model/input
+  schema. If an active model pair is supplied, it must exist and currently
+  be active. Writes are audited as `model_shadow_evaluation_recorded`.
+- **Rollback controls:** the increment-4 rollback state machine remains in
+  force (approved active model records predecessor; rollback reactivates
+  only that target), and the shadow result enum can record
+  `rollback_rehearsed` evidence. Activation still remains an explicit
+  system-admin action; this increment records comparison evidence and does
+  not auto-activate candidates.
+- **Tests:** `tests/postgres_model_registry.rs` adds
+  `shadow_evaluation_records_comparison_evidence_only`, proving live route
+  insert/list behavior, active-model reference validation, audit count and
+  persisted row count.
+
+## Increment 8 evidence — UI and customer-safe trace projection
+
+Complete (2026-10-04).
+
+- **Customer-safe API projection:** `trace.rs` projects `inline_ml`
+  findings as source `threat_analysis` with product-level descriptions
+  such as `high phishing evidence was recorded for this message.` The trace
+  response no longer exposes inline scanner ids, model versions, scores or
+  thresholds in normal customer trace. Unit coverage asserts the projection
+  serializes without `inline_ml`, score text or model identifiers.
+- **Message UI:** `MessageDetail.tsx` adds a Threat analysis card that
+  shows band/severity, category and product-level description. The findings
+  list labels ML-assisted rows as `Threat analysis` rather than a scanner
+  engine. Raw MIME remains behind the existing content permission boundary.
+- **Model diagnostics UI:** new `/models` route, guarded by `models:view`,
+  lists model approval/activation state, rollback target, safe metric
+  summaries and latest shadow-evaluation result. Sidebar navigation appears
+  only when the session has `models:view`.
+- **Threshold publish safeguard:** the policy client now preserves
+  `action.metadata` during structured rule edit/publish round-trips, so ML
+  thresholds are not silently stripped by the UI. The publish dialog warns
+  when a `ml_threat_classification` draft would clear threshold metadata and
+  return inline analysis to evidence-only WARN behavior.
+- **Tests:** frontend `check-all` now includes 85 tests, including the new
+  pure policy metadata preservation test.
+
+## Increment 9 evidence — security battery, gates, local deployment and live proof
+
+Complete (2026-10-04).
+
+- **Workspace gates:** `cargo fmt --all -- --check` green;
+  `cargo clippy --workspace --all-targets -- -D warnings` green;
+  `cargo test --workspace` green (mail-core lib 413 passed, 1 ignored;
+  workspace default suite green); `pnpm --dir frontend check-all` green
+  (15 files, 85 tests).
+- **Ignored DB gate on `.4`:** full ignored PostgreSQL suite run serially
+  through an SSH tunnel against `nullapart_scratch` after migration 020:
+  artifact recovery 1, inline ML profile 1, admin/audit/RBAC/customer/OIDC/
+  operations/policy/quarantine/reinjection/RLS/scanner-pipeline/trace
+  suites all green; model registry now 7/7 with shadow evaluation; scanner
+  pipeline 6/6; trace 5/5.
+- **Deployment on `.4`:** synced implementation and migration files to
+  `ob1@192.168.8.4:/home/ob1/Nullapart`, applied migration 020 to live
+  `nullapart` and `nullapart_scratch`, altered the feedback FKs to
+  `ON DELETE SET NULL`, refreshed `nullapart_mailcore` grants via
+  `provision-local-runtime-role.sh`, rebuilt `mailcore` and `frontend`, and
+  recreated both services.
+- **Live UI/API proof:** `GET /models` through the local frontend proxy
+  returns 200 with basic auth and 401 without it. Local proxy-header login
+  projects `models:view` and `models:manage`. Live registry flow:
+  register active `multilabel-v1/1` 201, approve 200, activate 200;
+  register candidate `multilabel-v2/2` 201, approve 200; record shadow
+  evaluation 201; list models shows 2 rows with `multilabel-v1/1` active;
+  list shadow evaluations for candidate shows `candidate_better`.
+- **Live feedback proof:** a live CZA-3 quarantine release returned 200 for
+  tenant message `e722273c-6b67-5a29-9737-d22627a28759`; database evidence
+  shows feedback candidate
+  `quarantine_release|false_positive|pending|Phase 4 live feedback candidate proof`
+  and one release outbox event for the idempotency key.
+- **Live leak proof:** `GET /api/v1/mail-trace/transaction/
+  2b92716d-4c64-5ecb-8196-79491b0df595` returned 200 with three findings,
+  each source `threat_analysis`; the JSON contained no `inline_ml`,
+  `model_version`, or threshold text.
+
 ## Superseded work — binary pilot (not counted as increment 2)
 
 Before the owner rulings in decisions 13–16, a single-label
@@ -641,7 +767,9 @@ was never run in the pilot.
 - no Deep AI / LLM in the mail hot path (Phase 7 boundary);
 - no autonomous remediation or model-driven disposition;
 - external benchmark/leaderboard claims — only local harness evidence;
-- no threshold UI; a `ml_threat_classification` publish without the
-  `thresholds` metadata intentionally clears active thresholds (the stage
-  returns to explicit WARN / evidence-only) — increment 8 must confirm
-  that consequence before saving.
+- no per-class threshold tuning wizard; the structured policy UI preserves
+  threshold metadata and warns before clearing it, but threshold authoring
+  still happens through the reviewed policy payload path;
+- no new end-user report/adjudication workflow was invented in this phase;
+  the feedback table supports those sources, while the implemented product
+  producer is quarantine release.

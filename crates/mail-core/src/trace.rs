@@ -327,6 +327,43 @@ struct TraceFindingResponse {
     created_at: DateTime<Utc>,
 }
 
+impl TraceFindingResponse {
+    fn project_customer_safe(
+        id: Uuid,
+        severity: String,
+        category: String,
+        description: String,
+        scanner_type: String,
+        false_positive: bool,
+        created_at: DateTime<Utc>,
+    ) -> Self {
+        if scanner_type == "inline_ml" {
+            return Self {
+                id,
+                severity: severity.clone(),
+                category: category.clone(),
+                description: customer_safe_threat_analysis_description(&severity, &category),
+                scanner_type: "threat_analysis".to_string(),
+                false_positive,
+                created_at,
+            };
+        }
+        Self {
+            id,
+            severity,
+            category,
+            description,
+            scanner_type,
+            false_positive,
+            created_at,
+        }
+    }
+}
+
+fn customer_safe_threat_analysis_description(severity: &str, category: &str) -> String {
+    format!("{severity} {category} evidence was recorded for this message.")
+}
+
 #[derive(Debug, Serialize)]
 struct TraceFlowStageResponse {
     stage: &'static str,
@@ -1023,14 +1060,16 @@ async fn session_transaction_detail(
         .collect();
     let findings: Vec<TraceFindingResponse> = finding_rows
         .iter()
-        .map(|row| TraceFindingResponse {
-            id: row.get("id"),
-            severity: row.get("severity"),
-            category: row.get("category"),
-            description: row.get("description"),
-            scanner_type: row.get("scanner_type"),
-            false_positive: row.get("false_positive"),
-            created_at: row.get("created_at"),
+        .map(|row| {
+            TraceFindingResponse::project_customer_safe(
+                row.get("id"),
+                row.get("severity"),
+                row.get("category"),
+                row.get("description"),
+                row.get("scanner_type"),
+                row.get("false_positive"),
+                row.get("created_at"),
+            )
         })
         .collect();
 
@@ -1845,6 +1884,31 @@ mod tests {
                 validate_search_request(&request).expect("any limit must be clamped, not rejected");
             assert_eq!(validated.limit, i64::from(expected));
         }
+    }
+
+    #[test]
+    fn inline_ml_findings_are_projected_as_customer_safe_threat_analysis() {
+        let finding = TraceFindingResponse::project_customer_safe(
+            Uuid::new_v4(),
+            "high".to_string(),
+            "phishing".to_string(),
+            "Inline ML score 0.91 exceeded high threshold 0.90 for model inline-threat-v2"
+                .to_string(),
+            "inline_ml".to_string(),
+            false,
+            Utc::now(),
+        );
+
+        assert_eq!(finding.scanner_type, "threat_analysis");
+        assert_eq!(
+            finding.description,
+            "high phishing evidence was recorded for this message."
+        );
+        let body = serde_json::to_string(&finding).expect("finding must serialize");
+        assert!(!body.contains("inline_ml"));
+        assert!(!body.contains("Inline ML"));
+        assert!(!body.contains("0.91"));
+        assert!(!body.contains("inline-threat-v2"));
     }
 
     #[test]
