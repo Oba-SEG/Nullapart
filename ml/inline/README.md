@@ -34,7 +34,9 @@ pinned in `requirements.txt`. Lint: `ruff check .` (config in
 - All 13 labels are trained; per-class results are reported in
   `eval_report.json` — never a single headline number. Synthetic-supplied
   classes are disclosed with fixture counts in the model card.
-- Artifact stays on `.4` until registered through the audited registry API
-  (phase 4 increment 4).
+- Artifact stays on `.4`; registration, activation and rollback are
+  audited through the model registry API (phase 4 increment 4). The
+  local/dev runtime consumes explicit `NULLAPART_INLINE_ML_*` mounted
+  artifact paths.
 - Model output is evidence for policy — never policy, never an autonomous
   disposition.

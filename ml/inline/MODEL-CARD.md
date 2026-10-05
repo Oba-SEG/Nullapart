@@ -2,11 +2,12 @@
 
 **Status:** trained, evaluated, exported (2026-10-01, workstation `.4`);
 thresholds re-selected on validation and evaluation corrected/re-run
-(2026-10-02 — all agreed targets met, §5).
-**Not registered, not wired, not deployed** — the artifact stays on `.4`
-until it passes the audited registry API (phase 4 increment 4) and the
-inference stage is ruled on. Model output is **evidence for policy** —
-never policy, never an autonomous disposition, never an implicit allow.
+(2026-10-02 — all agreed targets met, §5). Phase 4 later registered,
+approved and activated `multilabel-v1/1` through the audited local model
+registry, wired the inline ML stage behind `inline_ml_classification`, and
+deployed the mounted int8 ONNX artifact on `.4` for local/dev evidence.
+Model output is **evidence for policy** — never policy, never an
+autonomous disposition, never an implicit allow.
 
 Machine-readable sources for everything below:
 `checkpoints/multilabel-v1/eval_report.json` (2026-10-02 corrected run,
@@ -225,6 +226,8 @@ cd ml/inline
 /home/ob1/mlvenv/bin/python export_onnx.py              # onnx/ + export_report.json
 ```
 
-Dataset fetch/pinning: `fetch_dataset.py` + `DATASET.md`. Artifact stays
-on `.4`; registration/activation/rollback is the audited registry API
-(increment 4), never a manual copy into a running service.
+Dataset fetch/pinning: `fetch_dataset.py` + `DATASET.md`. The artifact
+stays on `.4`; registration/activation/rollback is the audited registry
+API (increment 4), never a manual copy into a running service. The
+local/dev runtime consumes the explicit `NULLAPART_INLINE_ML_*` mounted
+artifact paths recorded in `compose.local.yml`.
