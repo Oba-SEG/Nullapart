@@ -4,6 +4,41 @@
   gap: var(--spacing-6);
 }
 
+.models-command-header {
+  align-items: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-4);
+  justify-content: space-between;
+}
+
+.models-runtime-chip {
+  background:
+    linear-gradient(180deg, rgba(250, 250, 250, 0.06), transparent),
+    var(--color-bg-command);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-inset);
+  display: flex;
+  flex-direction: column;
+  min-width: 14rem;
+  padding: var(--spacing-4);
+}
+
+.models-runtime-chip span {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.models-runtime-chip strong {
+  color: var(--lime);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-base);
+  overflow-wrap: anywhere;
+}
+
 .models-summary {
   display: grid;
   gap: var(--spacing-4);
@@ -37,6 +72,99 @@
 
 .models-state-error {
   color: var(--color-error);
+}
+
+.models-admin-grid {
+  display: grid;
+  gap: var(--spacing-4);
+  grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr));
+}
+
+.models-admin-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+
+.models-admin-head {
+  align-items: flex-start;
+  display: flex;
+  gap: var(--spacing-3);
+}
+
+.models-admin-head svg {
+  color: var(--color-primary);
+  flex: 0 0 auto;
+  margin-top: var(--spacing-1);
+}
+
+.models-admin-head h2 {
+  font-size: var(--font-size-lg);
+  margin-bottom: var(--spacing-1);
+}
+
+.models-admin-head p,
+.models-readonly-note,
+.models-error {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.models-form-grid {
+  display: grid;
+  gap: var(--spacing-3);
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+}
+
+.models-admin-card .input-group,
+.models-admin-card .select-group,
+.model-control-deck .input-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+  width: 100%;
+}
+
+.models-admin-card .input,
+.models-admin-card .select,
+.model-control-deck .input {
+  width: 100%;
+}
+
+.models-textarea-label {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.models-textarea {
+  min-height: 8rem;
+  resize: vertical;
+  width: 100%;
+}
+
+.models-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-3);
+}
+
+.models-error {
+  color: var(--color-error);
+}
+
+.models-readonly-note {
+  align-items: center;
+  display: flex;
+  gap: var(--spacing-3);
+}
+
+.models-readonly-note svg {
+  color: var(--color-warning);
 }
 
 .models-list {
@@ -135,6 +263,29 @@
   flex-direction: column;
   gap: var(--spacing-1);
   padding: var(--spacing-3);
+}
+
+.model-control-deck {
+  background:
+    linear-gradient(180deg, rgba(250, 250, 250, 0.04), transparent),
+    var(--color-bg-command);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  display: grid;
+  gap: var(--spacing-3);
+  padding: var(--spacing-4);
+}
+
+.model-primary-actions,
+.model-reject-row {
+  align-items: flex-end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-3);
+}
+
+.model-reject-row .input-group {
+  flex: 1 1 16rem;
 }
 
 .model-note {

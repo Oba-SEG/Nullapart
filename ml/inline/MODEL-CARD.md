@@ -6,8 +6,11 @@ thresholds re-selected on validation and evaluation corrected/re-run
 approved and activated `multilabel-v1/1` through the audited local model
 registry, wired the inline ML stage behind `inline_ml_classification`, and
 deployed the mounted int8 ONNX artifact on `.4` for local/dev evidence.
-Model output is **evidence for policy** — never policy, never an
-autonomous disposition, never an implicit allow.
+The running stage now refuses to serve inference unless the configured
+model ID/version is the active approved registry row and the mounted ONNX
+SHA-256 matches that row, so the registry is a runtime gate instead of a
+diagnostic-only record. Model output is **evidence for policy** — never
+policy, never an autonomous disposition, never an implicit allow.
 
 Machine-readable sources for everything below:
 `checkpoints/multilabel-v1/eval_report.json` (2026-10-02 corrected run,

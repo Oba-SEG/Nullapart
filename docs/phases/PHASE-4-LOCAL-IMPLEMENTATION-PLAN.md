@@ -735,11 +735,21 @@ Complete (2026-10-04).
   recreated both services.
 - **Live UI/API proof:** `GET /models` through the local frontend proxy
   returns 200 with basic auth and 401 without it. Local proxy-header login
-  projects `models:view` and `models:manage`. Live registry flow:
-  register active `multilabel-v1/1` 201, approve 200, activate 200;
-  register candidate `multilabel-v2/2` 201, approve 200; record shadow
-  evaluation 201; list models shows 2 rows with `multilabel-v1/1` active;
-  list shadow evaluations for candidate shows `candidate_better`.
+  projects `models:view` and `models:manage`. The page now exposes the
+  existing audited registry operations instead of a read-only dashboard:
+  register model, record shadow evaluation, approve, reject, activate and
+  rollback. Live registry flow: register active `multilabel-v1/1` 201,
+  approve 200, activate 200; register candidate `multilabel-v2/2` 201,
+  approve 200; record shadow evaluation 201; list models shows 2 rows with
+  `multilabel-v1/1` active; list shadow evaluations for candidate shows
+  `candidate_better`.
+- **Runtime registry gate proof:** the inline ML stage now verifies that
+  `NULLAPART_INLINE_ML_MODEL_ID`/`NULLAPART_INLINE_ML_MODEL_VERSION` names
+  the active approved registry row and that the mounted ONNX SHA-256 matches
+  `inline_ml_models.artifact_sha256` before loading ONNX Runtime. A missing,
+  inactive or mismatched row degrades to the explicit unavailable runtime so
+  switch-enabled evaluation surfaces Unknown/Error evidence instead of
+  running an unapproved artifact.
 - **Live feedback proof:** a live CZA-3 quarantine release returned 200 for
   tenant message `e722273c-6b67-5a29-9737-d22627a28759`; database evidence
   shows feedback candidate

@@ -105,7 +105,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &artifact_store,
     )
     .await?;
-    let inline_ml_stage = Arc::new(InlineMlStage::from_environment(pool.clone()).await);
+    let inline_ml_stage =
+        Arc::new(InlineMlStage::from_environment(pool.clone(), deployment_id.clone()).await);
     let pipeline =
         DurableScannerPipeline::new_shared(artifact_store.clone(), scanner_fabric, pool.clone())
             .with_inline_ml(Some(inline_ml_stage));

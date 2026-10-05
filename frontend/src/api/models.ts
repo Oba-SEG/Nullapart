@@ -50,6 +50,28 @@ export interface ShadowEvaluationList {
   evaluations: ShadowEvaluation[];
 }
 
+export interface RegisterModelInput {
+  model_id: string;
+  model_version: string;
+  input_schema_version: number;
+  training_dataset_version: string;
+  code_commit: string;
+  metrics: Record<string, unknown>;
+  artifact_uri: string;
+  artifact_sha256: string;
+  deployment_regions: string[];
+}
+
+export interface RecordShadowEvaluationInput {
+  evaluation_set_id: string;
+  active_model_id: string | null;
+  active_model_version: string | null;
+  input_schema_version: number;
+  metrics: Record<string, unknown>;
+  comparison: Record<string, unknown>;
+  result: ShadowEvaluation["result"];
+}
+
 export function listModels(signal?: AbortSignal): Promise<InlineModelList> {
   return api.get<InlineModelList>("/admin/models", signal);
 }
@@ -64,5 +86,76 @@ export function listShadowEvaluations(
       modelVersion,
     )}/shadow-evaluations`,
     signal,
+  );
+}
+
+export function registerModel(
+  body: RegisterModelInput,
+  idempotencyKey: string,
+): Promise<InlineModel> {
+  return api.post<InlineModel>("/admin/models", body, { idempotencyKey });
+}
+
+export function approveModel(
+  modelId: string,
+  modelVersion: string,
+  idempotencyKey: string,
+): Promise<InlineModel> {
+  return api.post<InlineModel>(
+    `/admin/models/${encodeURIComponent(modelId)}/${encodeURIComponent(modelVersion)}/approve`,
+    undefined,
+    { idempotencyKey },
+  );
+}
+
+export function rejectModel(
+  modelId: string,
+  modelVersion: string,
+  reason: string,
+  idempotencyKey: string,
+): Promise<InlineModel> {
+  return api.post<InlineModel>(
+    `/admin/models/${encodeURIComponent(modelId)}/${encodeURIComponent(modelVersion)}/reject`,
+    { reason },
+    { idempotencyKey },
+  );
+}
+
+export function activateModel(
+  modelId: string,
+  modelVersion: string,
+  idempotencyKey: string,
+): Promise<InlineModel> {
+  return api.post<InlineModel>(
+    `/admin/models/${encodeURIComponent(modelId)}/${encodeURIComponent(modelVersion)}/activate`,
+    undefined,
+    { idempotencyKey },
+  );
+}
+
+export function rollbackModel(
+  modelId: string,
+  modelVersion: string,
+  idempotencyKey: string,
+): Promise<InlineModel> {
+  return api.post<InlineModel>(
+    `/admin/models/${encodeURIComponent(modelId)}/${encodeURIComponent(modelVersion)}/rollback`,
+    undefined,
+    { idempotencyKey },
+  );
+}
+
+export function recordShadowEvaluation(
+  modelId: string,
+  modelVersion: string,
+  body: RecordShadowEvaluationInput,
+  idempotencyKey: string,
+): Promise<ShadowEvaluation> {
+  return api.post<ShadowEvaluation>(
+    `/admin/models/${encodeURIComponent(modelId)}/${encodeURIComponent(
+      modelVersion,
+    )}/shadow-evaluations`,
+    body,
+    { idempotencyKey },
   );
 }

@@ -7,11 +7,15 @@
 //! the pass-1 result before policy evaluation
 //! (`docs/phases/PHASE-4-LOCAL-IMPLEMENTATION-PLAN.md`, design decision 2).
 
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-use nullapart_mail_contracts::FeatureId;
+use nullapart_mail_contracts::{transaction::DeploymentId, FeatureId};
 use nullapart_scanner_sdk::trait_defs::{ScanContent, Scanner, ScannerId};
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -38,6 +42,11 @@ pub const INLINE_ML_STAGE_TIMEOUT: std::time::Duration = std::time::Duration::fr
 
 /// Artifact byte bound for the stage, matching the pipeline preflight cap.
 pub const INLINE_ML_STAGE_MAX_INPUT: u64 = 50 * 1024 * 1024;
+
+const ACTIVE_REGISTRY_DIGEST_SQL: &str = "SELECT artifact_sha256 FROM inline_ml_models \
+     WHERE deployment_id = $1 AND model_id = $2 AND model_version = $3 \
+       AND approval_state = 'approved' \
+       AND activated_at IS NOT NULL AND deactivated_at IS NULL";
 
 /// Second-pass execution unit: one optional-enrichment registration plus
 /// the server-authoritative feature switch for the same capability.
@@ -82,37 +91,60 @@ impl InlineMlStage {
     }
 
     /// Load the runtime named by `NULLAPART_INLINE_ML_*` environment
-    /// configuration. A missing or unloadable artifact degrades to an
+    /// configuration, but only after the active registry row for this
+    /// deployment approves the same model identity and artifact digest. A
+    /// missing, inactive or mismatched registry entry degrades to an
     /// explicitly unavailable runtime so switch-enabled evaluation surfaces
-    /// Unknown/Error evidence instead of silently skipping the model.
-    pub async fn from_environment(pool: PgPool) -> Self {
+    /// Unknown/Error evidence instead of silently running an unapproved
+    /// artifact.
+    pub async fn from_environment(pool: PgPool, deployment_id: DeploymentId) -> Self {
         let config = InlineMlRuntimeConfig::from_env();
         let runtime: Arc<dyn InlineModelRuntime> = if config.is_configured() {
-            let load_config = config.clone();
-            match tokio::task::spawn_blocking(move || OrtModelRuntime::load(&load_config)).await {
-                Ok(Ok(runtime)) => {
-                    tracing::info!(
-                        model_id = runtime.identity().model_id,
-                        model_version = runtime.identity().model_version,
-                        "inline ml model loaded"
-                    );
-                    Arc::new(runtime)
+            match verify_active_registry_artifact(&pool, &deployment_id, &config).await {
+                Ok(()) => {
+                    let load_config = config.clone();
+                    match tokio::task::spawn_blocking(move || OrtModelRuntime::load(&load_config))
+                        .await
+                    {
+                        Ok(Ok(runtime)) => {
+                            tracing::info!(
+                                model_id = runtime.identity().model_id,
+                                model_version = runtime.identity().model_version,
+                                "inline ml model loaded"
+                            );
+                            Arc::new(runtime)
+                        },
+                        Ok(Err(error)) => {
+                            tracing::warn!(
+                                error = %error,
+                                "inline ml model failed to load; runtime is unavailable"
+                            );
+                            Arc::new(UnavailableRuntime::from_config(
+                                &config,
+                                "configured inline ml model failed to load",
+                            ))
+                        },
+                        Err(_) => {
+                            tracing::warn!(
+                                "inline ml model load task failed; runtime is unavailable"
+                            );
+                            Arc::new(UnavailableRuntime::from_config(
+                                &config,
+                                "inline ml model load task failed",
+                            ))
+                        },
+                    }
                 },
-                Ok(Err(error)) => {
+                Err(error) => {
                     tracing::warn!(
                         error = %error,
-                        "inline ml model failed to load; runtime is unavailable"
+                        model_id = config.model_id,
+                        model_version = config.model_version,
+                        "inline ml registry gate failed; runtime is unavailable"
                     );
                     Arc::new(UnavailableRuntime::from_config(
                         &config,
-                        "configured inline ml model failed to load",
-                    ))
-                },
-                Err(_) => {
-                    tracing::warn!("inline ml model load task failed; runtime is unavailable");
-                    Arc::new(UnavailableRuntime::from_config(
-                        &config,
-                        "inline ml model load task failed",
+                        "configured inline ml model is not the active approved registry artifact",
                     ))
                 },
             }
@@ -186,6 +218,75 @@ impl InlineMlStage {
         );
         Some(pass2)
     }
+}
+
+async fn verify_active_registry_artifact(
+    pool: &PgPool,
+    deployment_id: &DeploymentId,
+    config: &InlineMlRuntimeConfig,
+) -> Result<(), String> {
+    let model_path = config
+        .model_path
+        .clone()
+        .ok_or_else(|| "NULLAPART_INLINE_ML_MODEL_PATH is not set".to_string())?;
+    let mut transaction = pool
+        .begin()
+        .await
+        .map_err(|error| format!("registry check could not start: {error}"))?;
+    sqlx::query("SELECT set_config('app.current_deployment_id', $1, true)")
+        .bind(&deployment_id.0)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| format!("registry scope could not be set: {error}"))?;
+    let expected_sha = sqlx::query_scalar::<_, String>(ACTIVE_REGISTRY_DIGEST_SQL)
+        .bind(&deployment_id.0)
+        .bind(&config.model_id)
+        .bind(&config.model_version)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|error| format!("registry check failed: {error}"))?
+        .ok_or_else(|| {
+            format!(
+                "no active approved registry row for {}/{}",
+                config.model_id, config.model_version
+            )
+        })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| format!("registry check could not commit: {error}"))?;
+    let actual_sha = sha256_path_async(model_path).await?;
+    if actual_sha != expected_sha {
+        return Err(format!(
+            "configured artifact digest {actual_sha} does not match active registry digest \
+             {expected_sha} for {}/{}",
+            config.model_id, config.model_version
+        ));
+    }
+    Ok(())
+}
+
+async fn sha256_path_async(path: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || sha256_file(path))
+        .await
+        .map_err(|_| "model artifact digest task failed".to_string())?
+}
+
+fn sha256_file(path: impl AsRef<Path>) -> Result<String, String> {
+    let mut file = File::open(path.as_ref())
+        .map_err(|error| format!("model artifact could not be opened: {error}"))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let bytes_read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("model artifact could not be read: {error}"))?;
+        if bytes_read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes_read]);
+    }
+    Ok(hex::encode(hasher.finalize()))
 }
 
 /// Merge pass-2 outcomes into the pass-1 result before policy evaluation.
@@ -318,5 +419,20 @@ mod tests {
         assert_eq!(INLINE_ML_FEATURE_ID, "inline_ml_classification");
         assert_eq!(INLINE_ML_SCANNER_ID, "inline-ml-classifier");
         assert!(INLINE_ML_STAGE_TIMEOUT.as_millis() >= 500);
+    }
+
+    #[test]
+    fn sha256_file_reports_artifact_digest() {
+        let path = std::env::temp_dir().join(format!(
+            "nullapart-inline-ml-digest-{}.bin",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&path, b"approved-model-artifact").expect("write test artifact");
+        let digest = sha256_file(&path).expect("hash test artifact");
+        std::fs::remove_file(&path).expect("remove test artifact");
+        assert_eq!(
+            digest,
+            "2e944cf2067933925530c247b0dba0bb6e399fcf9cb735ab1dff26da77fe4689"
+        );
     }
 }
