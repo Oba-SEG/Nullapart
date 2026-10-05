@@ -337,17 +337,9 @@ impl TraceFindingResponse {
         false_positive: bool,
         created_at: DateTime<Utc>,
     ) -> Self {
-        if scanner_type == "inline_ml" {
-            return Self {
-                id,
-                severity: severity.clone(),
-                category: category.clone(),
-                description: customer_safe_threat_analysis_description(&severity, &category),
-                scanner_type: "threat_analysis".to_string(),
-                false_positive,
-                created_at,
-            };
-        }
+        let description = customer_safe_finding_description(&severity, &category, &description);
+        let scanner_type = customer_safe_finding_source(&scanner_type).to_string();
+
         Self {
             id,
             severity,
@@ -360,7 +352,48 @@ impl TraceFindingResponse {
     }
 }
 
-fn customer_safe_threat_analysis_description(severity: &str, category: &str) -> String {
+fn customer_safe_finding_description(severity: &str, category: &str, description: &str) -> String {
+    if description_contains_internal_evidence(description) {
+        return generic_customer_safe_finding_description(severity, category);
+    }
+
+    description.to_string()
+}
+
+fn description_contains_internal_evidence(description: &str) -> bool {
+    let normalized = description.to_lowercase();
+    [
+        "clamav",
+        "rspamd",
+        "urlanalysis",
+        "static-rule",
+        "static malware rule",
+        "static rule",
+        "inline ml",
+        "inline_ml",
+        "model_version",
+        "model version",
+        "threshold",
+        "score",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
+}
+
+fn customer_safe_finding_source(scanner_type: &str) -> &'static str {
+    match scanner_type {
+        "attachment" => "attachment_analysis",
+        "clamav" => "malware_analysis",
+        "deepai" => "advanced_threat_analysis",
+        "dkim" | "spf" | "dmarc" | "arc" => "authentication_analysis",
+        "inline_ml" => "threat_analysis",
+        "rspamd" => "spam_reputation_analysis",
+        "urlanalysis" => "link_analysis",
+        _ => "security_analysis",
+    }
+}
+
+fn generic_customer_safe_finding_description(severity: &str, category: &str) -> String {
     format!("{severity} {category} evidence was recorded for this message.")
 }
 
@@ -1909,6 +1942,47 @@ mod tests {
         assert!(!body.contains("Inline ML"));
         assert!(!body.contains("0.91"));
         assert!(!body.contains("inline-threat-v2"));
+    }
+
+    #[test]
+    fn scanner_findings_are_projected_as_customer_safe_evidence_sources() {
+        let finding = TraceFindingResponse::project_customer_safe(
+            Uuid::new_v4(),
+            "high".to_string(),
+            "malware".to_string(),
+            "clamav static-rule scanner matched urlanalysis signature".to_string(),
+            "urlanalysis".to_string(),
+            false,
+            Utc::now(),
+        );
+
+        assert_eq!(finding.scanner_type, "link_analysis");
+        assert_eq!(
+            finding.description,
+            "high malware evidence was recorded for this message."
+        );
+        let body = serde_json::to_string(&finding).expect("finding must serialize");
+        assert!(!body.contains("urlanalysis"));
+        assert!(!body.contains("clamav"));
+        assert!(!body.contains("static-rule"));
+
+        let static_rule_finding = TraceFindingResponse::project_customer_safe(
+            Uuid::new_v4(),
+            "critical".to_string(),
+            "malware".to_string(),
+            "Static malware rule matched".to_string(),
+            "custom".to_string(),
+            false,
+            Utc::now(),
+        );
+
+        assert_eq!(static_rule_finding.scanner_type, "security_analysis");
+        assert_eq!(
+            static_rule_finding.description,
+            "critical malware evidence was recorded for this message."
+        );
+        let body = serde_json::to_string(&static_rule_finding).expect("finding must serialize");
+        assert!(!body.contains("Static malware rule"));
     }
 
     #[test]

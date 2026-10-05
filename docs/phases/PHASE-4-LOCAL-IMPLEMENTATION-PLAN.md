@@ -686,16 +686,20 @@ Complete (2026-10-04).
 
 Complete (2026-10-04).
 
-- **Customer-safe API projection:** `trace.rs` projects `inline_ml`
-  findings as source `threat_analysis` with product-level descriptions
-  such as `high phishing evidence was recorded for this message.` The trace
-  response no longer exposes inline scanner ids, model versions, scores or
-  thresholds in normal customer trace. Unit coverage asserts the projection
-  serializes without `inline_ml`, score text or model identifiers.
+- **Customer-safe API projection:** `trace.rs` projects customer-visible
+  finding sources to product capability labels (`threat_analysis`,
+  `link_analysis`, `malware_analysis`, etc.) and replaces scanner/model
+  diagnostic prose with product-level descriptions such as
+  `high phishing evidence was recorded for this message.` The trace response
+  no longer exposes inline scanner ids, raw scanner engine labels, model
+  versions, scores or thresholds in normal customer trace. Unit coverage
+  asserts the projection serializes without `inline_ml`, raw scanner IDs,
+  score text or model identifiers.
 - **Message UI:** `MessageDetail.tsx` adds a Threat analysis card that
   shows band/severity, category and product-level description. The findings
-  list labels ML-assisted rows as `Threat analysis` rather than a scanner
-  engine. Raw MIME remains behind the existing content permission boundary.
+  list labels customer-safe finding sources as product capabilities rather
+  than scanner engines. Raw MIME remains behind the existing content
+  permission boundary.
 - **Model diagnostics UI:** new `/models` route, guarded by `models:view`,
   lists model approval/activation state, rollback target, safe metric
   summaries and latest shadow-evaluation result. Sidebar navigation appears

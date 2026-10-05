@@ -36,6 +36,17 @@ const STAGE_LABELS: Record<string, string> = {
   spam_checked: "Spam checked",
 };
 
+const FINDING_SOURCE_LABELS: Record<string, string> = {
+  advanced_threat_analysis: "Advanced threat analysis",
+  attachment_analysis: "Attachment analysis",
+  authentication_analysis: "Authentication analysis",
+  link_analysis: "Link analysis",
+  malware_analysis: "Malware analysis",
+  security_analysis: "Security analysis",
+  spam_reputation_analysis: "Spam and reputation analysis",
+  threat_analysis: "Threat analysis",
+};
+
 function errorMessage(error: unknown, fallback: string): string {
   if (typeof error === "object" && error !== null && "message" in error) {
     return String((error as ApiError).message);
@@ -100,7 +111,7 @@ function isThreatAnalysisFinding(finding: TraceFinding): boolean {
 }
 
 function sourceLabel(finding: TraceFinding): string {
-  return isThreatAnalysisFinding(finding) ? "Threat analysis" : `Scanner ${finding.scanner_type}`;
+  return FINDING_SOURCE_LABELS[finding.scanner_type] ?? "Security analysis";
 }
 
 function threatAnalysisSummary(findings: TraceFinding[]): TraceFinding[] {

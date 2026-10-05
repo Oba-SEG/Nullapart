@@ -60,7 +60,7 @@ const traceTransaction = {
       severity: "high",
       category: "phishing",
       description: "Lookalike sender domain",
-      scanner_type: "urlanalysis",
+      scanner_type: "link_analysis",
       false_positive: true,
       created_at: "2026-09-30T12:00:03Z",
     },
@@ -196,7 +196,8 @@ describe("MessageDetail", () => {
     expect(screen.getByText("high")).toBeTruthy();
     expect(screen.getByText("phishing")).toBeTruthy();
     expect(screen.getByText("Lookalike sender domain")).toBeTruthy();
-    expect(screen.getByText(/Scanner urlanalysis/)).toBeTruthy();
+    expect(screen.getByText(/Link analysis/)).toBeTruthy();
+    expect(screen.queryByText(/Scanner urlanalysis/)).toBeNull();
     expect(screen.getByText("False positive")).toBeTruthy();
 
     const timeline = screen.getByRole("region", { name: "Flow timeline" });
