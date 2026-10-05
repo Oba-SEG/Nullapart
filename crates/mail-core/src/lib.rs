@@ -9,6 +9,7 @@ pub mod artifact_recovery;
 pub mod artifact_store;
 pub mod auth;
 pub mod delivery;
+pub mod dmarc_aggregate;
 pub mod dns_txt;
 pub mod handoff;
 pub mod idempotency;

@@ -52,6 +52,9 @@ TO nullapart_mailcore;
 GRANT SELECT, INSERT, UPDATE ON inline_ml_models TO nullapart_mailcore;
 GRANT SELECT, INSERT, UPDATE ON ml_feedback_candidates TO nullapart_mailcore;
 GRANT SELECT, INSERT ON inline_ml_shadow_evaluations TO nullapart_mailcore;
+GRANT SELECT, INSERT ON dmarc_aggregate_reports TO nullapart_mailcore;
+GRANT SELECT, INSERT ON dmarc_aggregate_records TO nullapart_mailcore;
+GRANT SELECT, INSERT ON dmarc_report_quarantine TO nullapart_mailcore;
 GRANT SELECT, INSERT, UPDATE ON admin_users, admin_sessions TO nullapart_mailcore;
 GRANT SELECT, INSERT, UPDATE ON admin_impersonations TO nullapart_mailcore;
 GRANT SELECT, INSERT ON admin_roles TO nullapart_mailcore;
@@ -59,6 +62,8 @@ GRANT SELECT, INSERT, DELETE ON admin_role_permissions, admin_user_roles TO null
 GRANT SELECT, INSERT, DELETE ON oidc_login_flows TO nullapart_mailcore;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO nullapart_mailcore;
 GRANT EXECUTE ON FUNCTION public.resolve_verified_recipient_domains(TEXT[], TEXT)
+    TO nullapart_mailcore;
+GRANT EXECUTE ON FUNCTION public.resolve_verified_report_domain(TEXT, TEXT)
     TO nullapart_mailcore;
 GRANT EXECUTE ON FUNCTION public.claim_quarantine_reinjection_event(TEXT, UUID[])
     TO nullapart_mailcore;
