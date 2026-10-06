@@ -14,6 +14,7 @@ use nullapart_mail_core::admin_rbac::{
 };
 use nullapart_mail_core::artifact_recovery::recover_persisted_artifacts;
 use nullapart_mail_core::artifact_store::{FilesystemArtifactRuntime, FilesystemArtifactStore};
+use nullapart_mail_core::domain_security::{domain_security_router, DomainSecurityState};
 use nullapart_mail_core::handoff::HandoffConfig;
 use nullapart_mail_core::inline_ml::stage::InlineMlStage;
 use nullapart_mail_core::model_registry::{model_registry_router, ModelRegistryState};
@@ -285,6 +286,10 @@ async fn local_quarantine_api(
             deployment_id.clone(),
         )))
         .merge(operations_router(OperationsState::new(
+            pool.clone(),
+            deployment_id.clone(),
+        )))
+        .merge(domain_security_router(DomainSecurityState::new(
             pool.clone(),
             deployment_id.clone(),
         )))

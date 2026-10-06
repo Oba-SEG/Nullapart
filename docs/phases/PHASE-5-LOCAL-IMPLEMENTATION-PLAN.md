@@ -11,12 +11,12 @@ Deliver the Phase 5 domain-authentication platform in safe increments:
 increment 1: DMARC aggregate ingestion foundation
              (bounded parser, normalized storage, duplicate key, malformed
              quarantine metadata, exact verified-domain mapping helper)
-increment 2: regional report mailbox/ingress worker
-increment 3: live authentication telemetry aggregation
-increment 4: source attribution and classification history
-increment 5: external report-destination authorization status
-increment 6: domain observer history for MX/SPF/DKIM/DMARC/BIMI/MTA-STS/TLS-RPT
-increment 7: dashboard/UI and customer/support drill-downs
+increment 2: actionable domain-security read models, authenticated API and UI
+increment 3: regional report mailbox/ingress worker
+increment 4: live authentication telemetry aggregation
+increment 5: source attribution and classification mutation/history
+increment 6: external report-destination authorization validator
+increment 7: domain observer history for MX/SPF/DKIM/DMARC/BIMI/MTA-STS/TLS-RPT
 increment 8: BIMI validation, safe SVG handling, and readiness state
 increment 9: notifications, security battery, local live evidence, and report
 ```
@@ -96,3 +96,68 @@ Known limitations:
   pending.
 - Exact-domain mapping is intentionally conservative; organizational-domain
   fallback requires a reviewed public-suffix strategy and tenant-boundary tests.
+
+## Increment 2 — actionable domain-security read model, API and UI
+
+Implemented:
+
+- Migration `022_domain_security_read_models.sql` adds tenant-scoped Phase 5
+  read models:
+  - `domain_security_observations` for normalized observer history/status;
+  - `dmarc_report_authorizations` for third-party report destination
+    authorization state;
+  - `bimi_domain_status` for BIMI readiness metadata without storing or
+    rendering SVG bytes;
+  - `domain_source_classifications` for source attribution state;
+  - `domain_security_notifications` for actionable open domain-security alerts;
+  - RLS policies plus guarded grants for `nullapart_mailcore`;
+  - `domain-security:view` and `domain-security:manage` role permissions.
+- Rust module `crates/mail-core/src/domain_security.rs` adds authenticated
+  `GET /api/v1/domain-security`.
+  - Requires an active `TenantContext`, deployment match and
+    `domain-security:view`.
+  - Establishes transaction-local RLS scope.
+  - Also binds every read query explicitly to deployment and customer as
+    defense in depth against mis-provisioned local roles.
+  - Projects compliance summary, per-domain DMARC aggregate metrics, external
+    authorization status, BIMI readiness status, latest observer checks, top
+    source summaries and open notifications.
+  - Does not expose raw aggregate XML, failure-report content, raw DNS
+    resolver payloads, SVG bytes or message samples.
+- `mailcore-server` wires the route into the authenticated control-plane API.
+- Built-in admin roles now include:
+  - `system_admin` and `support`: `domain-security:view`,
+    `domain-security:manage`;
+  - `customer_admin`: `domain-security:view`.
+- Frontend adds `/domain-security` with RBAC-gated navigation and a structured
+  system-admin page for:
+  - DMARC volume/alignment and enforcement state;
+  - external report authorization owner/value/status;
+  - BIMI readiness blockers;
+  - observer check history;
+  - unknown/source-action tables;
+  - open operational alerts.
+- Integration test `postgres_domain_security.rs` proves a seeded projection is
+  actionable and does not include another customer’s domain in the response.
+
+Evidence:
+
+- 2026-10-06 local: `cargo test -p nullapart-mail-core domain_security`
+  — pass, unauthenticated and missing-permission checks.
+- 2026-10-06 local: `cargo test --test postgres_domain_security`
+  — pass, ignored PostgreSQL projection test compiles and remains opt-in.
+- 2026-10-06 local: `cargo clippy --workspace --all-targets -- -D warnings`
+  — pass.
+- 2026-10-06 local: `cargo test --workspace` — pass.
+- 2026-10-06 local frontend: `pnpm check-all` from `frontend/` — pass, with
+  only the existing Node engine warning because this shell uses Node 22 while
+  the frontend declares Node 24.
+
+Known limitations:
+
+- This increment creates the actionable read model/API/UI, but the background
+  mailbox worker, DNS observer, report-authorization validator, BIMI secure-SVG
+  validator, source-classification mutation API and alert-generation worker are
+  still pending Phase 5 increments.
+- The frontend can display existing observations/status rows; it does not yet
+  trigger observer refreshes or source-classification changes.

@@ -11,6 +11,7 @@ import {
   ScrollText,
   Server,
   Settings,
+  ShieldCheck,
   ShieldAlert,
   SlidersHorizontal,
   Users,
@@ -114,6 +115,16 @@ export function Layout() {
             >
               <Radar size={17} aria-hidden="true" />
               <span>Scanner operations</span>
+            </Link>
+          ) : null}
+          {can("domain-security:view") ? (
+            <Link
+              to="/domain-security"
+              className="nav-link"
+              activeProps={{ className: "nav-link active" }}
+            >
+              <ShieldCheck size={17} aria-hidden="true" />
+              <span>Domain security</span>
             </Link>
           ) : null}
           {can("audit:view") ? (

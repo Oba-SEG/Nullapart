@@ -103,6 +103,13 @@ const scannerOperationsRoute = createRoute({
   component: lazyRouteComponent(() => import("../pages/ScannerOperations"), "ScannerOperations"),
 });
 
+const domainSecurityRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/domain-security",
+  beforeLoad: () => requirePermission("domain-security:view"),
+  component: lazyRouteComponent(() => import("../pages/DomainSecurity"), "DomainSecurity"),
+});
+
 const operationsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/operations",
@@ -181,6 +188,7 @@ const routeTree = rootRoute.addChildren([
   quarantineRoute,
   quarantineDetailRoute,
   scannerOperationsRoute,
+  domainSecurityRoute,
   operationsRoute,
   auditLogRoute,
   adminUsersRoute,
