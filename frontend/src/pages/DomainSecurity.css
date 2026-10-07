@@ -52,6 +52,20 @@
   gap: var(--spacing-4);
 }
 
+.domain-security-notice {
+  background: color-mix(in srgb, var(--color-success) 8%, transparent);
+  border: 1px solid
+    color-mix(in srgb, var(--color-success) 24%, var(--color-border));
+  border-radius: var(--radius-md);
+  padding: var(--spacing-3) var(--spacing-4);
+}
+
+.domain-security-notice.error {
+  background: color-mix(in srgb, var(--color-error) 8%, transparent);
+  border-color: color-mix(in srgb, var(--color-error) 28%, var(--color-border));
+  color: var(--color-error);
+}
+
 .domain-security-alert {
   align-items: flex-start;
   border: 1px solid var(--color-border);
@@ -209,6 +223,21 @@
   display: block;
   font-size: var(--font-size-sm);
   margin-top: var(--spacing-1);
+}
+
+.domain-security-classifier {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+  min-width: 16rem;
+}
+
+.domain-security-classifier select {
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  padding: var(--spacing-2);
 }
 
 .domain-security-observations {

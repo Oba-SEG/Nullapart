@@ -15,7 +15,8 @@ use nullapart_mail_contracts::{
     ActorId,
 };
 use nullapart_mail_core::domain_security::{
-    domain_security_router, DomainSecurityState, DOMAIN_SECURITY_VIEW_PERMISSION,
+    domain_security_router, DomainSecurityState, DOMAIN_SECURITY_MANAGE_PERMISSION,
+    DOMAIN_SECURITY_VIEW_PERMISSION,
 };
 use nullapart_policy::{
     AuthenticationAssurance, ContextActor, CustomerLifecycle, RegionId, TenantContext,
@@ -192,7 +193,10 @@ fn context(fixture: &Fixture) -> TenantContext {
         customer_internal_key: fixture.customer_internal_key,
         customer_display_name: "Domain Security Customer".to_string(),
         customer_lifecycle: CustomerLifecycle::Active,
-        permissions: vec![DOMAIN_SECURITY_VIEW_PERMISSION.to_string()],
+        permissions: vec![
+            DOMAIN_SECURITY_VIEW_PERMISSION.to_string(),
+            DOMAIN_SECURITY_MANAGE_PERMISSION.to_string(),
+        ],
         config_revision: 1,
         trace_id: "domain-security-postgres-test".to_string(),
         correlation_id: "domain-security-postgres-test".to_string(),
@@ -251,4 +255,111 @@ async fn domain_security_projection_is_actionable_and_customer_scoped() {
         !String::from_utf8_lossy(&bytes).contains(&other.domain),
         "projection must not include another customer's domain"
     );
+}
+
+#[tokio::test]
+#[ignore = "requires migrated local PostgreSQL through 022_domain_security_read_models.sql"]
+async fn source_classification_mutation_is_idempotent_audited_and_scoped() {
+    let pool = connect().await;
+    let suffix = Uuid::new_v4().simple().to_string();
+    let primary = seed_fixture(&pool, &suffix, "primary-action").await;
+    let other = seed_fixture(&pool, &suffix, "other-action").await;
+    seed_domain_security_rows(&pool, &primary).await;
+    seed_domain_security_rows(&pool, &other).await;
+    let app = domain_security_router(DomainSecurityState::new(
+        pool.clone(),
+        DeploymentId::new(&primary.deployment_id),
+    ))
+    .layer(Extension(context(&primary)));
+    let body = serde_json::json!({
+        "domain_id": primary.domain_id,
+        "source_key": "203.0.113.44",
+        "source_ip": "203.0.113.44",
+        "source_domain": primary.domain,
+        "classification": "third_party",
+        "notes": "Provider is approved but SPF alignment still needs follow-up"
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/domain-security/source-classifications")
+                .header("content-type", "application/json")
+                .header("x-idempotency-key", format!("classify-{suffix}"))
+                .body(Body::from(body.to_string()))
+                .expect("request must build"),
+        )
+        .await
+        .expect("classification route must answer");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body must buffer");
+    let value: Value = serde_json::from_slice(&bytes).expect("response must be JSON");
+    assert_eq!(value["data"]["classification"], "third_party");
+    assert_eq!(value["data"]["changed"], true);
+
+    let replay = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/domain-security/source-classifications")
+                .header("content-type", "application/json")
+                .header("x-idempotency-key", format!("classify-{suffix}"))
+                .body(Body::from(body.to_string()))
+                .expect("request must build"),
+        )
+        .await
+        .expect("classification replay must answer");
+    assert_eq!(replay.status(), StatusCode::OK);
+
+    let stored: (String, i64) = sqlx::query_as(
+        "SELECT classification, count(*) OVER ()::bigint \
+         FROM domain_source_classifications \
+         WHERE deployment_id = $1 AND customer_id = $2 AND domain_id = $3 AND source_key = '203.0.113.44'",
+    )
+    .bind(&primary.deployment_id)
+    .bind(&primary.customer_id)
+    .bind(primary.domain_id)
+    .fetch_one(&pool)
+    .await
+    .expect("classification must be stored once");
+    assert_eq!(stored, ("third_party".to_string(), 1));
+
+    let audit_count: i64 = sqlx::query_scalar(
+        "SELECT count(*)::bigint FROM audit_events \
+         WHERE deployment_id = $1 AND customer_id = $2 \
+           AND action = 'domain_source_classification_changed'",
+    )
+    .bind(&primary.deployment_id)
+    .bind(&primary.customer_id)
+    .fetch_one(&pool)
+    .await
+    .expect("audit count must be readable");
+    assert_eq!(audit_count, 1);
+
+    let cross_tenant = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/domain-security/source-classifications")
+                .header("content-type", "application/json")
+                .header("x-idempotency-key", format!("classify-other-{suffix}"))
+                .body(Body::from(
+                    serde_json::json!({
+                        "domain_id": other.domain_id,
+                        "source_key": "203.0.113.45",
+                        "source_ip": "203.0.113.45",
+                        "classification": "authorized"
+                    })
+                    .to_string(),
+                ))
+                .expect("request must build"),
+        )
+        .await
+        .expect("cross-tenant classification route must answer");
+    assert_eq!(cross_tenant.status(), StatusCode::NOT_FOUND);
 }

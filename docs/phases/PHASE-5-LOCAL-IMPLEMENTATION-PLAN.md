@@ -124,6 +124,17 @@ Implemented:
     source summaries and open notifications.
   - Does not expose raw aggregate XML, failure-report content, raw DNS
     resolver payloads, SVG bytes or message samples.
+- The same module adds authenticated
+  `POST /api/v1/domain-security/source-classifications`.
+  - Requires an active `TenantContext`, deployment match,
+    `domain-security:manage`, fresh step-up authentication and
+    `x-idempotency-key`.
+  - Server-validates the target domain against the caller’s customer scope and
+    returns `404` for cross-tenant domain probes.
+  - Upserts source attribution as one of: authorized, expected incomplete,
+    unknown, suspicious, malicious or third-party.
+  - Writes append-only audit evidence for classification changes and replays
+    completed idempotent requests.
 - `mailcore-server` wires the route into the authenticated control-plane API.
 - Built-in admin roles now include:
   - `system_admin` and `support`: `domain-security:view`,
@@ -136,9 +147,13 @@ Implemented:
   - BIMI readiness blockers;
   - observer check history;
   - unknown/source-action tables;
+  - inline source-classification controls for operators with
+    `domain-security:manage`;
   - open operational alerts.
 - Integration test `postgres_domain_security.rs` proves a seeded projection is
   actionable and does not include another customer’s domain in the response.
+  It also covers source-classification mutation idempotency, audit evidence and
+  cross-tenant rejection.
 
 Evidence:
 
@@ -152,12 +167,18 @@ Evidence:
 - 2026-10-06 local frontend: `pnpm check-all` from `frontend/` — pass, with
   only the existing Node engine warning because this shell uses Node 22 while
   the frontend declares Node 24.
+- 2026-10-07 local: `cargo clippy --workspace --all-targets -- -D warnings`
+  — pass after source-classification mutation.
+- 2026-10-07 local: `cargo test --workspace` — pass after
+  source-classification mutation.
+- 2026-10-07 local frontend: `pnpm check-all` from `frontend/` — pass, with
+  the same Node 22 vs declared Node 24 warning.
 
 Known limitations:
 
 - This increment creates the actionable read model/API/UI, but the background
   mailbox worker, DNS observer, report-authorization validator, BIMI secure-SVG
-  validator, source-classification mutation API and alert-generation worker are
-  still pending Phase 5 increments.
-- The frontend can display existing observations/status rows; it does not yet
-  trigger observer refreshes or source-classification changes.
+  validator and alert-generation worker are still pending Phase 5 increments.
+- The frontend can display existing observations/status rows and classify
+  existing report sources; it does not yet trigger observer refreshes or create
+  new source observations without aggregate-report data.

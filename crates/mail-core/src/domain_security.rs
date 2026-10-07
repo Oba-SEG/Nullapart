@@ -6,23 +6,34 @@
 //! failure-report samples, message content, SVG bytes or DNS resolver internals.
 
 use axum::{
-    extract::{Extension, State},
-    http::StatusCode,
+    extract::{rejection::JsonRejection, Extension, State},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
 use nullapart_mail_contracts::transaction::DeploymentId;
 use nullapart_policy::{CustomerLifecycle, TenantContext};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
+
+use crate::admin_audit::{source_ip_from, AuditEventRecord, PostgresAuditStore};
+use crate::idempotency::{claim, complete, ClaimOutcome};
 
 pub const DOMAIN_SECURITY_VIEW_PERMISSION: &str = "domain-security:view";
 pub const DOMAIN_SECURITY_MANAGE_PERMISSION: &str = "domain-security:manage";
 
 const DOMAIN_SECURITY_PATH: &str = "/api/v1/domain-security";
+const SOURCE_CLASSIFICATIONS_PATH: &str = "/api/v1/domain-security/source-classifications";
+const IDEMPOTENCY_HEADER: &str = "x-idempotency-key";
+const SOURCE_KEY_MAX_LEN: usize = 128;
+const SOURCE_DOMAIN_MAX_LEN: usize = 253;
+const NOTES_MAX_LEN: usize = 512;
+const AUDIT_SOURCE_CLASSIFICATION_CHANGED: &str = "domain_source_classification_changed";
+const AUDIT_RESOURCE_SOURCE: &str = "domain_source";
 
 #[derive(Clone)]
 pub struct DomainSecurityState {
@@ -153,9 +164,63 @@ struct DomainSecurityNotification {
     created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Deserialize)]
+struct SourceClassificationRequest {
+    domain_id: Uuid,
+    source_key: String,
+    source_ip: Option<String>,
+    source_domain: Option<String>,
+    classification: SourceClassification,
+    notes: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum SourceClassification {
+    Authorized,
+    ExpectedIncomplete,
+    Unknown,
+    Suspicious,
+    Malicious,
+    ThirdParty,
+}
+
+impl SourceClassification {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Authorized => "authorized",
+            Self::ExpectedIncomplete => "expected_incomplete",
+            Self::Unknown => "unknown",
+            Self::Suspicious => "suspicious",
+            Self::Malicious => "malicious",
+            Self::ThirdParty => "third_party",
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct SourceClassificationResponse {
+    domain_id: Uuid,
+    domain: String,
+    source_key: String,
+    classification: &'static str,
+    notes: Option<String>,
+    changed: bool,
+    updated_at: DateTime<Utc>,
+}
+
+enum IdempotencyRejection {
+    Missing,
+    Invalid,
+}
+
 pub fn domain_security_router(state: DomainSecurityState) -> Router {
     Router::new()
         .route(DOMAIN_SECURITY_PATH, get(get_domain_security))
+        .route(
+            SOURCE_CLASSIFICATIONS_PATH,
+            post(post_source_classification),
+        )
         .with_state(state)
 }
 
@@ -367,6 +432,184 @@ async fn get_domain_security(
         }),
     )
         .into_response()
+}
+
+async fn post_source_classification(
+    State(state): State<DomainSecurityState>,
+    context: Option<Extension<TenantContext>>,
+    headers: HeaderMap,
+    payload: Result<Json<SourceClassificationRequest>, JsonRejection>,
+) -> Response {
+    let Some(Extension(context)) = context else {
+        return api_error(
+            StatusCode::UNAUTHORIZED,
+            "UNAUTHENTICATED",
+            "Authentication is required",
+        );
+    };
+    if context.customer_lifecycle != CustomerLifecycle::Active
+        || context.deployment_id != state.deployment_id
+        || !has_permission(&context, DOMAIN_SECURITY_MANAGE_PERMISSION)
+    {
+        return api_error(StatusCode::FORBIDDEN, "FORBIDDEN", "Permission is required");
+    }
+    if !context.has_step_up() {
+        return api_error(
+            StatusCode::FORBIDDEN,
+            "STEP_UP_REQUIRED",
+            "Step-up authentication is required",
+        );
+    }
+    let key = match require_idempotency_key(&headers) {
+        Ok(key) => key,
+        Err(rejection) => return idempotency_rejection_response(rejection),
+    };
+    let Json(body) = match payload {
+        Ok(payload) => payload,
+        Err(_) => return invalid_request(),
+    };
+    let request = match validate_source_classification(body) {
+        Ok(request) => request,
+        Err(()) => return invalid_request(),
+    };
+
+    let mut transaction = match state.pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(_) => return unavailable(),
+    };
+    if set_scope(
+        &mut transaction,
+        &state.deployment_id.0,
+        &context.customer_id.0,
+    )
+    .await
+    .is_err()
+    {
+        return unavailable();
+    }
+    let operation = format!(
+        "domain-security:source-classification:{}:{}",
+        request.domain_id, request.source_key
+    );
+    match claim(&mut transaction, &key, &operation).await {
+        Ok(ClaimOutcome::Fresh) => {},
+        Ok(ClaimOutcome::Replay(value)) => return replay_response(value),
+        Ok(ClaimOutcome::InProgress) => return conflict("Request is already in progress"),
+        Ok(ClaimOutcome::OperationMismatch) => return invalid_request(),
+        Err(_) => return unavailable(),
+    }
+
+    let domain: String = match sqlx::query_scalar(
+        "SELECT d.domain \
+         FROM domains AS d \
+         JOIN customers AS c ON c.id = d.customer_id \
+         WHERE d.id = $1 AND d.customer_id = $2 AND c.deployment_id = $3",
+    )
+    .bind(request.domain_id)
+    .bind(&context.customer_id.0)
+    .bind(&state.deployment_id.0)
+    .fetch_optional(&mut *transaction)
+    .await
+    {
+        Ok(Some(domain)) => domain,
+        Ok(None) => return not_found("Domain was not found"),
+        Err(_) => return unavailable(),
+    };
+
+    let previous = match sqlx::query(
+        "SELECT classification, notes, source_ip::text AS source_ip, source_domain \
+         FROM domain_source_classifications \
+         WHERE deployment_id = $1 AND customer_id = $2 AND domain_id = $3 AND source_key = $4",
+    )
+    .bind(&state.deployment_id.0)
+    .bind(&context.customer_id.0)
+    .bind(request.domain_id)
+    .bind(&request.source_key)
+    .fetch_optional(&mut *transaction)
+    .await
+    {
+        Ok(value) => value,
+        Err(_) => return unavailable(),
+    };
+    let changed = previous.as_ref().is_none_or(|row| {
+        let previous_classification: String = row.get("classification");
+        let previous_notes: Option<String> = row.get("notes");
+        let previous_source_ip: Option<String> = row.get("source_ip");
+        let previous_source_domain: Option<String> = row.get("source_domain");
+        previous_classification != request.classification.as_str()
+            || previous_notes != request.notes
+            || previous_source_ip != request.source_ip
+            || previous_source_domain != request.source_domain
+    });
+
+    let updated_at = match sqlx::query_scalar::<_, DateTime<Utc>>(
+        "INSERT INTO domain_source_classifications (\
+             deployment_id, customer_id, domain_id, source_key, source_ip, source_domain, \
+             classification, notes, updated_by\
+         ) VALUES ($1, $2, $3, $4, $5::inet, $6, $7, $8, $9) \
+         ON CONFLICT (deployment_id, domain_id, source_key) DO UPDATE SET \
+             source_ip = EXCLUDED.source_ip, \
+             source_domain = EXCLUDED.source_domain, \
+             classification = EXCLUDED.classification, \
+             notes = EXCLUDED.notes, \
+             updated_by = EXCLUDED.updated_by, \
+             updated_at = now() \
+         RETURNING updated_at",
+    )
+    .bind(&state.deployment_id.0)
+    .bind(&context.customer_id.0)
+    .bind(request.domain_id)
+    .bind(&request.source_key)
+    .bind(&request.source_ip)
+    .bind(&request.source_domain)
+    .bind(request.classification.as_str())
+    .bind(&request.notes)
+    .bind(&context.actor.login)
+    .fetch_one(&mut *transaction)
+    .await
+    {
+        Ok(updated_at) => updated_at,
+        Err(_) => return unavailable(),
+    };
+
+    if write_source_classification_audit(
+        &mut transaction,
+        &state.deployment_id.0,
+        &context,
+        &headers,
+        &domain,
+        &request,
+        changed,
+    )
+    .await
+    .is_err()
+    {
+        return unavailable();
+    }
+
+    let response = SourceClassificationResponse {
+        domain_id: request.domain_id,
+        domain,
+        source_key: request.source_key,
+        classification: request.classification.as_str(),
+        notes: request.notes,
+        changed,
+        updated_at,
+    };
+    let Some(value) = envelope(&response) else {
+        return unavailable();
+    };
+    if complete(&mut transaction, &key, &operation, value)
+        .await
+        .is_err()
+    {
+        return unavailable();
+    }
+    if transaction.commit().await.is_err() {
+        return unavailable();
+    }
+
+    (StatusCode::OK, Json(ApiEnvelope { data: response })).into_response()
 }
 
 async fn load_dmarc_metrics(
@@ -735,6 +978,160 @@ async fn set_scope(
     .execute(&mut **transaction)
     .await
     .map(|_| ())
+}
+
+fn validate_source_classification(
+    mut request: SourceClassificationRequest,
+) -> Result<SourceClassificationRequest, ()> {
+    request.source_key = request.source_key.trim().to_string();
+    if request.source_key.is_empty()
+        || request.source_key.len() > SOURCE_KEY_MAX_LEN
+        || request.source_key.chars().any(char::is_control)
+    {
+        return Err(());
+    }
+    request.source_ip = request
+        .source_ip
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    if request
+        .source_ip
+        .as_deref()
+        .is_some_and(|value| value.parse::<std::net::IpAddr>().is_err())
+    {
+        return Err(());
+    }
+    request.source_domain = request
+        .source_domain
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    if request.source_domain.as_deref().is_some_and(|value| {
+        value.len() > SOURCE_DOMAIN_MAX_LEN
+            || value.chars().any(char::is_control)
+            || value.contains('/')
+            || value.contains('@')
+    }) {
+        return Err(());
+    }
+    request.notes = request
+        .notes
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    if request
+        .notes
+        .as_deref()
+        .is_some_and(|value| value.len() > NOTES_MAX_LEN || value.chars().any(char::is_control))
+    {
+        return Err(());
+    }
+    Ok(request)
+}
+
+async fn write_source_classification_audit(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    deployment_id: &str,
+    context: &TenantContext,
+    headers: &HeaderMap,
+    domain: &str,
+    request: &SourceClassificationRequest,
+    changed: bool,
+) -> Result<(), Response> {
+    sqlx::query(
+        "SELECT set_config('app.current_customer_id', $1, true), \
+                set_config('app.current_deployment_id', $2, true)",
+    )
+    .bind(&context.customer_id.0)
+    .bind(deployment_id)
+    .execute(&mut **transaction)
+    .await
+    .map_err(|_| unavailable())?;
+    let (impersonated_subject, impersonated_customer) = match &context.impersonation {
+        Some(impersonation) => (
+            impersonation.impersonated_subject.clone(),
+            Some(impersonation.impersonated_customer.0.clone()),
+        ),
+        None => (None, None),
+    };
+    let record = AuditEventRecord {
+        id: Uuid::new_v4(),
+        created_at: Utc::now(),
+        actor_id: context.actor.actor_id.0.to_string(),
+        actor_login: context.actor.login.clone(),
+        actor_roles: context.actor.roles.clone(),
+        impersonated_subject,
+        impersonated_customer,
+        customer_id: Some(context.customer_id.0.clone()),
+        action: AUDIT_SOURCE_CLASSIFICATION_CHANGED.to_string(),
+        resource_type: AUDIT_RESOURCE_SOURCE.to_string(),
+        resource_id: Some(format!("{}:{}", request.domain_id, request.source_key)),
+        result: "success".to_string(),
+        source_ip: source_ip_from(headers),
+        session_id: Some(context.session_id.clone()),
+        trace_id: context.trace_id.clone(),
+        details: json!({
+            "domain": domain,
+            "source_key": request.source_key,
+            "classification": request.classification.as_str(),
+            "changed": changed,
+        }),
+    };
+    PostgresAuditStore::insert_record(transaction, deployment_id, &record)
+        .await
+        .map_err(|_| unavailable())
+}
+
+fn require_idempotency_key(headers: &HeaderMap) -> Result<String, IdempotencyRejection> {
+    let Some(raw) = headers.get(IDEMPOTENCY_HEADER) else {
+        return Err(IdempotencyRejection::Missing);
+    };
+    let Ok(value) = raw.to_str() else {
+        return Err(IdempotencyRejection::Invalid);
+    };
+    if value.is_empty() || value.len() > 128 {
+        return Err(IdempotencyRejection::Invalid);
+    }
+    Ok(value.to_string())
+}
+
+fn idempotency_rejection_response(rejection: IdempotencyRejection) -> Response {
+    match rejection {
+        IdempotencyRejection::Missing => api_error(
+            StatusCode::BAD_REQUEST,
+            "IDEMPOTENCY_REQUIRED",
+            "Idempotency key is required",
+        ),
+        IdempotencyRejection::Invalid => invalid_request(),
+    }
+}
+
+fn envelope<T: Serialize>(data: &T) -> Option<Value> {
+    serde_json::to_value(ApiEnvelope { data }).ok()
+}
+
+fn replay_response(value: Value) -> Response {
+    (StatusCode::OK, Json(value)).into_response()
+}
+
+fn invalid_request() -> Response {
+    api_error(
+        StatusCode::BAD_REQUEST,
+        "INVALID_REQUEST",
+        "Request is invalid",
+    )
+}
+
+fn not_found(message: &'static str) -> Response {
+    api_error(StatusCode::NOT_FOUND, "NOT_FOUND", message)
+}
+
+fn conflict(message: &'static str) -> Response {
+    api_error(StatusCode::CONFLICT, "CONFLICT", message)
 }
 
 fn unavailable() -> Response {

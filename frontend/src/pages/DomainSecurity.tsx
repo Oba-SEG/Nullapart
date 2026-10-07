@@ -1,8 +1,11 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, ExternalLink, RefreshCw, ShieldCheck } from "lucide-react";
+import { useState } from "react";
 
 import { api, type ApiError } from "../api/client";
+import { hasPermission, loadSession } from "../auth/session";
 import { StatusPill } from "../components/StatusPill";
+import { randomUuid } from "../lib/ids";
 import type { StatusTone } from "../lib/status";
 import "./DomainSecurity.css";
 
@@ -69,6 +72,8 @@ interface DomainSourceSummary {
   suggested_action: string;
 }
 
+type SourceClassification = DomainSourceSummary["classification"];
+
 interface DomainSecurityDomain {
   id: string;
   domain: string;
@@ -100,6 +105,34 @@ interface DomainSecurityResponse {
   domains: DomainSecurityDomain[];
   notifications: DomainSecurityNotification[];
 }
+
+interface SourceClassificationRequest {
+  domain_id: string;
+  source_key: string;
+  source_ip: string;
+  source_domain: string | null;
+  classification: SourceClassification;
+  notes: string;
+}
+
+interface SourceClassificationResult {
+  domain_id: string;
+  domain: string;
+  source_key: string;
+  classification: SourceClassification;
+  notes: string | null;
+  changed: boolean;
+  updated_at: string;
+}
+
+const CLASSIFICATION_OPTIONS: { value: SourceClassification; label: string }[] = [
+  { value: "authorized", label: "Authorized" },
+  { value: "expected_incomplete", label: "Expected but incomplete" },
+  { value: "third_party", label: "Third-party service" },
+  { value: "suspicious", label: "Suspicious" },
+  { value: "malicious", label: "Malicious" },
+  { value: "unknown", label: "Unknown" },
+];
 
 function errorMessage(error: unknown): string {
   if (typeof error === "object" && error !== null && "message" in error) {
@@ -154,10 +187,35 @@ function SummaryCard({
 }
 
 export function DomainSecurity() {
+  const queryClient = useQueryClient();
+  const [classificationDrafts, setClassificationDrafts] = useState<
+    Record<string, SourceClassification>
+  >({});
+  const [notice, setNotice] = useState<string | null>(null);
+  const session = useQuery({
+    queryKey: ["session"],
+    queryFn: ({ signal }) => loadSession(signal),
+  });
   const security = useQuery({
     queryKey: ["domain-security"],
     queryFn: ({ signal }) => api.get<DomainSecurityResponse>("/domain-security", signal),
     refetchInterval: 60_000,
+  });
+  const canManage = hasPermission(session.data ?? null, "domain-security:manage");
+  const classifySource = useMutation({
+    mutationFn: (request: SourceClassificationRequest) =>
+      api.post<SourceClassificationResult>("/domain-security/source-classifications", request, {
+        idempotencyKey: randomUuid(),
+      }),
+    onSuccess: async (result) => {
+      setNotice(
+        `${result.source_key} on ${result.domain} is now ${result.classification.replaceAll(
+          "_",
+          " ",
+        )}.`,
+      );
+      await queryClient.invalidateQueries({ queryKey: ["domain-security"] });
+    },
   });
 
   if (security.isPending) {
@@ -178,6 +236,31 @@ export function DomainSecurity() {
 
   const data = security.data;
   const aligned = percent(data.summary.dmarc_aligned_messages_30d, data.summary.messages_30d);
+  const classifyError = classifySource.isError ? errorMessage(classifySource.error) : null;
+
+  function sourceDraftKey(domainId: string, sourceKey: string): string {
+    return `${domainId}:${sourceKey}`;
+  }
+
+  function selectedClassification(
+    domainId: string,
+    source: DomainSourceSummary,
+  ): SourceClassification {
+    return (
+      classificationDrafts[sourceDraftKey(domainId, source.source_key)] ?? source.classification
+    );
+  }
+
+  function setSelectedClassification(
+    domainId: string,
+    sourceKey: string,
+    classification: SourceClassification,
+  ) {
+    setClassificationDrafts((current) => ({
+      ...current,
+      [sourceDraftKey(domainId, sourceKey)]: classification,
+    }));
+  }
 
   return (
     <div className="domain-security-page">
@@ -199,6 +282,17 @@ export function DomainSecurity() {
           Refresh
         </button>
       </header>
+
+      {notice ? (
+        <div className="domain-security-notice" role="status">
+          {notice}
+        </div>
+      ) : null}
+      {classifyError ? (
+        <div className="domain-security-notice error" role="alert">
+          {classifyError}
+        </div>
+      ) : null}
 
       <section className="card domain-security-summary" aria-label="Domain security summary">
         <SummaryCard
@@ -383,6 +477,7 @@ export function DomainSecurity() {
                           <th>Volume</th>
                           <th>Aligned</th>
                           <th>Action</th>
+                          {canManage ? <th>Classify</th> : null}
                         </tr>
                       </thead>
                       <tbody>
@@ -398,6 +493,46 @@ export function DomainSecurity() {
                               {percent(source.dmarc_aligned_messages_30d, source.messages_30d)}
                             </td>
                             <td>{source.suggested_action}</td>
+                            {canManage ? (
+                              <td>
+                                <div className="domain-security-classifier">
+                                  <select
+                                    value={selectedClassification(domain.id, source)}
+                                    aria-label={`Classify ${source.source_ip}`}
+                                    onChange={(event) =>
+                                      setSelectedClassification(
+                                        domain.id,
+                                        source.source_key,
+                                        event.target.value as SourceClassification,
+                                      )
+                                    }
+                                  >
+                                    {CLASSIFICATION_OPTIONS.map((option) => (
+                                      <option value={option.value} key={option.value}>
+                                        {option.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost"
+                                    disabled={classifySource.isPending}
+                                    onClick={() =>
+                                      classifySource.mutate({
+                                        domain_id: domain.id,
+                                        source_key: source.source_key,
+                                        source_ip: source.source_ip,
+                                        source_domain: source.source_domain,
+                                        classification: selectedClassification(domain.id, source),
+                                        notes: "Classified from the domain security dashboard",
+                                      })
+                                    }
+                                  >
+                                    Save
+                                  </button>
+                                </div>
+                              </td>
+                            ) : null}
                           </tr>
                         ))}
                       </tbody>
