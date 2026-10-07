@@ -43,6 +43,7 @@ use tokio::sync::RwLock;
 pub enum ArtifactAccessPurpose {
     Scanner,
     QuarantineRelease,
+    DmarcReportIngestion,
     RetentionWorker,
     /// Session-authenticated rendering of one message's stored MIME to an
     /// operator with `trace:content`.
@@ -306,11 +307,11 @@ impl InMemoryArtifactStore {
     /// All capability checks run before any store state is read, and every
     /// capability failure is the generic `NotFound` so neither permission
     /// state nor existence is revealed. `can_read_content` must be true; the
-    /// purpose must be `Scanner`, `QuarantineRelease` or `ContentReview`
-    /// (`RetentionWorker` cannot read content); the grant must not be expired
-    /// (`Utc::now() < expires_at`, so equality counts as expired); and `id`
-    /// must be present in the grant's authorized ID set. After the capability
-    /// passes,
+    /// purpose must be `Scanner`, `QuarantineRelease`, `DmarcReportIngestion`
+    /// or `ContentReview` (`RetentionWorker` cannot read content); the grant
+    /// must not be expired (`Utc::now() < expires_at`, so equality counts as
+    /// expired); and `id` must be present in the grant's authorized ID set.
+    /// After the capability passes,
     /// deployment must match: a `Customer` grant scope matches only an
     /// artifact whose customer is exactly equal; a `System` grant scope
     /// matches only customerless artifacts. The result carries only id,
@@ -368,9 +369,10 @@ impl InMemoryArtifactStore {
     ///
     /// Capability checks run before any store state is read: every failure —
     /// `can_read_content` false, purpose other than `Scanner` /
-    /// `QuarantineRelease` / `ContentReview`, expired grant (`Utc::now() >=
-    /// expires_at`, so equality counts as expired), `id` missing from the
-    /// authorized ID set, artifact absent, or deployment/customer scope
+    /// `QuarantineRelease` / `DmarcReportIngestion` / `ContentReview`,
+    /// expired grant (`Utc::now() >= expires_at`, so equality counts as
+    /// expired), `id` missing from the authorized ID set, artifact absent, or
+    /// deployment/customer scope
     /// mismatch — is the generic `NotFound`, so neither permission state nor
     /// existence is revealed. Because both read paths call this one function,
     /// they cannot diverge: any future check added here binds both.
@@ -387,6 +389,7 @@ impl InMemoryArtifactStore {
             grant.purpose,
             ArtifactAccessPurpose::Scanner
                 | ArtifactAccessPurpose::QuarantineRelease
+                | ArtifactAccessPurpose::DmarcReportIngestion
                 | ArtifactAccessPurpose::ContentReview
         ) {
             return Err(ArtifactStoreError::NotFound);
@@ -961,11 +964,12 @@ impl FilesystemArtifactStore {
     ///
     /// All capability checks run before any store state is read: the
     /// `can_read_content` bit must be true; the purpose must be `Scanner`,
-    /// `QuarantineRelease` or `ContentReview` (`RetentionWorker` cannot read
-    /// content); the grant must not be expired (`Utc::now() < expires_at`, so
-    /// equality counts as expired); and `id` must be present in the grant's
-    /// authorized ID set. After the capability passes, the stored record's
-    /// deployment/customer scope must match the grant per
+    /// `QuarantineRelease`, `DmarcReportIngestion` or `ContentReview`
+    /// (`RetentionWorker` cannot read content); the grant must not be expired
+    /// (`Utc::now() < expires_at`, so equality counts as expired); and `id`
+    /// must be present in the grant's authorized ID set. After the capability
+    /// passes, the stored record's deployment/customer scope must match the
+    /// grant per
     /// [`scope_matches_artifact`]. Only then is the exact stored metadata
     /// cloned out of the state — no file is ever read. Every failed
     /// permission, purpose, expiry, binding, missing ID or scope check is the
@@ -983,6 +987,7 @@ impl FilesystemArtifactStore {
             grant.purpose,
             ArtifactAccessPurpose::Scanner
                 | ArtifactAccessPurpose::QuarantineRelease
+                | ArtifactAccessPurpose::DmarcReportIngestion
                 | ArtifactAccessPurpose::ContentReview
         ) {
             return Err(ArtifactStoreError::NotFound);
@@ -3181,6 +3186,24 @@ mod filesystem_store_tests {
         )
         .await;
 
+        let dmarc = issue_delete_grant(
+            DEPLOYMENT_A,
+            CUSTOMER_ONE,
+            ArtifactAccessPurpose::DmarcReportIngestion,
+            true,
+            vec![artifact.id.clone()],
+            future_deadline(),
+        );
+        assert_delete_not_found_preserves_artifact(
+            &store,
+            &root,
+            &artifact,
+            &bytes,
+            &dmarc,
+            "DmarcReportIngestion purpose",
+        )
+        .await;
+
         let review = issue_delete_grant(
             DEPLOYMENT_A,
             CUSTOMER_ONE,
@@ -4586,6 +4609,44 @@ mod tests {
             metadata.size_bytes,
             bytes.len() as u64,
             "the metadata must report the declared size"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_with_dmarc_ingestion_purpose_returns_the_stored_bytes() {
+        let store = InMemoryArtifactStore::new();
+        let id = artifact_id(92);
+        let bytes = sample_bytes();
+        let artifact = memory_artifact(
+            id.clone(),
+            DEPLOYMENT_A,
+            Some(CUSTOMER_ONE),
+            &bytes,
+            RetentionClass::Standard,
+        );
+
+        store
+            .put(artifact, bytes.clone())
+            .await
+            .expect("initial put must succeed");
+
+        let dmarc = issue_grant(
+            DEPLOYMENT_A,
+            ArtifactScope::Customer(CustomerId::new(CUSTOMER_ONE)),
+            true,
+            false,
+            ArtifactAccessPurpose::DmarcReportIngestion,
+            vec![id.clone()],
+            future_expires_at(),
+        )
+        .expect("dmarc-ingestion grant with a non-empty authorized ID set must issue");
+        let authorized = store
+            .get(&dmarc, &id)
+            .await
+            .expect("a DmarcReportIngestion grant must read the bound artifact");
+        assert_eq!(
+            authorized.bytes, bytes,
+            "the read must return exactly the stored bytes"
         );
     }
 

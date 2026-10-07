@@ -55,6 +55,7 @@ GRANT SELECT, INSERT ON inline_ml_shadow_evaluations TO nullapart_mailcore;
 GRANT SELECT, INSERT ON dmarc_aggregate_reports TO nullapart_mailcore;
 GRANT SELECT, INSERT ON dmarc_aggregate_records TO nullapart_mailcore;
 GRANT SELECT, INSERT ON dmarc_report_quarantine TO nullapart_mailcore;
+GRANT SELECT, INSERT, UPDATE ON dmarc_report_ingress_jobs TO nullapart_mailcore;
 GRANT SELECT, INSERT, UPDATE ON domain_security_observations TO nullapart_mailcore;
 GRANT SELECT, INSERT, UPDATE ON dmarc_report_authorizations TO nullapart_mailcore;
 GRANT SELECT, INSERT, UPDATE ON bimi_domain_status TO nullapart_mailcore;

@@ -182,3 +182,70 @@ Known limitations:
 - The frontend can display existing observations/status rows and classify
   existing report sources; it does not yet trigger observer refreshes or create
   new source observations without aggregate-report data.
+
+## Increment 3 — regional aggregate-report ingress worker
+
+Implemented:
+
+- Migration `023_dmarc_report_ingress_jobs.sql` adds
+  `dmarc_report_ingress_jobs`, a deployment-scoped durable queue for stored
+  aggregate-report artifacts.
+  - Raw XML/report bytes remain only in ArtifactStore.
+  - Rows carry bounded worker status/error metadata, attempt counts,
+    idempotency key, optional linked aggregate report row and record counts.
+  - RLS is deployment-scoped and grants are limited to `SELECT`, `INSERT` and
+    `UPDATE` for the local Mail Core runtime role.
+- Rust module `crates/mail-core/src/dmarc_ingress.rs` adds
+  `DmarcReportIngressWorker`.
+  - Claims one pending/failed job with `FOR UPDATE SKIP LOCKED` semantics.
+  - Reads bytes only through an exact short-lived ArtifactStore grant with the
+    new `DmarcReportIngestion` purpose.
+  - Invokes `PostgresDmarcAggregateIngestor` with automatic XML/gzip detection
+    and the existing parser/resource limits.
+  - Marks jobs terminally as `succeeded`, `duplicate`, `quarantined` or
+    `dead_lettered`; missing/unreadable artifacts cannot starve later jobs.
+  - Provides `enqueue_dmarc_report_artifact` for the later mailbox poller to
+    create jobs idempotently after it stores each report artifact.
+- `mailcore-server` now starts the ingress worker by default. It can be
+  disabled in local/dev with `NULLAPART_DMARC_INGRESS_WORKER_ENABLED=false`.
+- The runtime-role provisioning script now grants the worker table.
+- Integration test `postgres_dmarc_ingress.rs` proves:
+  - an enqueued stored report artifact is processed into one aggregate report;
+  - a second queued job for the same artifact/report is marked `duplicate`
+    rather than inserting rows again;
+  - an unreadable artifact is dead-lettered with `ARTIFACT_UNAVAILABLE` and the
+    queue becomes idle.
+
+Evidence:
+
+- 2026-10-07 local: `cargo fmt --all` — pass.
+- 2026-10-07 local: `cargo test -p nullapart-mail-core dmarc_ingress --tests -- --nocapture`
+  — pass; ignored PostgreSQL ingress tests compile.
+- 2026-10-07 local: `cargo clippy --workspace --all-targets -- -D warnings`
+  — pass.
+- 2026-10-07 local: `cargo test --workspace` — pass.
+- 2026-10-07 `.4`: migration `023_dmarc_report_ingress_jobs.sql` applied to
+  the local/dev PostgreSQL volume — pass.
+- 2026-10-07 `.4`: `docker compose --env-file .env.local -f compose.local.yml
+  build mailcore` — pass after fixing the worker claim projection to decode
+  `attempts::bigint` instead of leaving jobs stuck in `processing`.
+- 2026-10-07 `.4`: `docker compose --env-file .env.local -f compose.local.yml
+  up -d --force-recreate mailcore` — pass; rebuilt service started.
+- 2026-10-07 `.4`: `GET /api/v1/trace/health` on
+  `192.168.8.4:58081` — pass, returned `status=healthy`.
+- 2026-10-07 `.4` via SSH tunnel:
+  `cargo test --test postgres_dmarc_ingress -- --ignored --nocapture`
+  — pass, 2/2 database tests.
+
+Known limitations:
+
+- This increment adds the durable worker boundary and enqueue API, not an IMAP
+  or SMTP report-mailbox poller. The poller still needs to store each mailbox
+  attachment as an artifact and call `enqueue_dmarc_report_artifact`.
+- Report artifacts are currently read under the customer artifact scope carried
+  by the ingress job. A future regional mailbox implementation should choose
+  the reviewed customer mailbox/source mapping before enqueueing; system-scope
+  report artifacts would require a separate platform-artifact recovery/RLS
+  design.
+- Live gateway telemetry, DNS observer, authorization validator, BIMI validator
+  and alert generation remain pending increments.

@@ -10,6 +10,7 @@ pub mod artifact_store;
 pub mod auth;
 pub mod delivery;
 pub mod dmarc_aggregate;
+pub mod dmarc_ingress;
 pub mod dns_txt;
 pub mod domain_security;
 pub mod handoff;
