@@ -219,10 +219,10 @@ async fn domain_security_projection_is_actionable_and_customer_scoped() {
         pool,
         DeploymentId::new(&primary.deployment_id),
     ))
+    .layer(Extension(context(&primary)))
     .oneshot(
         Request::builder()
             .uri("/api/v1/domain-security")
-            .extension(Extension(context(&primary)))
             .body(Body::empty())
             .expect("request must build"),
     )

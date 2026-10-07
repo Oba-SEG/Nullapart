@@ -670,9 +670,9 @@ async fn load_sources(
 ) -> Result<Vec<(Uuid, DomainSourceSummary)>, Response> {
     sqlx::query(
         "WITH source_rows AS ( \
-             SELECT record.domain_id, record.source_ip::text AS source_ip, \
+             SELECT record.domain_id, host(record.source_ip) AS source_ip, \
                     COALESCE(NULLIF(record.envelope_from_domain, ''), record.header_from_domain) AS source_domain, \
-                    record.source_ip::text AS source_key, \
+                    host(record.source_ip) AS source_key, \
                     sum(record.message_count)::bigint AS messages_30d, \
                     COALESCE(sum(record.message_count) FILTER (WHERE record.dkim_aligned_result = 'pass'), 0)::bigint \
                         AS dkim_aligned_messages_30d, \
