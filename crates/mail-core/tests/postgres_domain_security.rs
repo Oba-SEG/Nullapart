@@ -249,7 +249,7 @@ fn context(fixture: &Fixture) -> TenantContext {
 }
 
 #[tokio::test]
-#[ignore = "requires migrated local PostgreSQL through 022_domain_security_read_models.sql"]
+#[ignore = "requires migrated local PostgreSQL through 025_domain_source_classification_history.sql"]
 async fn domain_security_projection_is_actionable_and_customer_scoped() {
     let pool = connect().await;
     let suffix = Uuid::new_v4().simple().to_string();
@@ -321,7 +321,7 @@ async fn domain_security_projection_is_actionable_and_customer_scoped() {
 }
 
 #[tokio::test]
-#[ignore = "requires migrated local PostgreSQL through 022_domain_security_read_models.sql"]
+#[ignore = "requires migrated local PostgreSQL through 025_domain_source_classification_history.sql"]
 async fn source_classification_mutation_is_idempotent_audited_and_scoped() {
     let pool = connect().await;
     let suffix = Uuid::new_v4().simple().to_string();
@@ -391,6 +391,27 @@ async fn source_classification_mutation_is_idempotent_audited_and_scoped() {
     .await
     .expect("classification must be stored once");
     assert_eq!(stored, ("third_party".to_string(), 1));
+
+    let history: (String, Option<String>, Option<String>, i64) = sqlx::query_as(
+        "SELECT new_classification, previous_classification, host(new_source_ip), count(*) OVER ()::bigint \
+         FROM domain_source_classification_history \
+         WHERE deployment_id = $1 AND customer_id = $2 AND domain_id = $3 AND source_key = '203.0.113.44'",
+    )
+    .bind(&primary.deployment_id)
+    .bind(&primary.customer_id)
+    .bind(primary.domain_id)
+    .fetch_one(&pool)
+    .await
+    .expect("classification history must be stored once");
+    assert_eq!(
+        history,
+        (
+            "third_party".to_string(),
+            None,
+            Some("203.0.113.44".to_string()),
+            1
+        )
+    );
 
     let audit_count: i64 = sqlx::query_scalar(
         "SELECT count(*)::bigint FROM audit_events \

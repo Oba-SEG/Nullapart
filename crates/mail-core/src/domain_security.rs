@@ -572,6 +572,21 @@ async fn post_source_classification(
         Err(_) => return unavailable(),
     };
 
+    if changed
+        && write_source_classification_history(
+            &mut transaction,
+            &state.deployment_id.0,
+            &context,
+            request.domain_id,
+            &request,
+            previous.as_ref(),
+        )
+        .await
+        .is_err()
+    {
+        return unavailable();
+    }
+
     if write_source_classification_audit(
         &mut transaction,
         &state.deployment_id.0,
@@ -1069,6 +1084,47 @@ fn validate_source_classification(
         return Err(());
     }
     Ok(request)
+}
+
+async fn write_source_classification_history(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    deployment_id: &str,
+    context: &TenantContext,
+    domain_id: Uuid,
+    request: &SourceClassificationRequest,
+    previous: Option<&sqlx::postgres::PgRow>,
+) -> Result<(), Response> {
+    let previous_classification = previous.map(|row| row.get::<String, _>("classification"));
+    let previous_notes = previous.and_then(|row| row.get::<Option<String>, _>("notes"));
+    let previous_source_ip = previous.and_then(|row| row.get::<Option<String>, _>("source_ip"));
+    let previous_source_domain =
+        previous.and_then(|row| row.get::<Option<String>, _>("source_domain"));
+
+    sqlx::query(
+        "INSERT INTO domain_source_classification_history (\
+             deployment_id, customer_id, domain_id, source_key, \
+             previous_classification, new_classification, \
+             previous_source_ip, new_source_ip, previous_source_domain, new_source_domain, \
+             previous_notes, new_notes, changed_by\
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7::inet, $8::inet, $9, $10, $11, $12, $13)",
+    )
+    .bind(deployment_id)
+    .bind(&context.customer_id.0)
+    .bind(domain_id)
+    .bind(&request.source_key)
+    .bind(previous_classification)
+    .bind(request.classification.as_str())
+    .bind(previous_source_ip)
+    .bind(&request.source_ip)
+    .bind(previous_source_domain)
+    .bind(&request.source_domain)
+    .bind(previous_notes)
+    .bind(&request.notes)
+    .bind(&context.actor.login)
+    .execute(&mut **transaction)
+    .await
+    .map(|_| ())
+    .map_err(|_| unavailable())
 }
 
 async fn write_source_classification_audit(

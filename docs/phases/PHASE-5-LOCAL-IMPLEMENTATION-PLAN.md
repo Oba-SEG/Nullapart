@@ -333,3 +333,55 @@ Known limitations:
   are independent evidence sources.
 - DNS observer, external report-destination authorization validator, BIMI
   validator and alert generation remain pending increments.
+
+## Increment 5 — source attribution and classification history
+
+Implemented:
+
+- Source attribution rows from aggregate reports and live telemetry are already
+  projected into the Domain Security API/UI as top sources per verified domain.
+- `POST /api/v1/domain-security/source-classifications` already provides the
+  operator mutation boundary:
+  - requires authenticated tenant context, deployment match,
+    `domain-security:manage`, fresh step-up authentication and
+    `x-idempotency-key`;
+  - validates source keys/IPs/domains/notes server-side;
+  - rejects cross-tenant domain probes with `404`;
+  - writes append-only audit evidence for successful mutation attempts;
+  - replays completed idempotent requests without duplicating the mutation.
+- Migration `025_domain_source_classification_history.sql` adds
+  `domain_source_classification_history`.
+  - Captures previous and new classification/source metadata for each actual
+    source-classification change.
+  - Stores normalized metadata only: no message samples, raw headers, raw DNS
+    payloads, aggregate XML or MIME.
+  - Enforces deployment/customer RLS and an append-only trigger; the runtime
+    role has `SELECT` and `INSERT` only.
+- `domain_security.rs` writes one history row only when the classification
+  state actually changes. Idempotent replay returns the saved result and does
+  not create another history row.
+
+Evidence:
+
+- 2026-10-08 local: `cargo fmt --all` — pass.
+- 2026-10-08 local:
+  `cargo test -p nullapart-mail-core domain_security --tests -- --nocapture`
+  — pass; focused route/unit compile plus ignored PostgreSQL tests compile.
+- 2026-10-08 local:
+  `cargo clippy --workspace --all-targets -- -D warnings` — pass.
+- 2026-10-08 local: `cargo test --workspace` — pass.
+- 2026-10-08 `.4`: migration
+  `025_domain_source_classification_history.sql` applied to the local/dev
+  PostgreSQL volume — pass.
+- 2026-10-08 `.4` via SSH tunnel:
+  `cargo test --test postgres_domain_security -- --ignored --nocapture`
+  — pass, 2/2 database tests including history persistence and idempotent
+  replay evidence.
+
+Known limitations:
+
+- History is persisted and audited but not yet exposed as a dedicated timeline
+  panel in the UI. Operators can still see current classification state and
+  audit evidence.
+- Automated source-risk recommendations/alert generation are still pending the
+  notification increment.
