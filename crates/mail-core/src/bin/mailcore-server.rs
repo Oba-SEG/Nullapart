@@ -15,6 +15,8 @@ use nullapart_mail_core::admin_rbac::{
 use nullapart_mail_core::artifact_recovery::recover_persisted_artifacts;
 use nullapart_mail_core::artifact_store::{FilesystemArtifactRuntime, FilesystemArtifactStore};
 use nullapart_mail_core::dmarc_ingress::{DmarcReportIngressConfig, DmarcReportIngressWorker};
+use nullapart_mail_core::dns_txt::DnsTxtResolver;
+use nullapart_mail_core::domain_observer::{DomainObserverConfig, DomainObserverWorker};
 use nullapart_mail_core::domain_security::{domain_security_router, DomainSecurityState};
 use nullapart_mail_core::handoff::HandoffConfig;
 use nullapart_mail_core::inline_ml::stage::InlineMlStage;
@@ -140,6 +142,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             DmarcReportIngressConfig::default(),
         );
         tokio::spawn(dmarc_ingress_worker.run());
+    }
+    if env::var("NULLAPART_DOMAIN_OBSERVER_WORKER_ENABLED")
+        .map(|value| value != "false")
+        .unwrap_or(true)
+    {
+        let domain_observer_worker = DomainObserverWorker::new(
+            pool.clone(),
+            DnsTxtResolver::from_env(),
+            deployment_id.clone(),
+            DomainObserverConfig::default(),
+        );
+        tokio::spawn(domain_observer_worker.run());
     }
 
     let mut trace_config = TraceConfig {

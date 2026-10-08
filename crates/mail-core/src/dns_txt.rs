@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 const DNS_HEADER_LEN: usize = 12;
 const DNS_TYPE_TXT: u16 = 16;
+const DNS_TYPE_MX: u16 = 15;
 const DNS_CLASS_IN: u16 = 1;
 const MAX_RESPONSE_LEN: usize = 4096;
 const MAX_ANSWERS: u16 = 8;
@@ -70,7 +71,7 @@ impl DnsTxtResolver {
     }
 
     pub async fn lookup(&self, name: &str) -> Result<Vec<String>, DnsError> {
-        let query = build_query(name)?;
+        let query = build_query(name, DNS_TYPE_TXT)?;
         let bind_address = if self.server.is_ipv4() {
             "0.0.0.0:0"
         } else {
@@ -98,6 +99,38 @@ impl DnsTxtResolver {
                     Err(_) => return Err(DnsError::Timeout),
                 };
             return parse_txt_response(&query[..2], &buffer[..received]);
+        }
+    }
+
+    pub async fn lookup_mx(&self, name: &str) -> Result<Vec<String>, DnsError> {
+        let query = build_query(name, DNS_TYPE_MX)?;
+        let bind_address = if self.server.is_ipv4() {
+            "0.0.0.0:0"
+        } else {
+            "[::]:0"
+        };
+        let socket = tokio::net::UdpSocket::bind(bind_address).await?;
+        socket.send_to(&query, self.server).await?;
+
+        let mut buffer = [0u8; MAX_RESPONSE_LEN];
+        let deadline = tokio::time::Instant::now() + self.timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(DnsError::Timeout);
+            }
+            let received =
+                match tokio::time::timeout(remaining, socket.recv_from(&mut buffer)).await {
+                    Ok(Ok((received, from))) => {
+                        if from != self.server {
+                            continue;
+                        }
+                        received
+                    },
+                    Ok(Err(error)) => return Err(DnsError::Io(error)),
+                    Err(_) => return Err(DnsError::Timeout),
+                };
+            return parse_mx_response(&query[..2], &buffer[..received]);
         }
     }
 
@@ -151,7 +184,7 @@ fn validate_name(name: &str) -> Result<(), DnsError> {
     Ok(())
 }
 
-fn build_query(name: &str) -> Result<Vec<u8>, DnsError> {
+fn build_query(name: &str, record_type: u16) -> Result<Vec<u8>, DnsError> {
     validate_name(name)?;
     let identifier = Uuid::new_v4();
     let mut message = Vec::with_capacity(name.len() + 18);
@@ -164,7 +197,7 @@ fn build_query(name: &str) -> Result<Vec<u8>, DnsError> {
         message.extend_from_slice(label.as_bytes());
     }
     message.push(0);
-    message.extend_from_slice(&DNS_TYPE_TXT.to_be_bytes());
+    message.extend_from_slice(&record_type.to_be_bytes());
     message.extend_from_slice(&DNS_CLASS_IN.to_be_bytes());
     Ok(message)
 }
@@ -210,6 +243,45 @@ fn parse_txt_response(query_id: &[u8], packet: &[u8]) -> Result<Vec<String>, Dns
     Ok(records)
 }
 
+fn parse_mx_response(query_id: &[u8], packet: &[u8]) -> Result<Vec<String>, DnsError> {
+    if packet.len() < DNS_HEADER_LEN || packet[..2] != *query_id {
+        return Err(DnsError::MalformedResponse);
+    }
+    let flags = read_u16(packet, 2)?;
+    if flags & 0x8000 == 0 || flags & 0x0200 != 0 {
+        return Err(DnsError::MalformedResponse);
+    }
+    let response_code = flags & 0x000F;
+    if response_code == 3 {
+        return Ok(Vec::new());
+    }
+    if response_code != 0 {
+        return Err(DnsError::MalformedResponse);
+    }
+    let question_count = read_u16(packet, 4)?;
+    let answer_count = read_u16(packet, 6)?;
+    let mut offset = DNS_HEADER_LEN;
+    for _ in 0..question_count {
+        offset = skip_name(packet, offset)?;
+        offset = advance(offset, 4, packet)?;
+    }
+    let mut records = Vec::new();
+    for _ in 0..answer_count.min(MAX_ANSWERS) {
+        offset = skip_name(packet, offset)?;
+        let record_type = read_u16(packet, offset)?;
+        let record_class = read_u16(packet, offset + 2)?;
+        let data_length = read_u16(packet, offset + 8)? as usize;
+        offset = advance(offset, 10, packet)?;
+        let end = advance(offset, data_length, packet)?;
+        if record_type == DNS_TYPE_MX && record_class == DNS_CLASS_IN && data_length >= 3 {
+            let exchange = decode_name(packet, offset + 2)?;
+            records.push(exchange);
+        }
+        offset = end;
+    }
+    Ok(records)
+}
+
 /// Steps over a (possibly pointer-terminated) encoded name.
 fn skip_name(packet: &[u8], mut offset: usize) -> Result<usize, DnsError> {
     loop {
@@ -228,6 +300,41 @@ fn skip_name(packet: &[u8], mut offset: usize) -> Result<usize, DnsError> {
             _ => return Err(DnsError::MalformedResponse),
         }
     }
+}
+
+fn decode_name(packet: &[u8], mut offset: usize) -> Result<String, DnsError> {
+    let mut labels = Vec::new();
+    let mut jumps = 0usize;
+    loop {
+        let length = *packet.get(offset).ok_or(DnsError::MalformedResponse)?;
+        match length & 0xC0 {
+            0x00 => {
+                if length == 0 {
+                    break;
+                }
+                offset += 1;
+                let end = advance(offset, length as usize, packet)?;
+                let label = std::str::from_utf8(&packet[offset..end])
+                    .map_err(|_| DnsError::MalformedResponse)?;
+                labels.push(label.to_ascii_lowercase());
+                offset = end;
+            },
+            0xC0 => {
+                let pointer_low = *packet.get(offset + 1).ok_or(DnsError::MalformedResponse)?;
+                let pointer = (((length as u16 & 0x3F) << 8) | pointer_low as u16) as usize;
+                offset = pointer;
+                jumps += 1;
+                if jumps > 8 {
+                    return Err(DnsError::MalformedResponse);
+                }
+            },
+            _ => return Err(DnsError::MalformedResponse),
+        }
+    }
+    if labels.is_empty() {
+        return Err(DnsError::MalformedResponse);
+    }
+    Ok(labels.join("."))
 }
 
 fn decode_txt(data: &[u8]) -> Result<String, DnsError> {
@@ -293,6 +400,34 @@ mod tests {
         response
     }
 
+    fn encoded_name(name: &str) -> Vec<u8> {
+        let mut encoded = Vec::new();
+        for label in name.split('.') {
+            encoded.push(label.len() as u8);
+            encoded.extend_from_slice(label.as_bytes());
+        }
+        encoded.push(0);
+        encoded
+    }
+
+    fn mx_response(query: &[u8], preference: u16, exchange: &str) -> Vec<u8> {
+        let mut rdata = preference.to_be_bytes().to_vec();
+        rdata.extend_from_slice(&encoded_name(exchange));
+        let mut response = Vec::new();
+        response.extend_from_slice(&query[..2]);
+        response.extend_from_slice(&[0x81, 0x80]);
+        response.extend_from_slice(&[0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00]);
+        response.extend_from_slice(&query[DNS_HEADER_LEN..]);
+        response.push(0xC0);
+        response.push(0x0C);
+        response.extend_from_slice(&DNS_TYPE_MX.to_be_bytes());
+        response.extend_from_slice(&DNS_CLASS_IN.to_be_bytes());
+        response.extend_from_slice(&60u32.to_be_bytes());
+        response.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
+        response.extend_from_slice(&rdata);
+        response
+    }
+
     async fn spawn_responder<F>(reply: F) -> SocketAddr
     where
         F: FnOnce(&[u8]) -> Vec<u8> + Send + 'static,
@@ -344,7 +479,8 @@ mod tests {
 
     #[test]
     fn query_message_asks_one_txt_question() {
-        let message = build_query("mail.example.test").expect("valid name builds a query");
+        let message =
+            build_query("mail.example.test", DNS_TYPE_TXT).expect("valid name builds a query");
         assert_eq!(message[2], 0x01);
         assert_eq!(message[3], 0x00);
         assert_eq!(read_u16(&message, 4).expect("qdcount reads"), 1);
@@ -368,7 +504,8 @@ mod tests {
 
     #[test]
     fn unusable_responses_are_rejected() {
-        let query = build_query("mail.example.test").expect("valid name builds a query");
+        let query =
+            build_query("mail.example.test", DNS_TYPE_TXT).expect("valid name builds a query");
         let identifier = query[..2].to_vec();
 
         let mut truncated = txt_response(&query, &txt_rdata(&["a"]));
@@ -426,6 +563,17 @@ mod tests {
             .await
             .expect("the local resolver answers");
         assert_eq!(records, vec!["nullapart-verify=tok".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn lookup_mx_returns_exchange_names_from_the_configured_resolver() {
+        let address = spawn_responder(|query| mx_response(query, 10, "mail.example.test")).await;
+        let resolver = DnsTxtResolver::with_server(address, Duration::from_secs(2));
+        let records = resolver
+            .lookup_mx("example.test")
+            .await
+            .expect("the local resolver answers");
+        assert_eq!(records, vec!["mail.example.test".to_string()]);
     }
 
     #[tokio::test]

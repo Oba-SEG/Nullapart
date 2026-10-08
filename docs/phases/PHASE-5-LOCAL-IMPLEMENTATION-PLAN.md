@@ -91,9 +91,9 @@ Known limitations:
 
 - ZIP aggregate reports are explicitly unsupported until a bounded archive
   parser is added. Gzip is implemented.
-- The module has parser and DB persistence only; the regional mailbox/ingress
-  worker, API, UI, observer, BIMI, and notification increments are still
-  pending.
+- At the time of increment 1, only parser and DB persistence existed; the
+  later sections below record the completed ingress worker, API, UI, observer,
+  BIMI and notification increments.
 - Exact-domain mapping is intentionally conservative; organizational-domain
   fallback requires a reviewed public-suffix strategy and tenant-boundary tests.
 
@@ -176,9 +176,10 @@ Evidence:
 
 Known limitations:
 
-- This increment creates the actionable read model/API/UI, but the background
-  mailbox worker, DNS observer, report-authorization validator, BIMI secure-SVG
-  validator and alert-generation worker are still pending Phase 5 increments.
+- This increment created the actionable read model/API/UI; the later sections
+  below record the completed background workers, DNS observer,
+  report-authorization validator, BIMI readiness validator and alert-generation
+  worker.
 - The frontend can display existing observations/status rows and classify
   existing report sources; it does not yet trigger observer refreshes or create
   new source observations without aggregate-report data.
@@ -247,8 +248,9 @@ Known limitations:
   the reviewed customer mailbox/source mapping before enqueueing; system-scope
   report artifacts would require a separate platform-artifact recovery/RLS
   design.
-- Live gateway telemetry, DNS observer, authorization validator, BIMI validator
-  and alert generation remain pending increments.
+- Later sections below record the completed live gateway telemetry, DNS
+  observer, authorization validator, BIMI readiness validator and alert
+  generation increments.
 
 ## Increment 4 — live authentication telemetry aggregation
 
@@ -331,8 +333,9 @@ Known limitations:
 - Duplicate counting between aggregate reports and live telemetry is possible
   in a local/dev window because aggregate reports and live gateway telemetry
   are independent evidence sources.
-- DNS observer, external report-destination authorization validator, BIMI
-  validator and alert generation remain pending increments.
+- Later sections below record the completed DNS observer, external
+  report-destination authorization validator, BIMI readiness validator and alert
+  generation increments.
 
 ## Increment 5 — source attribution and classification history
 
@@ -383,5 +386,95 @@ Known limitations:
 - History is persisted and audited but not yet exposed as a dedicated timeline
   panel in the UI. Operators can still see current classification state and
   audit evidence.
-- Automated source-risk recommendations/alert generation are still pending the
-  notification increment.
+- Automated source-risk recommendations are limited to the current
+  classification/notification rules; confirmed DNS/domain-security alerts are
+  implemented in the observer increment below.
+
+## Increments 6–9 — DNS observer, report authorization, BIMI readiness and alerts
+
+Implemented:
+
+- `crates/mail-core/src/dns_txt.rs` now supports bounded MX lookups in the same
+  dependency-free resolver used by domain verification.
+  - The resolver still sends exactly one DNS question to the configured
+    resolver, accepts replies only from that resolver, bounds response size and
+    answer count, rejects truncated/malformed responses, and never exposes raw
+    response bytes outside the module.
+  - MX exchange decoding follows compressed-name pointers with a fixed jump
+    bound to avoid pointer loops.
+- `crates/mail-core/src/domain_observer.rs` adds `DomainObserverWorker`.
+  - Runs as an internal background worker from `mailcore-server` by default;
+    local/dev can disable it with
+    `NULLAPART_DOMAIN_OBSERVER_WORKER_ENABLED=false`.
+  - Loads active customers for the current deployment, then processes each
+    customer in a transaction-scoped RLS context before reading verified
+    domains or report-authorization rows.
+  - Observes MX, SPF, DMARC, known DKIM selectors, MTA-STS, TLS-RPT and BIMI
+    TXT posture and persists normalized `domain_security_observations`.
+  - Validates external DMARC aggregate report authorizations by resolving the
+    configured owner TXT and updating `dmarc_report_authorizations`.
+  - Upserts `bimi_domain_status` using safe shape validation only: HTTPS SVG
+    URL and HTTPS certificate URL are recorded as metadata; the worker does
+    not fetch, render, parse, cache or store SVG/certificate bytes.
+  - Writes `domain_security_notifications` for confirmed degraded states with
+    an idempotent open-notification check. DNS lookup failures are stored as
+    `unknown` observations and do not create fresh misconfiguration alerts.
+- `mailcore-server` wires the observer next to the DMARC ingress worker using
+  `DnsTxtResolver::from_env()`, so `.4` uses the local DNS resolver configured
+  by `NULLAPART_DNS_RESOLVER`.
+- `crates/mail-core/tests/postgres_domain_observer.rs` adds an ignored
+  PostgreSQL integration test with a local UDP DNS responder. It proves the
+  worker persists all eight observation types, marks external report
+  authorization valid, writes BIMI readiness, and avoids spurious
+  notifications for a fully configured test domain.
+
+Evidence:
+
+- 2026-10-08 local: `cargo fmt --all` — pass.
+- 2026-10-08 local:
+  `cargo test -p nullapart-mail-core dns_txt --tests -- --nocapture`
+  — pass, including MX exchange decoding.
+- 2026-10-08 local:
+  `cargo test -p nullapart-mail-core domain_observer --tests -- --nocapture`
+  — pass.
+- 2026-10-08 local:
+  `cargo clippy --workspace --all-targets -- -D warnings` — pass.
+- 2026-10-08 local: `cargo test --workspace` — pass.
+- 2026-10-08 `.4` via SSH tunnel:
+  `cargo test --test postgres_domain_observer -- --ignored --nocapture`
+  — pass, 1/1 database-backed observer test.
+- 2026-10-08 `.4`: `docker compose --env-file .env.local -f compose.local.yml
+  config -q` — pass.
+- 2026-10-08 `.4`: `docker compose --env-file .env.local -f compose.local.yml
+  build mailcore` — pass.
+- 2026-10-08 `.4`: `docker compose --env-file .env.local -f compose.local.yml
+  up -d --force-recreate mailcore` — pass.
+- 2026-10-08 `.4`: `GET /api/v1/trace/health` on
+  `192.168.8.4:58081` — pass, returned `status=healthy`.
+- 2026-10-08 `.4` live observer smoke:
+  after the rebuilt mailcore restart, `domain_security_observations` for
+  `LOCAL-TEST` advanced to `max(observed_at)=2026-10-08 10:30:34.963699+00`
+  with 49 recent rows. `domain_security_notifications` did not advance past
+  the earlier pre-fix timestamp `2026-10-08 10:25:22.711492+00`, proving
+  transient local DNS `unknown` states record evidence without opening fresh
+  alerts.
+
+Known limitations:
+
+- BIMI certificate and SVG validation is intentionally shape/readiness metadata
+  only in this increment. The worker does not dereference arbitrary customer
+  URLs, which avoids SSRF and untrusted SVG parsing in the control plane.
+- The observer checks known DKIM selectors `default`, `selector1` and
+  `selector2`; future selector inventory can extend this without changing the
+  persisted read model.
+- DNS `unknown` observations are visible to operators as evidence, but alerts
+  are reserved for confirmed missing/invalid/degraded states.
+
+## Phase 5 completion status
+
+Phase 5 local/dev implementation is complete for the documented local
+increments 1–9. The current implementation covers aggregate ingestion,
+actionable domain-security API/UI projections, report-ingress queue worker,
+live authentication telemetry, source classification/history, external report
+authorization validation, DNS observer history, BIMI readiness metadata and
+idempotent alert generation.
