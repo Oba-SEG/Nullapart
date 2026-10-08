@@ -178,6 +178,49 @@ async fn seed_domain_security_rows(pool: &PgPool, fixture: &Fixture) {
     .expect("notification fixture must insert");
 }
 
+async fn seed_live_telemetry_row(pool: &PgPool, fixture: &Fixture) {
+    let transaction_id = Uuid::new_v4();
+    let tenant_message_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO smtp_transactions \
+            (id, deployment_id, direction, envelope_sender, content_hash, mime_artifact_id, received_at) \
+         VALUES ($1, $2, 'inbound', $3, $4, 'telemetry-fixture', now())",
+    )
+    .bind(transaction_id)
+    .bind(&fixture.deployment_id)
+    .bind(format!("sender@{}", fixture.domain))
+    .bind(format!("sha256:{}", "a".repeat(64)))
+    .execute(pool)
+    .await
+    .expect("telemetry transaction fixture must insert");
+    sqlx::query(
+        "INSERT INTO tenant_message_instances (id, transaction_id, customer_id, disposition) \
+         VALUES ($1, $2, $3, 'quarantine')",
+    )
+    .bind(tenant_message_id)
+    .bind(transaction_id)
+    .bind(&fixture.customer_id)
+    .execute(pool)
+    .await
+    .expect("telemetry tenant message fixture must insert");
+    sqlx::query(
+        "INSERT INTO domain_auth_telemetry (\
+            deployment_id, customer_id, domain_id, transaction_id, tenant_message_id, \
+            source_ip, source_domain, envelope_from_domain, header_from_domain, \
+            spf_result, dkim_result, dmarc_result, disposition, observed_at\
+         ) VALUES ($1, $2, $3, $4, $5, '198.51.100.77', $6, $6, $6, 'pass', 'pass', 'fail', 'quarantine', now())",
+    )
+    .bind(&fixture.deployment_id)
+    .bind(&fixture.customer_id)
+    .bind(fixture.domain_id)
+    .bind(transaction_id)
+    .bind(tenant_message_id)
+    .bind(&fixture.domain)
+    .execute(pool)
+    .await
+    .expect("telemetry fixture must insert");
+}
+
 fn context(fixture: &Fixture) -> TenantContext {
     TenantContext {
         deployment_id: DeploymentId::new(&fixture.deployment_id),
@@ -213,6 +256,7 @@ async fn domain_security_projection_is_actionable_and_customer_scoped() {
     let primary = seed_fixture(&pool, &suffix, "primary").await;
     let other = seed_fixture(&pool, &suffix, "other").await;
     seed_domain_security_rows(&pool, &primary).await;
+    seed_live_telemetry_row(&pool, &primary).await;
     seed_domain_security_rows(&pool, &other).await;
 
     let response = domain_security_router(DomainSecurityState::new(
@@ -237,8 +281,9 @@ async fn domain_security_projection_is_actionable_and_customer_scoped() {
     let data = &value["data"];
 
     assert_eq!(data["summary"]["domains_total"], 1);
-    assert_eq!(data["summary"]["messages_30d"], 12);
-    assert_eq!(data["summary"]["unknown_sources"], 1);
+    assert_eq!(data["summary"]["messages_30d"], 13);
+    assert_eq!(data["summary"]["dmarc_aligned_messages_30d"], 12);
+    assert_eq!(data["summary"]["unknown_sources"], 2);
     assert_eq!(data["summary"]["open_notifications"], 1);
     assert_eq!(data["domains"][0]["domain"], primary.domain);
     assert_eq!(
@@ -249,6 +294,24 @@ async fn domain_security_projection_is_actionable_and_customer_scoped() {
     assert_eq!(
         data["domains"][0]["sources"][0]["source_ip"],
         "203.0.113.44"
+    );
+    assert_eq!(data["domains"][0]["dmarc"]["messages_30d"], 13);
+    assert_eq!(
+        data["domains"][0]["dmarc"]["dmarc_aligned_messages_30d"],
+        12
+    );
+    assert_eq!(
+        data["domains"][0]["dmarc"]["rejected_or_quarantined_messages_30d"],
+        0
+    );
+    assert!(
+        data["domains"][0]["sources"]
+            .as_array()
+            .expect("sources array")
+            .iter()
+            .any(|source| source["source_ip"] == "198.51.100.77"
+                && source["dmarc_aligned_messages_30d"] == 0),
+        "live telemetry with DMARC fail must not be counted as aligned just because SPF/DKIM passed"
     );
     assert_eq!(data["notifications"][0]["title"], "Unknown source detected");
     assert!(

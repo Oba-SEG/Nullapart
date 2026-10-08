@@ -618,24 +618,47 @@ async fn load_dmarc_metrics(
     customer_id: &str,
 ) -> Result<Vec<(Uuid, DmarcDomainMetrics)>, Response> {
     sqlx::query(
-        "SELECT report.domain_id, \
-                (array_agg(report.policy_p ORDER BY report.date_range_end DESC))[1] AS latest_policy, \
-                count(DISTINCT report.id)::bigint AS reports_30d, \
-                COALESCE(sum(record.message_count), 0)::bigint AS messages_30d, \
-                COALESCE(sum(record.message_count) FILTER (WHERE record.dkim_aligned_result = 'pass'), 0)::bigint \
-                    AS dkim_aligned_messages_30d, \
-                COALESCE(sum(record.message_count) FILTER (WHERE record.spf_aligned_result = 'pass'), 0)::bigint \
-                    AS spf_aligned_messages_30d, \
-                COALESCE(sum(record.message_count) FILTER (WHERE record.dkim_aligned_result = 'pass' \
-                    OR record.spf_aligned_result = 'pass'), 0)::bigint AS dmarc_aligned_messages_30d, \
-                COALESCE(sum(record.message_count) FILTER (WHERE record.disposition IN ('quarantine', 'reject')), 0)::bigint \
-                    AS rejected_or_quarantined_messages_30d \
-         FROM dmarc_aggregate_reports AS report \
-         LEFT JOIN dmarc_aggregate_records AS record ON record.report_id = report.id \
-         WHERE report.date_range_begin >= now() - interval '30 days' \
-           AND report.deployment_id = $1 \
-           AND report.customer_id = $2 \
-         GROUP BY report.domain_id",
+        "WITH metric_rows AS ( \
+             SELECT report.domain_id, \
+                    (array_agg(report.policy_p ORDER BY report.date_range_end DESC))[1] AS latest_policy, \
+                    count(DISTINCT report.id)::bigint AS reports_30d, \
+                    COALESCE(sum(record.message_count), 0)::bigint AS messages_30d, \
+                    COALESCE(sum(record.message_count) FILTER (WHERE record.dkim_aligned_result = 'pass'), 0)::bigint \
+                        AS dkim_aligned_messages_30d, \
+                    COALESCE(sum(record.message_count) FILTER (WHERE record.spf_aligned_result = 'pass'), 0)::bigint \
+                        AS spf_aligned_messages_30d, \
+                    COALESCE(sum(record.message_count) FILTER (WHERE record.dkim_aligned_result = 'pass' \
+                        OR record.spf_aligned_result = 'pass'), 0)::bigint AS dmarc_aligned_messages_30d, \
+                    COALESCE(sum(record.message_count) FILTER (WHERE record.disposition IN ('quarantine', 'reject')), 0)::bigint \
+                        AS rejected_or_quarantined_messages_30d \
+             FROM dmarc_aggregate_reports AS report \
+             LEFT JOIN dmarc_aggregate_records AS record ON record.report_id = report.id \
+             WHERE report.date_range_begin >= now() - interval '30 days' \
+               AND report.deployment_id = $1 \
+               AND report.customer_id = $2 \
+             GROUP BY report.domain_id \
+             UNION ALL \
+             SELECT telemetry.domain_id, NULL::text AS latest_policy, 0::bigint AS reports_30d, \
+                    count(*)::bigint AS messages_30d, \
+                    0::bigint AS dkim_aligned_messages_30d, \
+                    0::bigint AS spf_aligned_messages_30d, \
+                    count(*) FILTER (WHERE telemetry.dmarc_result = 'pass')::bigint AS dmarc_aligned_messages_30d, \
+                    0::bigint AS rejected_or_quarantined_messages_30d \
+             FROM domain_auth_telemetry AS telemetry \
+             WHERE telemetry.observed_at >= now() - interval '30 days' \
+               AND telemetry.deployment_id = $1 \
+               AND telemetry.customer_id = $2 \
+             GROUP BY telemetry.domain_id \
+         ) \
+         SELECT domain_id, (array_remove(array_agg(latest_policy), NULL))[1] AS latest_policy, \
+                sum(reports_30d)::bigint AS reports_30d, \
+                sum(messages_30d)::bigint AS messages_30d, \
+                sum(dkim_aligned_messages_30d)::bigint AS dkim_aligned_messages_30d, \
+                sum(spf_aligned_messages_30d)::bigint AS spf_aligned_messages_30d, \
+                sum(dmarc_aligned_messages_30d)::bigint AS dmarc_aligned_messages_30d, \
+                sum(rejected_or_quarantined_messages_30d)::bigint AS rejected_or_quarantined_messages_30d \
+         FROM metric_rows \
+         GROUP BY domain_id",
     )
     .bind(deployment_id)
     .bind(customer_id)
@@ -669,25 +692,40 @@ async fn load_sources(
     customer_id: &str,
 ) -> Result<Vec<(Uuid, DomainSourceSummary)>, Response> {
     sqlx::query(
-        "WITH source_rows AS ( \
+        "WITH raw_source_rows AS ( \
              SELECT record.domain_id, host(record.source_ip) AS source_ip, \
                     COALESCE(NULLIF(record.envelope_from_domain, ''), record.header_from_domain) AS source_domain, \
-                    host(record.source_ip) AS source_key, \
-                    sum(record.message_count)::bigint AS messages_30d, \
-                    COALESCE(sum(record.message_count) FILTER (WHERE record.dkim_aligned_result = 'pass'), 0)::bigint \
-                        AS dkim_aligned_messages_30d, \
-                    COALESCE(sum(record.message_count) FILTER (WHERE record.spf_aligned_result = 'pass'), 0)::bigint \
-                        AS spf_aligned_messages_30d, \
-                    COALESCE(sum(record.message_count) FILTER (WHERE record.dkim_aligned_result = 'pass' \
-                        OR record.spf_aligned_result = 'pass'), 0)::bigint AS dmarc_aligned_messages_30d, \
-                    row_number() OVER (PARTITION BY record.domain_id ORDER BY sum(record.message_count) DESC) AS rank \
+                    host(record.source_ip) AS source_key, record.message_count::bigint AS message_count, \
+                    record.dkim_aligned_result, record.spf_aligned_result, \
+                    CASE WHEN record.dkim_aligned_result = 'pass' OR record.spf_aligned_result = 'pass' \
+                         THEN 'pass' ELSE NULL END AS dmarc_aligned_result \
              FROM dmarc_aggregate_records AS record \
              JOIN dmarc_aggregate_reports AS report ON report.id = record.report_id \
              WHERE report.date_range_begin >= now() - interval '30 days' \
                AND report.deployment_id = $1 \
                AND report.customer_id = $2 \
-             GROUP BY record.domain_id, record.source_ip, \
-               COALESCE(NULLIF(record.envelope_from_domain, ''), record.header_from_domain) \
+             UNION ALL \
+             SELECT telemetry.domain_id, host(telemetry.source_ip) AS source_ip, \
+                    COALESCE(NULLIF(telemetry.source_domain, ''), telemetry.header_from_domain) AS source_domain, \
+                    host(telemetry.source_ip) AS source_key, 1::bigint AS message_count, \
+                    NULL::text AS dkim_aligned_result, NULL::text AS spf_aligned_result, \
+                    telemetry.dmarc_result AS dmarc_aligned_result \
+             FROM domain_auth_telemetry AS telemetry \
+             WHERE telemetry.observed_at >= now() - interval '30 days' \
+               AND telemetry.deployment_id = $1 \
+               AND telemetry.customer_id = $2 \
+         ), source_rows AS ( \
+             SELECT domain_id, source_ip, source_domain, source_key, \
+                    sum(message_count)::bigint AS messages_30d, \
+                    COALESCE(sum(message_count) FILTER (WHERE dkim_aligned_result = 'pass'), 0)::bigint \
+                        AS dkim_aligned_messages_30d, \
+                    COALESCE(sum(message_count) FILTER (WHERE spf_aligned_result = 'pass'), 0)::bigint \
+                        AS spf_aligned_messages_30d, \
+                    COALESCE(sum(message_count) FILTER (WHERE dmarc_aligned_result = 'pass'), 0)::bigint \
+                        AS dmarc_aligned_messages_30d, \
+                    row_number() OVER (PARTITION BY domain_id ORDER BY sum(message_count) DESC) AS rank \
+             FROM raw_source_rows \
+             GROUP BY domain_id, source_ip, source_domain, source_key \
          ) \
          SELECT source_rows.*, COALESCE(classification.classification, 'unknown') AS classification \
          FROM source_rows \

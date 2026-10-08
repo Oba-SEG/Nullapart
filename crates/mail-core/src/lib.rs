@@ -12,6 +12,7 @@ pub mod delivery;
 pub mod dmarc_aggregate;
 pub mod dmarc_ingress;
 pub mod dns_txt;
+pub mod domain_auth_telemetry;
 pub mod domain_security;
 pub mod handoff;
 pub mod idempotency;

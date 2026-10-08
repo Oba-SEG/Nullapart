@@ -61,6 +61,7 @@ GRANT SELECT, INSERT, UPDATE ON dmarc_report_authorizations TO nullapart_mailcor
 GRANT SELECT, INSERT, UPDATE ON bimi_domain_status TO nullapart_mailcore;
 GRANT SELECT, INSERT, UPDATE ON domain_source_classifications TO nullapart_mailcore;
 GRANT SELECT, INSERT, UPDATE ON domain_security_notifications TO nullapart_mailcore;
+GRANT SELECT, INSERT, UPDATE ON domain_auth_telemetry TO nullapart_mailcore;
 GRANT SELECT, INSERT, UPDATE ON admin_users, admin_sessions TO nullapart_mailcore;
 GRANT SELECT, INSERT, UPDATE ON admin_impersonations TO nullapart_mailcore;
 GRANT SELECT, INSERT ON admin_roles TO nullapart_mailcore;

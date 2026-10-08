@@ -25,6 +25,7 @@ use serde_json::json;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
+use crate::domain_auth_telemetry::{project_handoff_auth_telemetry, DomainAuthTelemetryInput};
 use crate::handoff::{
     deterministic_transaction_id, process_handoff, verify_request_auth, AfterQueueHandoffRequest,
     AfterQueueHandoffResponse, HandoffConfig, HandoffStatus, HANDOFF_PATH,
@@ -112,10 +113,10 @@ async fn handle_durable_handoff(
             envelope_sender: request.envelope_sender.address().to_string(),
             recipients: tenant.recipients,
         };
-        state
+        let outcome = state
             .pipeline
             .process_with_policy(
-                context,
+                context.clone(),
                 raw_mime.clone(),
                 ContentType::new("message/rfc822"),
                 move |scan| local_finding_policy(scan, policy_revision),
@@ -128,6 +129,22 @@ async fn handle_durable_handoff(
                     "mail security processing unavailable",
                 )
             })?;
+        if let Err(error) = project_handoff_auth_telemetry(
+            &state.pool,
+            DomainAuthTelemetryInput {
+                deployment_id: &state.config.deployment_id,
+                customer_id: &context.customer_id,
+                transaction_id: &transaction_id,
+                tenant_message_id: &context.tenant_message_id,
+                request: &request,
+                raw_mime: &raw_mime,
+                disposition: outcome.disposition,
+            },
+        )
+        .await
+        {
+            tracing::warn!(error = %error, "domain authentication telemetry projection skipped");
+        }
     }
 
     Ok((

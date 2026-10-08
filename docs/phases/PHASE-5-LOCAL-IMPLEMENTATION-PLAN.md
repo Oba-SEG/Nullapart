@@ -249,3 +249,87 @@ Known limitations:
   design.
 - Live gateway telemetry, DNS observer, authorization validator, BIMI validator
   and alert generation remain pending increments.
+
+## Increment 4 — live authentication telemetry aggregation
+
+Implemented:
+
+- Migration `024_domain_auth_telemetry.sql` adds `domain_auth_telemetry`, a
+  tenant-scoped, content-free projection of live gateway authentication
+  observations.
+  - Stores deployment/customer/domain/message identity, source IP, normalized
+    source/envelope/header domains, bounded SPF/DKIM/DMARC result labels,
+    scanner disposition and observation time.
+  - Does not store raw MIME, raw header text, `Authentication-Results` text,
+    DNS payloads, message bodies or failure-report content.
+  - Enforces deployment/customer RLS and grants the local Mail Core role
+    `SELECT`, `INSERT` and `UPDATE` only.
+- Rust module `crates/mail-core/src/domain_auth_telemetry.rs` adds
+  `project_handoff_auth_telemetry`.
+  - Runs after successful durable handoff scanning, using the server-derived
+    tenant/customer context and verified owned `From` domain.
+  - Skips unowned/malformed `From` domains and invalid source IPs without
+    failing accepted mail.
+  - Upserts by `(deployment_id, tenant_message_id, domain_id)` so retries are
+    idempotent.
+  - Uses explicit milter observations when present and falls back to trusted
+    `Authentication-Results` header parsing when the after-queue producer has
+    no structured auth fields; only normalized result labels are persisted.
+- `domain_security.rs` now unions DMARC aggregate reports with live telemetry
+  for volume/source inventory.
+  - Telemetry contributes message/source volume and DMARC result pass/fail.
+  - It deliberately does not count raw SPF/DKIM pass as SPF/DKIM alignment
+    until selector/domain alignment fields are implemented.
+  - It deliberately does not count scanner quarantine/reject disposition as
+    DMARC policy quarantine/reject.
+- `phase2_handoff.rs` wires telemetry projection into the durable handoff path.
+  Projection errors log a warning and preserve the accepted-mail safety
+  contract.
+- Integration tests now cover:
+  - idempotent telemetry recording;
+  - invalid/unowned-domain skips;
+  - domain-security projection of live telemetry source rows;
+  - raw SPF/DKIM pass not inflating DMARC alignment when DMARC fails;
+  - scanner quarantine not being reported as DMARC policy quarantine.
+
+Evidence:
+
+- 2026-10-08 local: `cargo fmt --all` — pass.
+- 2026-10-08 local:
+  `cargo test -p nullapart-mail-core domain_auth_telemetry --tests -- --nocapture`
+  — pass, 4 unit tests.
+- 2026-10-08 local:
+  `cargo clippy --workspace --all-targets -- -D warnings` — pass.
+- 2026-10-08 `.4`: migration `024_domain_auth_telemetry.sql` applied to the
+  local/dev PostgreSQL volume — pass.
+- 2026-10-08 `.4` via SSH tunnel:
+  `cargo test --test postgres_domain_auth_telemetry -- --ignored --nocapture`
+  — pass, 2/2 database tests.
+- 2026-10-08 `.4` via SSH tunnel:
+  `cargo test --test postgres_domain_security -- --ignored --nocapture`
+  — pass, 2/2 database tests, including live telemetry source projection.
+- 2026-10-08 `.4`: `docker compose --env-file .env.local -f compose.local.yml
+  build mailcore` — pass.
+- 2026-10-08 `.4`: `docker compose --env-file .env.local -f compose.local.yml
+  up -d --force-recreate mailcore` — pass.
+- 2026-10-08 `.4`: `GET /api/v1/trace/health` on
+  `192.168.8.4:58081` — pass, returned `status=healthy`.
+- 2026-10-08 `.4` live HMAC handoff smoke:
+  structured milter auth fields were `None`, MIME carried
+  `Authentication-Results`; Mail Core accepted the message and
+  `domain_auth_telemetry` stored `phase2.test`, `203.0.113.56`,
+  `spf=pass`, `dkim=fail`, `dmarc=pass` — pass.
+
+Known limitations:
+
+- SPF/DKIM alignment detail, DKIM selector/domain and ARC status are still
+  pending because the current after-queue handoff contract has only normalized
+  result labels. Until those fields are added, live telemetry does not claim
+  SPF/DKIM alignment.
+- The current projection is per-message and needs a retention/rollup policy
+  before production-scale retention.
+- Duplicate counting between aggregate reports and live telemetry is possible
+  in a local/dev window because aggregate reports and live gateway telemetry
+  are independent evidence sources.
+- DNS observer, external report-destination authorization validator, BIMI
+  validator and alert generation remain pending increments.
