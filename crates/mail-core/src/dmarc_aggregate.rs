@@ -27,6 +27,14 @@ const DEFAULT_MAX_XML_DEPTH: usize = 32;
 const DEFAULT_MAX_TEXT_BYTES: usize = 4096;
 const INFLATE_CHUNK_BYTES: usize = 8192;
 const INFLATE_PREALLOC_BYTES: usize = 64 * 1024;
+const ZIP_LOCAL_FILE_HEADER_SIGNATURE: &[u8; 4] = b"PK\x03\x04";
+const ZIP_CENTRAL_DIRECTORY_SIGNATURE: &[u8; 4] = b"PK\x01\x02";
+const ZIP_END_OF_CENTRAL_DIRECTORY_SIGNATURE: &[u8; 4] = b"PK\x05\x06";
+const ZIP_MAX_ENTRIES: usize = 8;
+const ZIP_METHOD_STORED: u16 = 0;
+const ZIP_METHOD_DEFLATED: u16 = 8;
+const ZIP_FLAG_ENCRYPTED: u16 = 0x0001;
+const ZIP_FLAG_DATA_DESCRIPTOR: u16 = 0x0008;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DmarcAggregateLimits {
@@ -601,7 +609,7 @@ fn decode_report_bytes(
     match resolved {
         DmarcReportCompression::Xml | DmarcReportCompression::Auto => Ok(input.to_vec()),
         DmarcReportCompression::Gzip => gunzip_bounded(input, limits.max_decompressed_bytes),
-        DmarcReportCompression::Zip => Err(DmarcAggregateError::UnsupportedCompression),
+        DmarcReportCompression::Zip => unzip_single_report_bounded(input, limits),
     }
 }
 
@@ -625,6 +633,148 @@ fn gunzip_bounded(input: &[u8], cap: usize) -> Result<Vec<u8>, DmarcAggregateErr
             Err(_) => return Err(DmarcAggregateError::MalformedCompression),
         }
     }
+}
+
+fn unzip_single_report_bounded(
+    input: &[u8],
+    limits: &DmarcAggregateLimits,
+) -> Result<Vec<u8>, DmarcAggregateError> {
+    let mut offset = 0usize;
+    let mut entries = 0usize;
+    let mut report: Option<Vec<u8>> = None;
+
+    while offset < input.len() {
+        if input[offset..].starts_with(ZIP_CENTRAL_DIRECTORY_SIGNATURE)
+            || input[offset..].starts_with(ZIP_END_OF_CENTRAL_DIRECTORY_SIGNATURE)
+        {
+            break;
+        }
+        if !input[offset..].starts_with(ZIP_LOCAL_FILE_HEADER_SIGNATURE) {
+            return Err(DmarcAggregateError::MalformedCompression);
+        }
+        entries += 1;
+        if entries > ZIP_MAX_ENTRIES {
+            return Err(DmarcAggregateError::CompressedSizeLimit);
+        }
+        if input.len().saturating_sub(offset) < 30 {
+            return Err(DmarcAggregateError::MalformedCompression);
+        }
+
+        let flags = read_le_u16(input, offset + 6)?;
+        let method = read_le_u16(input, offset + 8)?;
+        let compressed_size = read_le_u32(input, offset + 18)?;
+        let uncompressed_size = read_le_u32(input, offset + 22)?;
+        let name_len = usize::from(read_le_u16(input, offset + 26)?);
+        let extra_len = usize::from(read_le_u16(input, offset + 28)?);
+        if flags & (ZIP_FLAG_ENCRYPTED | ZIP_FLAG_DATA_DESCRIPTOR) != 0 {
+            return Err(DmarcAggregateError::UnsupportedCompression);
+        }
+        if compressed_size == u32::MAX || uncompressed_size == u32::MAX {
+            return Err(DmarcAggregateError::UnsupportedCompression);
+        }
+        let compressed_size = usize::try_from(compressed_size)
+            .map_err(|_| DmarcAggregateError::CompressedSizeLimit)?;
+        let uncompressed_size = usize::try_from(uncompressed_size)
+            .map_err(|_| DmarcAggregateError::DecompressedSizeLimit)?;
+        if compressed_size > limits.max_compressed_bytes {
+            return Err(DmarcAggregateError::CompressedSizeLimit);
+        }
+        if uncompressed_size > limits.max_decompressed_bytes {
+            return Err(DmarcAggregateError::DecompressedSizeLimit);
+        }
+
+        let name_start = offset + 30;
+        let data_start = name_start
+            .checked_add(name_len)
+            .and_then(|value| value.checked_add(extra_len))
+            .ok_or(DmarcAggregateError::MalformedCompression)?;
+        let data_end = data_start
+            .checked_add(compressed_size)
+            .ok_or(DmarcAggregateError::MalformedCompression)?;
+        if data_end > input.len() {
+            return Err(DmarcAggregateError::MalformedCompression);
+        }
+        let name = &input[name_start..name_start + name_len];
+        let is_directory = name.ends_with(b"/");
+        let is_report = is_safe_zip_report_name(name) && name_looks_like_xml_report(name);
+
+        if is_report && !is_directory {
+            if report.is_some() {
+                return Err(DmarcAggregateError::MalformedCompression);
+            }
+            let payload = match method {
+                ZIP_METHOD_STORED => input[data_start..data_end].to_vec(),
+                ZIP_METHOD_DEFLATED => inflate_zip_deflate_bounded(
+                    &input[data_start..data_end],
+                    limits.max_decompressed_bytes,
+                )?,
+                _ => return Err(DmarcAggregateError::UnsupportedCompression),
+            };
+            if payload.len() != uncompressed_size {
+                return Err(DmarcAggregateError::MalformedCompression);
+            }
+            report = Some(payload);
+        } else if !is_directory && !matches!(method, ZIP_METHOD_STORED | ZIP_METHOD_DEFLATED) {
+            return Err(DmarcAggregateError::UnsupportedCompression);
+        }
+
+        offset = data_end;
+    }
+
+    report.ok_or(DmarcAggregateError::MalformedCompression)
+}
+
+fn inflate_zip_deflate_bounded(input: &[u8], cap: usize) -> Result<Vec<u8>, DmarcAggregateError> {
+    let mut decoder = flate2::read::DeflateDecoder::new(input);
+    let mut out = Vec::with_capacity(cap.min(INFLATE_PREALLOC_BYTES));
+    let mut chunk = [0_u8; INFLATE_CHUNK_BYTES];
+    loop {
+        if out.len() >= cap {
+            let mut probe = [0_u8; 1];
+            return match decoder.read(&mut probe) {
+                Ok(0) => Ok(out),
+                Ok(_) => Err(DmarcAggregateError::DecompressedSizeLimit),
+                Err(_) => Err(DmarcAggregateError::MalformedCompression),
+            };
+        }
+        let want = chunk.len().min(cap - out.len());
+        match decoder.read(&mut chunk[..want]) {
+            Ok(0) => return Ok(out),
+            Ok(read) => out.extend_from_slice(&chunk[..read]),
+            Err(_) => return Err(DmarcAggregateError::MalformedCompression),
+        }
+    }
+}
+
+fn read_le_u16(input: &[u8], offset: usize) -> Result<u16, DmarcAggregateError> {
+    let bytes = input
+        .get(offset..offset + 2)
+        .ok_or(DmarcAggregateError::MalformedCompression)?;
+    Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
+}
+
+fn read_le_u32(input: &[u8], offset: usize) -> Result<u32, DmarcAggregateError> {
+    let bytes = input
+        .get(offset..offset + 4)
+        .ok_or(DmarcAggregateError::MalformedCompression)?;
+    Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+fn is_safe_zip_report_name(name: &[u8]) -> bool {
+    if name.is_empty()
+        || name.starts_with(b"/")
+        || name.iter().any(|byte| *byte == b'\\' || *byte < 0x20)
+    {
+        return false;
+    }
+    name.split(|byte| *byte == b'/')
+        .all(|segment| !segment.is_empty() && segment != b"." && segment != b"..")
+}
+
+fn name_looks_like_xml_report(name: &[u8]) -> bool {
+    std::str::from_utf8(name)
+        .map(|value| value.to_ascii_lowercase().ends_with(".xml"))
+        .unwrap_or(false)
 }
 
 fn reject_forbidden_xml_constructs(xml: &[u8]) -> Result<(), DmarcAggregateError> {
@@ -1228,14 +1378,87 @@ mod tests {
         );
     }
 
+    fn zip_entry(name: &str, method: u16, payload: &[u8]) -> Vec<u8> {
+        let compressed = match method {
+            ZIP_METHOD_STORED => payload.to_vec(),
+            ZIP_METHOD_DEFLATED => {
+                let mut encoder =
+                    flate2::write::DeflateEncoder::new(Vec::new(), Compression::default());
+                std::io::Write::write_all(&mut encoder, payload).expect("write deflate");
+                encoder.finish().expect("finish deflate")
+            },
+            _ => payload.to_vec(),
+        };
+        let mut out = Vec::new();
+        out.extend_from_slice(ZIP_LOCAL_FILE_HEADER_SIGNATURE);
+        out.extend_from_slice(&20_u16.to_le_bytes()); // version needed
+        out.extend_from_slice(&0_u16.to_le_bytes()); // flags
+        out.extend_from_slice(&method.to_le_bytes());
+        out.extend_from_slice(&0_u16.to_le_bytes()); // mod time
+        out.extend_from_slice(&0_u16.to_le_bytes()); // mod date
+        out.extend_from_slice(&0_u32.to_le_bytes()); // crc intentionally ignored
+        out.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        out.extend_from_slice(&0_u16.to_le_bytes()); // extra length
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(&compressed);
+        out
+    }
+
     #[test]
-    fn zip_input_is_explicitly_unsupported_until_safe_archive_handling_is_added() {
+    fn parses_zip_report_under_the_same_limits() {
+        let archive = zip_entry("reports/report.xml", ZIP_METHOD_DEFLATED, minimal_report());
+        let report = parse_dmarc_aggregate_report(
+            &archive,
+            DmarcReportCompression::Auto,
+            &DmarcAggregateLimits::default(),
+        )
+        .expect("zip report");
+        assert_eq!(report.policy_domain, "example.com");
+    }
+
+    #[test]
+    fn zip_report_rejects_unsafe_or_ambiguous_archives() {
+        let mut archive = zip_entry("one.xml", ZIP_METHOD_STORED, minimal_report());
+        archive.extend(zip_entry("two.xml", ZIP_METHOD_STORED, minimal_report()));
+        let error = parse_dmarc_aggregate_report(
+            &archive,
+            DmarcReportCompression::Zip,
+            &DmarcAggregateLimits::default(),
+        )
+        .expect_err("ambiguous archive rejected");
+        assert_eq!(error, DmarcAggregateError::MalformedCompression);
+
+        let error = parse_dmarc_aggregate_report(
+            &zip_entry("../report.xml", ZIP_METHOD_STORED, minimal_report()),
+            DmarcReportCompression::Zip,
+            &DmarcAggregateLimits::default(),
+        )
+        .expect_err("unsafe name rejected");
+        assert_eq!(error, DmarcAggregateError::MalformedCompression);
+    }
+
+    #[test]
+    fn zip_report_rejects_expansion_past_limit() {
+        let archive = zip_entry("report.xml", ZIP_METHOD_DEFLATED, minimal_report());
+        let limits = DmarcAggregateLimits {
+            max_decompressed_bytes: 32,
+            ..DmarcAggregateLimits::default()
+        };
+        let error = parse_dmarc_aggregate_report(&archive, DmarcReportCompression::Zip, &limits)
+            .expect_err("zip expansion rejected");
+        assert_eq!(error, DmarcAggregateError::DecompressedSizeLimit);
+    }
+
+    #[test]
+    fn malformed_zip_is_quarantinable_parser_error() {
         let error = parse_dmarc_aggregate_report(
             b"PK\x03\x04fake",
             DmarcReportCompression::Auto,
             &DmarcAggregateLimits::default(),
         )
-        .expect_err("zip rejected");
-        assert_eq!(error, DmarcAggregateError::UnsupportedCompression);
+        .expect_err("malformed zip rejected");
+        assert_eq!(error, DmarcAggregateError::MalformedCompression);
     }
 }

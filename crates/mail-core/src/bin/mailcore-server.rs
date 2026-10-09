@@ -118,6 +118,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         handoff_config,
         pool.clone(),
         pipeline,
+        artifact_store.clone(),
     ));
     let reinjection_worker = QuarantineReinjectionWorker::new(
         pool.clone(),

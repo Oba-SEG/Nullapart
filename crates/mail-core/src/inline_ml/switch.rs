@@ -14,6 +14,7 @@ use nullapart_policy::FeatureEvaluator;
 use sqlx::PgPool;
 use tracing::warn;
 
+#[derive(Clone)]
 pub struct FeatureSwitchResolver {
     pool: PgPool,
 }

@@ -1,6 +1,6 @@
 //! Local PostgreSQL coverage for Phase 5 live authentication telemetry.
 //!
-//! Requires PostgreSQL migrated through `024_domain_auth_telemetry.sql` with
+//! Requires PostgreSQL migrated through `027_domain_auth_telemetry_details.sql` with
 //! `NULLAPART_TEST_DATABASE_URL` pointing at it. Run explicitly with:
 //! `cargo test --test postgres_domain_auth_telemetry -- --ignored`.
 
@@ -144,7 +144,11 @@ async fn handoff_auth_telemetry_is_recorded_idempotently_for_owned_from_domain()
         seed_domain(&pool, &suffix).await;
     let from_domain = format!("auth-{suffix}.example.test");
     let request = handoff_request(&from_domain, "203.0.113.99");
-    let mime = format!("From: Sender <sender@{from_domain}>\r\nSubject: hi\r\n\r\nbody");
+    let mime = format!(
+        "Authentication-Results: mx.local.test; spf=pass smtp.mailfrom=bounces.{from_domain}; \
+         dkim=pass header.d=mail.{from_domain} header.s=s1; dmarc=pass header.from={from_domain}; \
+         arc=pass\r\nFrom: Sender <sender@{from_domain}>\r\nSubject: hi\r\n\r\nbody"
+    );
 
     let first = project_handoff_auth_telemetry(
         &pool,
@@ -179,7 +183,11 @@ async fn handoff_auth_telemetry_is_recorded_idempotently_for_owned_from_domain()
 
     let row = sqlx::query(
         "SELECT count(*)::bigint AS count, max(disposition) AS disposition, \
-                max(host(source_ip)) AS source_ip, max(dmarc_result) AS dmarc_result \
+                max(host(source_ip)) AS source_ip, max(dmarc_result) AS dmarc_result, \
+                max(spf_aligned_result) AS spf_aligned_result, \
+                max(dkim_aligned_result) AS dkim_aligned_result, \
+                max(dkim_domain) AS dkim_domain, max(dkim_selector) AS dkim_selector, \
+                max(arc_result) AS arc_result \
          FROM domain_auth_telemetry \
          WHERE deployment_id = $1 AND customer_id = $2 AND domain_id = $3",
     )
@@ -193,6 +201,14 @@ async fn handoff_auth_telemetry_is_recorded_idempotently_for_owned_from_domain()
     assert_eq!(row.get::<String, _>("disposition"), "quarantine");
     assert_eq!(row.get::<String, _>("source_ip"), "203.0.113.99");
     assert_eq!(row.get::<String, _>("dmarc_result"), "pass");
+    assert_eq!(row.get::<String, _>("spf_aligned_result"), "pass");
+    assert_eq!(row.get::<String, _>("dkim_aligned_result"), "pass");
+    assert_eq!(
+        row.get::<String, _>("dkim_domain"),
+        format!("mail.{from_domain}")
+    );
+    assert_eq!(row.get::<String, _>("dkim_selector"), "s1");
+    assert_eq!(row.get::<String, _>("arc_result"), "pass");
 }
 
 #[tokio::test]

@@ -25,6 +25,8 @@ use serde_json::json;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
+use crate::artifact_store::FilesystemArtifactStore;
+use crate::dmarc_mailbox_ingress::ingest_dmarc_report_mailbox_message;
 use crate::domain_auth_telemetry::{project_handoff_auth_telemetry, DomainAuthTelemetryInput};
 use crate::handoff::{
     deterministic_transaction_id, process_handoff, verify_request_auth, AfterQueueHandoffRequest,
@@ -38,14 +40,21 @@ pub struct DurableHandoffState {
     config: HandoffConfig,
     pool: PgPool,
     pipeline: Arc<DurableScannerPipeline>,
+    artifact_store: FilesystemArtifactStore,
 }
 
 impl DurableHandoffState {
-    pub fn new(config: HandoffConfig, pool: PgPool, pipeline: DurableScannerPipeline) -> Self {
+    pub fn new(
+        config: HandoffConfig,
+        pool: PgPool,
+        pipeline: DurableScannerPipeline,
+        artifact_store: FilesystemArtifactStore,
+    ) -> Self {
         Self {
             config,
             pool,
             pipeline: Arc::new(pipeline),
+            artifact_store,
         }
     }
 }
@@ -144,6 +153,28 @@ async fn handle_durable_handoff(
         .await
         {
             tracing::warn!(error = %error, "domain authentication telemetry projection skipped");
+        }
+        match ingest_dmarc_report_mailbox_message(
+            &state.pool,
+            &state.artifact_store,
+            &state.config.deployment_id,
+            &context.customer_id,
+            &context.tenant_message_id,
+            &raw_mime,
+        )
+        .await
+        {
+            Ok(outcome) if outcome.queued > 0 || outcome.skipped_oversize > 0 => {
+                tracing::info!(
+                    queued = outcome.queued,
+                    skipped_oversize = outcome.skipped_oversize,
+                    "dmarc report mailbox parts inspected"
+                );
+            },
+            Ok(_) => {},
+            Err(error) => {
+                tracing::warn!(error = %error, "dmarc report mailbox ingestion skipped");
+            },
         }
     }
 

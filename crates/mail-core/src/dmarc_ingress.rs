@@ -11,6 +11,7 @@ use std::time::Duration;
 use chrono::Utc;
 use nullapart_mail_contracts::artifact::ArtifactId;
 use nullapart_mail_contracts::transaction::{CustomerId, DeploymentId};
+use nullapart_mail_contracts::FeatureId;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
@@ -22,9 +23,12 @@ use crate::dmarc_aggregate::{
     DmarcAggregateIngestError, DmarcAggregateIngestStatus, DmarcAggregateLimits,
     DmarcAggregateSource, DmarcReportCompression, PostgresDmarcAggregateIngestor,
 };
+use crate::inline_ml::switch::FeatureSwitchResolver;
 
 const WORKER_ACTOR: &str = "dmarc-aggregate-ingress-worker";
 const GRANT_TTL_SECONDS: i64 = 60;
+const MAX_REPORT_CLASSIFICATION_BYTES: usize = 512 * 1024;
+pub const DMARC_FAILURE_REPORTS_FEATURE_ID: &str = "dmarc_failure_reports";
 
 #[derive(Debug, Clone)]
 pub struct DmarcReportIngressConfig {
@@ -89,6 +93,7 @@ pub struct DmarcReportIngressWorker {
     pool: PgPool,
     store: FilesystemArtifactStore,
     ingestor: PostgresDmarcAggregateIngestor,
+    switches: FeatureSwitchResolver,
     deployment_id: DeploymentId,
     config: DmarcReportIngressConfig,
 }
@@ -102,6 +107,7 @@ impl DmarcReportIngressWorker {
     ) -> Self {
         Self {
             ingestor: PostgresDmarcAggregateIngestor::new(pool.clone(), deployment_id.clone()),
+            switches: FeatureSwitchResolver::new(pool.clone()),
             pool,
             store,
             deployment_id,
@@ -163,6 +169,29 @@ impl DmarcReportIngressWorker {
                 return self.record_failure(job, "ARTIFACT_UNAVAILABLE", None).await;
             },
         };
+        if is_likely_dmarc_failure_report(&authorized.bytes) {
+            let feature_enabled = self
+                .switches
+                .is_enabled(
+                    &FeatureId::new(DMARC_FAILURE_REPORTS_FEATURE_ID),
+                    &self.deployment_id,
+                    &CustomerId::new(&job.source_customer_id),
+                )
+                .await;
+            let reason_code = if feature_enabled {
+                "FAILURE_REPORT_HANDLER_UNAVAILABLE"
+            } else {
+                "FAILURE_REPORT_FEATURE_DISABLED"
+            };
+            return self
+                .record_failure_report_quarantine(
+                    job,
+                    &authorized.hash.value,
+                    authorized.bytes.len() as u64,
+                    reason_code,
+                )
+                .await;
+        }
         let source = DmarcAggregateSource {
             artifact_id: Some(job.source_artifact_id),
             artifact_hash: Some(authorized.hash.value.clone()),
@@ -349,6 +378,67 @@ impl DmarcReportIngressWorker {
             })
         }
     }
+
+    async fn record_failure_report_quarantine(
+        &self,
+        job: ClaimedJob,
+        artifact_hash: &str,
+        compressed_size_bytes: u64,
+        reason_code: &'static str,
+    ) -> Result<DmarcReportIngressRunOutcome, DmarcReportIngressError> {
+        let detail = match reason_code {
+            "FAILURE_REPORT_FEATURE_DISABLED" => {
+                "DMARC failure report detected. Failure-report content handling is disabled for this customer."
+            },
+            _ => {
+                "DMARC failure report detected, but the restricted failure-report handler is not available."
+            },
+        };
+        let mut transaction =
+            self.pool.begin().await.map_err(|_| {
+                DmarcReportIngressError::Persistence("begin failure report quarantine")
+            })?;
+        set_customer_scope(
+            &mut transaction,
+            &self.deployment_id,
+            &CustomerId::new(&job.source_customer_id),
+        )
+        .await?;
+        sqlx::query(
+            "INSERT INTO dmarc_failure_report_quarantine (\
+                 deployment_id, customer_id, source_artifact_id, artifact_hash, \
+                 compressed_size_bytes, reason_code, detail\
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7) \
+             ON CONFLICT (deployment_id, source_artifact_id, reason_code) DO NOTHING",
+        )
+        .bind(&self.deployment_id.0)
+        .bind(&job.source_customer_id)
+        .bind(job.source_artifact_id)
+        .bind(artifact_hash.chars().take(128).collect::<String>())
+        .bind(i64::try_from(compressed_size_bytes).unwrap_or(i64::MAX))
+        .bind(reason_code)
+        .bind(detail)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| DmarcReportIngressError::Persistence("insert failure report quarantine"))?;
+        sqlx::query(
+            "UPDATE dmarc_report_ingress_jobs \
+             SET status = 'quarantined', completed_at = now(), updated_at = now(), \
+                 last_error_code = $2, last_error_detail = $3 \
+             WHERE id = $1 AND deployment_id = $4",
+        )
+        .bind(job.id)
+        .bind(reason_code)
+        .bind(detail)
+        .bind(&self.deployment_id.0)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| DmarcReportIngressError::Persistence("update failure report job"))?;
+        transaction.commit().await.map_err(|_| {
+            DmarcReportIngressError::Persistence("commit failure report quarantine")
+        })?;
+        Ok(DmarcReportIngressRunOutcome::Quarantined { job_id: job.id })
+    }
 }
 
 pub async fn enqueue_dmarc_report_artifact(
@@ -400,6 +490,140 @@ async fn set_deployment_scope(
     Ok(())
 }
 
+async fn set_customer_scope(
+    transaction: &mut Transaction<'_, Postgres>,
+    deployment_id: &DeploymentId,
+    customer_id: &CustomerId,
+) -> Result<(), DmarcReportIngressError> {
+    sqlx::query(
+        "SELECT set_config('app.current_deployment_id', $1, true), \
+                set_config('app.current_customer_id', $2, true)",
+    )
+    .bind(&deployment_id.0)
+    .bind(&customer_id.0)
+    .execute(&mut **transaction)
+    .await
+    .map_err(|_| DmarcReportIngressError::Persistence("set customer scope"))?;
+    Ok(())
+}
+
 fn truncate_error_detail(value: &str) -> String {
     value.chars().take(512).collect()
+}
+
+fn is_likely_dmarc_failure_report(bytes: &[u8]) -> bool {
+    let sample =
+        String::from_utf8_lossy(&bytes[..bytes.len().min(MAX_REPORT_CLASSIFICATION_BYTES)]);
+    let unfolded = unfold_header_lines(&sample);
+    let compact = unfolded
+        .iter()
+        .flat_map(|line| line.chars())
+        .filter(|ch| !ch.is_ascii_whitespace())
+        .collect::<String>();
+
+    let has_feedback_report_content_type = unfolded.iter().any(|line| {
+        let Some(value) = header_value(line, "content-type") else {
+            return false;
+        };
+        value.contains("message/feedback-report")
+            || (value.contains("multipart/report")
+                && value.contains("report-type")
+                && value.contains("feedback-report"))
+    }) || compact.contains("message/feedback-report")
+        || compact.contains("report-type=feedback-report");
+
+    let has_auth_failure_feedback = unfolded.iter().any(|line| {
+        let Some(value) = header_value(line, "feedback-type") else {
+            return false;
+        };
+        value.contains("auth-failure") || value.contains("authentication-failure")
+    });
+    let has_dmarc_failure_signal = unfolded.iter().any(|line| {
+        header_value(line, "reported-domain").is_some()
+            || header_value(line, "original-mail-from").is_some()
+            || header_value(line, "original-rcpt-to").is_some()
+            || header_value(line, "auth-failure").is_some_and(|value| value.contains("dmarc"))
+    }) || compact.contains("feedback-type:auth-failure")
+        || compact.contains("feedback-type:authentication-failure")
+        || compact.contains("auth-failure:dmarc")
+        || compact.contains("reported-domain:");
+
+    let looks_like_mime_report = unfolded.iter().any(|line| {
+        let Some(value) = header_value(line, "content-type") else {
+            return false;
+        };
+        value.contains("multipart/report") || value.contains("message/feedback-report")
+    });
+
+    (has_feedback_report_content_type && (has_auth_failure_feedback || has_dmarc_failure_signal))
+        || (looks_like_mime_report && has_auth_failure_feedback)
+        || (has_feedback_report_content_type && looks_like_mime_report)
+}
+
+fn unfold_header_lines(input: &str) -> Vec<String> {
+    let normalized = input.replace("\r\n", "\n").replace('\r', "\n");
+    let mut lines: Vec<String> = Vec::new();
+    for raw_line in normalized.lines() {
+        if raw_line.is_empty() {
+            continue;
+        }
+        if raw_line.starts_with(' ') || raw_line.starts_with('\t') {
+            if let Some(previous) = lines.last_mut() {
+                previous.push(' ');
+                previous.push_str(raw_line.trim());
+            }
+            continue;
+        }
+        lines.push(raw_line.trim().to_ascii_lowercase());
+    }
+    lines
+}
+
+fn header_value<'a>(line: &'a str, name: &str) -> Option<&'a str> {
+    line.strip_prefix(name)
+        .and_then(|remaining| remaining.strip_prefix(':'))
+        .map(str::trim)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_likely_dmarc_failure_report;
+
+    #[test]
+    fn failure_report_detection_requires_feedback_auth_failure_shape() {
+        let failure = b"Content-Type: multipart/report; report-type=feedback-report\r\n\
+            \r\nContent-Type: message/feedback-report\r\nFeedback-Type: auth-failure\r\n\
+            Reported-Domain: example.test\r\n";
+        assert!(is_likely_dmarc_failure_report(failure));
+
+        let aggregate = br#"<feedback><report_metadata><org_name>Reporter</org_name></report_metadata></feedback>"#;
+        assert!(!is_likely_dmarc_failure_report(aggregate));
+
+        let restricted_feedback_report =
+            b"Content-Type: message/feedback-report\r\nFeedback-Type: abuse\r\n";
+        assert!(is_likely_dmarc_failure_report(restricted_feedback_report));
+
+        let unrelated = b"Feedback-Type: abuse\r\n";
+        assert!(!is_likely_dmarc_failure_report(unrelated));
+    }
+
+    #[test]
+    fn failure_report_detection_unfolds_mime_headers() {
+        let folded = b"Content-Type: multipart/report;\r\n\
+            \treport-type = feedback-report\r\n\
+            \r\nContent-Type: message/feedback-report\r\nFeedback-Type:\r\n\
+            \tauth-failure\r\nAuth-Failure: dmarc\r\n";
+        assert!(is_likely_dmarc_failure_report(folded));
+    }
+
+    #[test]
+    fn failure_report_detection_handles_late_feedback_part() {
+        let mut report =
+            b"Content-Type: multipart/report; report-type=feedback-report\r\n\r\n".to_vec();
+        report.extend(std::iter::repeat_n(b'a', 96 * 1024));
+        report.extend(
+            b"\r\nContent-Type: message/feedback-report\r\nFeedback-Type: auth-failure\r\n".iter(),
+        );
+        assert!(is_likely_dmarc_failure_report(&report));
+    }
 }

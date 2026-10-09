@@ -9,15 +9,16 @@ use nullapart_mail_contracts::artifact::{
     Artifact, ArtifactHash, ArtifactId, ContentType, HashAlgorithm, RetentionClass, StorageBackend,
     StorageLocation,
 };
-use nullapart_mail_contracts::transaction::{CustomerId, DeploymentId};
+use nullapart_mail_contracts::transaction::{CustomerId, DeploymentId, TenantMessageId};
 use nullapart_mail_core::artifact_store::{FilesystemArtifactRuntime, FilesystemArtifactStore};
 use nullapart_mail_core::dmarc_ingress::{
     enqueue_dmarc_report_artifact, DmarcReportIngressConfig, DmarcReportIngressRunOutcome,
     DmarcReportIngressWorker,
 };
+use nullapart_mail_core::dmarc_mailbox_ingress::ingest_dmarc_report_mailbox_message;
 use sha2::Digest;
 use sqlx::postgres::PgPoolOptions;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 async fn connect() -> PgPool {
@@ -193,7 +194,7 @@ async fn ingress_worker_processes_artifact_once_and_marks_replay_duplicate() {
 
     let worker = DmarcReportIngressWorker::new(
         pool.clone(),
-        store,
+        store.clone(),
         deployment_id.clone(),
         DmarcReportIngressConfig::default(),
     );
@@ -301,6 +302,225 @@ async fn ingress_worker_dead_letters_unreadable_artifacts_without_starving_queue
             .await
             .expect("status must be readable");
     assert_eq!(status, "dead_lettered");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+#[ignore = "requires migrated local PostgreSQL through 026_dmarc_failure_report_controls.sql"]
+async fn ingress_worker_quarantines_failure_reports_without_parsing_restricted_content() {
+    let pool = connect().await;
+    let suffix = Uuid::new_v4().simple().to_string();
+    let (deployment_id, customer_id, _policy_domain) = seed_verified_domain(&pool, &suffix).await;
+    let root = std::env::temp_dir().join(format!("nullapart-dmarc-failure-ingress-{suffix}"));
+    std::fs::create_dir_all(&root).expect("artifact root must exist");
+    let store = FilesystemArtifactStore::try_new(root.clone(), FilesystemArtifactRuntime::Test)
+        .await
+        .expect("filesystem artifact store must start");
+    let failure_report = b"Content-Type: multipart/report; report-type=feedback-report\r\n\
+        \r\nContent-Type: message/feedback-report\r\nFeedback-Type: auth-failure\r\n\
+        Reported-Domain: example.test\r\nOriginal-Mail-From: sender@example.test\r\n"
+        .to_vec();
+    let artifact_id =
+        store_report_artifact(&pool, &store, &deployment_id, &customer_id, failure_report).await;
+    let job = enqueue_dmarc_report_artifact(
+        &pool,
+        &deployment_id,
+        &customer_id,
+        &artifact_id,
+        &format!("failure-{suffix}"),
+    )
+    .await
+    .expect("failure report job must enqueue");
+
+    let worker = DmarcReportIngressWorker::new(
+        pool.clone(),
+        store.clone(),
+        deployment_id.clone(),
+        DmarcReportIngressConfig::default(),
+    );
+
+    let outcome = worker.run_once().await.expect("worker must quarantine");
+    assert_eq!(
+        outcome,
+        DmarcReportIngressRunOutcome::Quarantined { job_id: job }
+    );
+
+    let job_row =
+        sqlx::query("SELECT status, last_error_code FROM dmarc_report_ingress_jobs WHERE id = $1")
+            .bind(job)
+            .fetch_one(&pool)
+            .await
+            .expect("job status must be readable");
+    assert_eq!(job_row.get::<String, _>("status"), "quarantined");
+    assert_eq!(
+        job_row.get::<String, _>("last_error_code"),
+        "FAILURE_REPORT_FEATURE_DISABLED"
+    );
+
+    let quarantine_row = sqlx::query(
+        "SELECT reason_code, detail FROM dmarc_failure_report_quarantine \
+         WHERE deployment_id = $1 AND customer_id = $2 AND source_artifact_id = $3",
+    )
+    .bind(&deployment_id.0)
+    .bind(&customer_id.0)
+    .bind(artifact_id.0)
+    .fetch_one(&pool)
+    .await
+    .expect("failure report quarantine row must be written");
+    assert_eq!(
+        quarantine_row.get::<String, _>("reason_code"),
+        "FAILURE_REPORT_FEATURE_DISABLED"
+    );
+    assert!(
+        !quarantine_row
+            .get::<String, _>("detail")
+            .contains("Original-Mail-From"),
+        "quarantine detail must not store report content"
+    );
+
+    let reports: i64 = sqlx::query_scalar(
+        "SELECT count(*)::bigint FROM dmarc_aggregate_reports WHERE deployment_id = $1",
+    )
+    .bind(&deployment_id.0)
+    .fetch_one(&pool)
+    .await
+    .expect("aggregate report count must be readable");
+    assert_eq!(
+        reports, 0,
+        "failure reports must not be handed to aggregate ingestion"
+    );
+
+    let mut override_transaction = pool.begin().await.expect("override transaction");
+    sqlx::query(
+        "SELECT set_config('app.current_deployment_id', $1, true), \
+                set_config('app.current_customer_id', $2, true)",
+    )
+    .bind(&deployment_id.0)
+    .bind(&customer_id.0)
+    .execute(&mut *override_transaction)
+    .await
+    .expect("override RLS scope");
+    sqlx::query(
+        "INSERT INTO feature_overrides \
+            (feature_id, scope, scope_id, value, owner, reason, revision) \
+         VALUES ('dmarc_failure_reports', 'tenant', $1, 'enabled', \
+                 'integration-test', 'exercise missing failure report handler', 1)",
+    )
+    .bind(&customer_id.0)
+    .execute(&mut *override_transaction)
+    .await
+    .expect("tenant feature override must insert");
+    override_transaction
+        .commit()
+        .await
+        .expect("override transaction must commit");
+
+    let folded_failure_report = b"Content-Type: multipart/report;\r\n\
+        \treport-type = feedback-report\r\n\r\nContent-Type: message/feedback-report\r\n\
+        Feedback-Type:\r\n\tauth-failure\r\nAuth-Failure: dmarc\r\n"
+        .to_vec();
+    let enabled_artifact = store_report_artifact(
+        &pool,
+        &store,
+        &deployment_id,
+        &customer_id,
+        folded_failure_report,
+    )
+    .await;
+    let enabled_job = enqueue_dmarc_report_artifact(
+        &pool,
+        &deployment_id,
+        &customer_id,
+        &enabled_artifact,
+        &format!("failure-enabled-{suffix}"),
+    )
+    .await
+    .expect("enabled failure report job must enqueue");
+
+    let enabled_outcome = worker
+        .run_once()
+        .await
+        .expect("worker must quarantine enabled failure report");
+    assert_eq!(
+        enabled_outcome,
+        DmarcReportIngressRunOutcome::Quarantined {
+            job_id: enabled_job
+        }
+    );
+    let enabled_reason: String = sqlx::query_scalar(
+        "SELECT reason_code FROM dmarc_failure_report_quarantine \
+         WHERE deployment_id = $1 AND customer_id = $2 AND source_artifact_id = $3",
+    )
+    .bind(&deployment_id.0)
+    .bind(&customer_id.0)
+    .bind(enabled_artifact.0)
+    .fetch_one(&pool)
+    .await
+    .expect("enabled failure report quarantine row must be written");
+    assert_eq!(enabled_reason, "FAILURE_REPORT_HANDLER_UNAVAILABLE");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+#[ignore = "requires migrated local PostgreSQL through 026_dmarc_failure_report_controls.sql"]
+async fn mailbox_hook_stores_report_attachment_and_enqueues_ingress_job() {
+    let pool = connect().await;
+    let suffix = Uuid::new_v4().simple().to_string();
+    let (deployment_id, customer_id, _policy_domain) = seed_verified_domain(&pool, &suffix).await;
+    let root = std::env::temp_dir().join(format!("nullapart-dmarc-mailbox-{suffix}"));
+    std::fs::create_dir_all(&root).expect("artifact root must exist");
+    let store = FilesystemArtifactStore::try_new(root.clone(), FilesystemArtifactRuntime::Test)
+        .await
+        .expect("filesystem artifact store must start");
+    let tenant_message_id = TenantMessageId(Uuid::new_v4());
+    let report = aggregate_xml(
+        &format!("auth-{suffix}.example.test"),
+        &format!("mailbox-{suffix}"),
+    );
+    let raw_mime = format!(
+        "Content-Type: multipart/mixed; boundary=x\r\n\r\n\
+         --x\r\nContent-Type: text/plain\r\n\r\nReport attached\r\n\
+         --x\r\nContent-Type: application/xml\r\nContent-Disposition: attachment; filename=\"report.xml\"\r\n\r\n{}\r\n\
+         --x--\r\n",
+        String::from_utf8_lossy(&report)
+    );
+
+    let outcome = ingest_dmarc_report_mailbox_message(
+        &pool,
+        &store,
+        &deployment_id,
+        &customer_id,
+        &tenant_message_id,
+        raw_mime.as_bytes(),
+    )
+    .await
+    .expect("mailbox hook must enqueue report");
+    assert_eq!(outcome.queued, 1);
+    assert_eq!(outcome.skipped_oversize, 0);
+
+    let queued: i64 = sqlx::query_scalar(
+        "SELECT count(*)::bigint FROM dmarc_report_ingress_jobs \
+         WHERE deployment_id = $1 AND source_customer_id = $2",
+    )
+    .bind(&deployment_id.0)
+    .bind(&customer_id.0)
+    .fetch_one(&pool)
+    .await
+    .expect("job count must be readable");
+    assert_eq!(queued, 1);
+
+    let artifacts: i64 = sqlx::query_scalar(
+        "SELECT count(*)::bigint FROM artifacts \
+         WHERE deployment_id = $1 AND customer_id = $2 AND content_type = 'application/xml'",
+    )
+    .bind(&deployment_id.0)
+    .bind(&customer_id.0)
+    .fetch_one(&pool)
+    .await
+    .expect("artifact count must be readable");
+    assert_eq!(artifacts, 1);
 
     let _ = std::fs::remove_dir_all(root);
 }

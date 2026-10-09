@@ -723,7 +723,8 @@ async fn load_sources(
              SELECT telemetry.domain_id, host(telemetry.source_ip) AS source_ip, \
                     COALESCE(NULLIF(telemetry.source_domain, ''), telemetry.header_from_domain) AS source_domain, \
                     host(telemetry.source_ip) AS source_key, 1::bigint AS message_count, \
-                    NULL::text AS dkim_aligned_result, NULL::text AS spf_aligned_result, \
+                    telemetry.dkim_aligned_result AS dkim_aligned_result, \
+                    telemetry.spf_aligned_result AS spf_aligned_result, \
                     telemetry.dmarc_result AS dmarc_aligned_result \
              FROM domain_auth_telemetry AS telemetry \
              WHERE telemetry.observed_at >= now() - interval '30 days' \

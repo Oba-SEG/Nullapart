@@ -23,10 +23,12 @@ increment 9: notifications, security battery, local live evidence, and report
 
 Out of scope for increment 1:
 
-- no mailbox polling daemon;
+- no external IMAP mailbox polling daemon; local SMTP/handoff MIME report
+  detection is implemented in increment 3;
 - no new public endpoint;
 - no autonomous DNS modification;
-- no failure-report (`ruf`) content handling;
+- no failure-report (`ruf`) content parsing/rendering/training; failure reports
+  are restricted-content and are guarded by metadata-only quarantine controls;
 - no raw XML UI;
 - no BIMI SVG rendering.
 
@@ -41,8 +43,8 @@ Implemented:
   - `dmarc_report_quarantine` for bounded malformed/unmapped report metadata;
   - fail-closed RLS policies and guarded grants for `nullapart_mailcore`.
 - Rust module `crates/mail-core/src/dmarc_aggregate.rs` adds:
-  - direct XML and gzip input handling under compressed/decompressed limits;
-  - explicit zip rejection until safe archive parsing is added;
+  - direct XML, gzip and single-report ZIP input handling under
+    compressed/decompressed limits;
   - pre-parse rejection for `DOCTYPE`/`ENTITY`, plus event-parser rejection
     for DTD/general-reference/CDATA constructs;
   - bounded text, XML depth, and record count;
@@ -89,8 +91,6 @@ Evidence:
 
 Known limitations:
 
-- ZIP aggregate reports are explicitly unsupported until a bounded archive
-  parser is added. Gzip is implemented.
 - At the time of increment 1, only parser and DB persistence existed; the
   later sections below record the completed ingress worker, API, UI, observer,
   BIMI and notification increments.
@@ -205,8 +205,23 @@ Implemented:
     and the existing parser/resource limits.
   - Marks jobs terminally as `succeeded`, `duplicate`, `quarantined` or
     `dead_lettered`; missing/unreadable artifacts cannot starve later jobs.
-  - Provides `enqueue_dmarc_report_artifact` for the later mailbox poller to
-    create jobs idempotently after it stores each report artifact.
+  - Provides `enqueue_dmarc_report_artifact` for the mailbox/MIME ingestion
+    hook to create jobs idempotently after it stores each report artifact.
+- Rust module `crates/mail-core/src/dmarc_mailbox_ingress.rs` adds the local
+  SMTP/handoff report-ingress hook.
+  - It parses accepted MIME from the already authenticated durable handoff path,
+    detects bounded aggregate/failure report parts and report-like attachments,
+    stores report bytes as customer-scoped ArtifactStore artifacts and creates
+    durable ingress jobs through `enqueue_dmarc_report_artifact`.
+  - It caps report parts at 16 and each part at 2 MiB, never renders HTML/SVG,
+    marks report artifacts `scanner_eligible=false`, and stores no raw report
+    body in the control-plane read models.
+  - The artifact metadata insert sets transaction-local deployment/customer RLS
+    context before writing `artifacts`; report bytes remain only in
+    ArtifactStore.
+- `phase2_handoff.rs` wires the hook after scanning and telemetry projection.
+  Report-part storage/enqueue failures are warning-only and do not turn an
+  otherwise accepted message into mail loss.
 - `mailcore-server` now starts the ingress worker by default. It can be
   disabled in local/dev with `NULLAPART_DMARC_INGRESS_WORKER_ENABLED=false`.
 - The runtime-role provisioning script now grants the worker table.
@@ -237,12 +252,43 @@ Evidence:
 - 2026-10-07 `.4` via SSH tunnel:
   `cargo test --test postgres_dmarc_ingress -- --ignored --nocapture`
   — pass, 2/2 database tests.
+- 2026-10-09 local: `cargo test -p nullapart-mail-core dmarc_ --tests --
+  --nocapture` — pass, including MIME report-part detection.
+- 2026-10-09 local: `cargo clippy --workspace --all-targets -- -D warnings`
+  and `cargo test --workspace` — pass after the mailbox/MIME hook RLS fix.
+- 2026-10-09 local frontend: `pnpm check-all` from `frontend/` — pass; the
+  local shell still warns that Node 22 is below the declared Node 24 engine.
+- 2026-10-09 `.4` via SSH tunnel after mailbox/MIME hook wiring:
+  `cargo test --test postgres_dmarc_ingress -- --ignored --nocapture`
+  — pass, 4/4, including metadata-only failure-report quarantine and
+  mailbox-hook artifact storage/job enqueue.
+- 2026-10-09 `.4`: `docker compose --env-file .env.local -f
+  compose.local.yml config -q && docker compose --env-file .env.local -f
+  compose.local.yml build mailcore && docker compose --env-file .env.local -f
+  compose.local.yml up -d --force-recreate mailcore` — pass; rebuilt image
+  manifest `783fe6ab3c6134493e311db3d398f6d8bef4cb12cced53821c1bf479623de348`,
+  live health endpoint returned healthy on `192.168.8.4:58081`, and startup
+  logs showed `multilabel-v1/1` loaded plus the internal server listening.
+- 2026-10-09 local:
+  `cargo test -p nullapart-mail-core dmarc_aggregate --tests -- --nocapture`
+  — pass after adding bounded single-report ZIP support. Coverage includes
+  ZIP success, ambiguous multi-report ZIP rejection, unsafe ZIP path rejection
+  and decompression-limit rejection.
+- 2026-10-09 `.4`: final `docker compose --env-file .env.local -f
+  compose.local.yml config -q && docker compose --env-file .env.local -f
+  compose.local.yml build mailcore && docker compose --env-file .env.local -f
+  compose.local.yml up -d --force-recreate mailcore` — pass after ZIP support;
+  rebuilt image manifest
+  `27b7509e1a4735785f5e98b5d67c10b47a66528b8acc4e4a1bf464db098a5ff1`,
+  live health endpoint returned healthy on `192.168.8.4:58081`, and startup
+  logs showed `multilabel-v1/1` loaded plus the internal server listening.
 
 Known limitations:
 
-- This increment adds the durable worker boundary and enqueue API, not an IMAP
-  or SMTP report-mailbox poller. The poller still needs to store each mailbox
-  attachment as an artifact and call `enqueue_dmarc_report_artifact`.
+- This increment implements local/dev SMTP handoff MIME report detection, not an
+  external IMAP polling daemon. Production regional routing still needs to
+  deliver canonical `rua`/`ruf` addresses into this reviewed ingress boundary
+  instead of ordinary customer delivery.
 - Report artifacts are currently read under the customer artifact scope carried
   by the ingress job. A future regional mailbox implementation should choose
   the reviewed customer mailbox/source mapping before enqueueing; system-scope
@@ -266,6 +312,9 @@ Implemented:
     DNS payloads, message bodies or failure-report content.
   - Enforces deployment/customer RLS and grants the local Mail Core role
     `SELECT`, `INSERT` and `UPDATE` only.
+- Migration `027_domain_auth_telemetry_details.sql` adds structured
+  content-free detail columns for SPF alignment, DKIM alignment, DKIM domain,
+  DKIM selector and ARC result.
 - Rust module `crates/mail-core/src/domain_auth_telemetry.rs` adds
   `project_handoff_auth_telemetry`.
   - Runs after successful durable handoff scanning, using the server-derived
@@ -275,13 +324,13 @@ Implemented:
   - Upserts by `(deployment_id, tenant_message_id, domain_id)` so retries are
     idempotent.
   - Uses explicit milter observations when present and falls back to trusted
-    `Authentication-Results` header parsing when the after-queue producer has
-    no structured auth fields; only normalized result labels are persisted.
+    `Authentication-Results` header parsing for normalized SPF/DKIM/DMARC/ARC
+    labels, DKIM domain/selector and SPF/DKIM alignment evidence; raw header
+    text is never stored.
 - `domain_security.rs` now unions DMARC aggregate reports with live telemetry
   for volume/source inventory.
-  - Telemetry contributes message/source volume and DMARC result pass/fail.
-  - It deliberately does not count raw SPF/DKIM pass as SPF/DKIM alignment
-    until selector/domain alignment fields are implemented.
+  - Telemetry contributes message/source volume, SPF/DKIM alignment and DMARC
+    result pass/fail.
   - It deliberately does not count scanner quarantine/reject disposition as
     DMARC policy quarantine/reject.
 - `phase2_handoff.rs` wires telemetry projection into the durable handoff path.
@@ -321,13 +370,27 @@ Evidence:
   `Authentication-Results`; Mail Core accepted the message and
   `domain_auth_telemetry` stored `phase2.test`, `203.0.113.56`,
   `spf=pass`, `dkim=fail`, `dmarc=pass` — pass.
+- 2026-10-09 local:
+  `cargo test -p nullapart-mail-core domain_auth_telemetry --tests -- --nocapture`
+  — pass, including DKIM selector/domain, ARC and SPF/DKIM alignment parsing.
+- 2026-10-09 local: `cargo clippy --workspace --all-targets -- -D warnings`
+  and `cargo test --workspace` — pass after telemetry-detail columns.
+- 2026-10-09 `.4`: migration
+  `027_domain_auth_telemetry_details.sql` applied to the local/dev PostgreSQL
+  volume — pass.
+- 2026-10-09 `.4` via SSH tunnel:
+  `cargo test --test postgres_domain_auth_telemetry --test
+  postgres_domain_security -- --ignored --nocapture` — pass, including
+  structured telemetry detail and source projection.
+- 2026-10-09 `.4`: `docker compose --env-file .env.local -f
+  compose.local.yml config -q && docker compose --env-file .env.local -f
+  compose.local.yml build mailcore && docker compose --env-file .env.local -f
+  compose.local.yml up -d --force-recreate mailcore` — pass; live health
+  endpoint returned healthy on `192.168.8.4:58081`, and startup logs showed
+  `multilabel-v1/1` loaded plus the internal server listening.
 
 Known limitations:
 
-- SPF/DKIM alignment detail, DKIM selector/domain and ARC status are still
-  pending because the current after-queue handoff contract has only normalized
-  result labels. Until those fields are added, live telemetry does not claim
-  SPF/DKIM alignment.
 - The current projection is per-message and needs a retention/rollup policy
   before production-scale retention.
 - Duplicate counting between aggregate reports and live telemetry is possible
@@ -473,8 +536,83 @@ Known limitations:
 ## Phase 5 completion status
 
 Phase 5 local/dev implementation is complete for the documented local
-increments 1–9. The current implementation covers aggregate ingestion,
-actionable domain-security API/UI projections, report-ingress queue worker,
-live authentication telemetry, source classification/history, external report
-authorization validation, DNS observer history, BIMI readiness metadata and
-idempotent alert generation.
+increments 1–9 plus the canonical failure-report privacy gate. The current
+implementation covers aggregate ingestion, actionable domain-security API/UI
+projections, report-ingress queue worker, live authentication telemetry, source
+classification/history, external report authorization validation, DNS observer
+history, BIMI readiness metadata, idempotent alert generation and
+metadata-only quarantine for restricted `ruf` failure reports.
+
+## Failure-report privacy controls
+
+Implemented:
+
+- Migration `026_dmarc_failure_report_controls.sql` adds explicit
+  `dmarc_failure_reports` feature policy with default `disabled` and a system
+  kill switch.
+- The same migration adds `dmarc_failure_report_quarantine`, a tenant-scoped
+  metadata-only ledger for detected failure reports. It stores deployment,
+  customer, artifact identity, artifact hash/size, bounded reason/detail and
+  timestamp only; no raw `ruf` content, headers, XML, rendered HTML/SVG or
+  message samples are stored in the control-plane read model.
+- `dmarc_ingress.rs` detects likely DMARC failure reports before aggregate XML
+  parsing. When failure-report handling is disabled, the job is terminally
+  quarantined with `FAILURE_REPORT_FEATURE_DISABLED` and cannot be mistaken for
+  a malformed aggregate report. If the feature is enabled before the restricted
+  handler exists, the same boundary quarantines with
+  `FAILURE_REPORT_HANDLER_UNAVAILABLE`.
+- The pre-parser quarantine classifier unfolds MIME/RFC 5322-style continuation
+  lines and samples the bounded report prefix so folded `Feedback-Type` headers,
+  late `message/feedback-report` parts and non-XML MIME feedback reports cannot
+  fall through into the aggregate XML parser.
+- The failure-report path consults the reviewed server-authoritative feature
+  switch resolver and runs inside deployment/customer RLS scope.
+
+Evidence:
+
+- 2026-10-08 local:
+  `cargo test -p nullapart-mail-core dmarc_ingress --tests -- --nocapture`
+  — pass, including failure-report shape detection.
+- 2026-10-08 local:
+  `cargo clippy --workspace --all-targets -- -D warnings` — pass after the
+  failure-report guard.
+- 2026-10-08 local: `cargo test --workspace` — pass after the failure-report
+  guard.
+- 2026-10-08 `.4`: migration
+  `026_dmarc_failure_report_controls.sql` applied to the local/dev PostgreSQL
+  volume — pass.
+- 2026-10-08 `.4` via SSH tunnel:
+  `cargo test --test postgres_dmarc_ingress -- --ignored --nocapture`
+  — pass, including metadata-only failure-report quarantine.
+- 2026-10-08 `.4` via SSH tunnel:
+  `cargo test --test postgres_dmarc_aggregate --test
+  postgres_domain_auth_telemetry --test postgres_domain_security --test
+  postgres_domain_observer -- --ignored --nocapture` — pass for the rest of
+  the Phase 5 DB-backed suite.
+- 2026-10-08 `.4`: `docker compose --env-file .env.local -f
+  compose.local.yml config -q && docker compose --env-file .env.local -f
+  compose.local.yml build mailcore && docker compose --env-file .env.local -f
+  compose.local.yml up -d --force-recreate mailcore` — pass; live health
+  endpoint returned healthy on `192.168.8.4:58081`.
+- 2026-10-09 local re-run after MIME classifier hardening:
+  `cargo test -p nullapart-mail-core dmarc_ingress --tests -- --nocapture`,
+  `cargo clippy --workspace --all-targets -- -D warnings`, and
+  `cargo test --workspace` — pass.
+- 2026-10-09 `.4` via SSH tunnel after MIME classifier hardening:
+  `cargo test --test postgres_dmarc_ingress -- --ignored --nocapture` and
+  `cargo test --test postgres_dmarc_aggregate --test
+  postgres_domain_auth_telemetry --test postgres_domain_security --test
+  postgres_domain_observer -- --ignored --nocapture` — pass.
+- 2026-10-09 `.4` via SSH tunnel after mailbox/MIME hook wiring:
+  `cargo test --test postgres_dmarc_ingress -- --ignored --nocapture`
+  — pass, 4/4, including failure-report quarantine and mailbox-hook enqueue.
+- 2026-10-09 local frontend: `pnpm check-all` from `frontend/` — pass; the
+  local shell still warns that Node 22 is below the declared Node 24 engine.
+
+Known limitations:
+
+- Failure-report content inspection remains intentionally unavailable until a
+  dedicated restricted-content renderer, stricter retention workflow and
+  explicit customer policy are implemented. Phase 5 enforces the privacy
+  distinction by quarantining metadata only and never handing `ruf` content to
+  aggregate parsing, logs, UI rendering or training.
