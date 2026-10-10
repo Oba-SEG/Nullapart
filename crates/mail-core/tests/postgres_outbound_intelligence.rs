@@ -4,6 +4,13 @@
 //! `NULLAPART_TEST_DATABASE_URL` pointing at it. Run explicitly with:
 //! `cargo test --test postgres_outbound_intelligence -- --ignored`.
 
+use chrono::Utc;
+use nullapart_mail_contracts::transaction::{CustomerId, DeploymentId};
+use nullapart_mail_core::outbound_intelligence::{
+    evaluate_outbound_intelligence, OutboundBehaviorMetrics, OutboundIntelligenceInput,
+    OutboundSourceContext, OutboundSourceKind, OutboundThreatSignals,
+    PostgresOutboundIntelligenceStore,
+};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row, Transaction};
 use uuid::Uuid;
@@ -295,4 +302,97 @@ async fn outbound_intelligence_tables_are_tenant_isolated() {
         .commit()
         .await
         .expect("tenant transaction must commit");
+}
+
+#[tokio::test]
+#[ignore = "requires migrated local PostgreSQL through 028_outbound_intelligence.sql"]
+async fn postgres_store_loads_approved_sender_and_deduplicates_events() {
+    let pool = connect().await;
+    ensure_request_role(&pool).await;
+    let fixture = seed(&pool).await;
+    let store = PostgresOutboundIntelligenceStore::new(pool.clone());
+    let now = Utc::now();
+    let source = OutboundSourceContext {
+        deployment_id: DeploymentId::new(&fixture.deployment_a),
+        customer_id: CustomerId::new(&fixture.customer_a),
+        source_kind: OutboundSourceKind::SmtpMta,
+        source_id: "mta-a".to_string(),
+        source_ip: Some("10.0.0.10".to_string()),
+    };
+
+    let approvals = store
+        .load_approved_senders(&source, &fixture.sender_a.to_uppercase(), now)
+        .await
+        .expect("approval lookup must succeed");
+    assert_eq!(approvals.len(), 1);
+    assert_eq!(approvals[0].sender_address, fixture.sender_a);
+
+    let foreign_source = OutboundSourceContext {
+        deployment_id: DeploymentId::new(&fixture.deployment_b),
+        customer_id: CustomerId::new(&fixture.customer_b),
+        source_kind: OutboundSourceKind::SmtpMta,
+        source_id: "mta-a".to_string(),
+        source_ip: Some("10.0.0.10".to_string()),
+    };
+    let foreign_approvals = store
+        .load_approved_senders(&foreign_source, &fixture.sender_a, now)
+        .await
+        .expect("foreign approval lookup must succeed");
+    assert!(
+        foreign_approvals.is_empty(),
+        "approval lookup must remain tenant scoped"
+    );
+
+    let input = OutboundIntelligenceInput {
+        source,
+        sender_address: format!("Burst-{}@Example.Test", Uuid::new_v4().simple()),
+        sending_domain: "Example.Test".to_string(),
+        metrics: OutboundBehaviorMetrics {
+            messages_last_minute: 30,
+            messages_last_hour: 120,
+            recipients_this_message: 60,
+            unique_recipients_last_hour: 300,
+            new_recipients_last_hour: 280,
+            recipient_domain_count_last_hour: 30,
+            campaign_messages_last_hour: 45,
+            bounce_failures_last_hour: 3,
+        },
+        signals: OutboundThreatSignals {
+            campaign_fingerprint: Some(format!("fp-store-{}", Uuid::new_v4().simple())),
+            ..OutboundThreatSignals::default()
+        },
+        approved_senders: vec![],
+        now,
+        existing_event: None,
+    };
+    let decision = evaluate_outbound_intelligence(&input);
+    store
+        .persist_decision(&input, &decision)
+        .await
+        .expect("first persistence pass must succeed");
+    store
+        .persist_decision(&input, &decision)
+        .await
+        .expect("second persistence pass must aggregate");
+
+    let row = sqlx::query(
+        "SELECT \
+            (SELECT count(*)::bigint FROM outbound_behavior_rollups \
+             WHERE deployment_id = $1 AND customer_id = $2 AND sender_address = lower($3)) AS rollups, \
+            (SELECT count(*)::bigint FROM outbound_campaign_fingerprints \
+             WHERE deployment_id = $1 AND customer_id = $2 AND fingerprint = $4) AS campaigns, \
+            (SELECT message_count::bigint FROM outbound_security_events \
+             WHERE deployment_id = $1 AND customer_id = $2 AND event_key = $5) AS event_messages",
+    )
+    .bind(&fixture.deployment_a)
+    .bind(&fixture.customer_a)
+    .bind(&input.sender_address)
+    .bind(input.signals.campaign_fingerprint.as_deref())
+    .bind(decision.event_key.as_deref())
+    .fetch_one(&pool)
+    .await
+    .expect("persisted rows must be readable");
+    assert_eq!(row.get::<i64, _>("rollups"), 1);
+    assert_eq!(row.get::<i64, _>("campaigns"), 1);
+    assert_eq!(row.get::<i64, _>("event_messages"), 2);
 }

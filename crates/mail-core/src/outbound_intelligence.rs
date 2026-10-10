@@ -11,6 +11,8 @@ use nullapart_mail_contracts::{
     transaction::{CustomerId, DeploymentId},
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 
 const UNAPPROVED_MESSAGES_PER_MINUTE: u32 = 25;
 const UNAPPROVED_MESSAGES_PER_HOUR: u32 = 100;
@@ -148,6 +150,145 @@ pub struct OutboundIntelligenceDecision {
     pub approval_used: bool,
     pub customer_id: CustomerId,
     pub deployment_id: DeploymentId,
+}
+
+/// PostgreSQL persistence failure for Phase 6 outbound intelligence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum OutboundIntelligenceStoreError {
+    #[error("outbound intelligence persistence is unavailable")]
+    Unavailable,
+    #[error("outbound intelligence persistence is unavailable during {0}")]
+    Stage(&'static str),
+}
+
+/// Postgres-backed Phase 6 store.
+#[derive(Debug, Clone)]
+pub struct PostgresOutboundIntelligenceStore {
+    pool: PgPool,
+}
+
+impl PostgresOutboundIntelligenceStore {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// Loads active approved bulk senders for one server-derived tenant/source
+    /// context and normalized sender. RLS is scoped transaction-locally.
+    pub async fn load_approved_senders(
+        &self,
+        source: &OutboundSourceContext,
+        sender_address: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<ApprovedBulkSender>, OutboundIntelligenceStoreError> {
+        let mut transaction = begin_scoped(&self.pool, source).await?;
+        let rows = sqlx::query(
+            "SELECT deployment_id, customer_id, sender_address, source_kind, source_id, \
+                    host(source_ip) AS source_ip, max_messages_per_minute, max_messages_per_hour, \
+                    max_recipients_per_message, max_unique_recipients_per_hour, active, expires_at \
+             FROM approved_bulk_senders \
+             WHERE deployment_id = $1 \
+               AND customer_id = $2 \
+               AND sender_address = lower($3) \
+               AND source_kind = $4 \
+               AND source_id = $5 \
+               AND active = true \
+               AND (expires_at IS NULL OR expires_at > $6) \
+             ORDER BY updated_at DESC",
+        )
+        .bind(&source.deployment_id.0)
+        .bind(&source.customer_id.0)
+        .bind(sender_address.trim())
+        .bind(source.source_kind.as_str())
+        .bind(&source.source_id)
+        .bind(now)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?;
+
+        rows.into_iter()
+            .map(|row| {
+                let source_kind: String = row
+                    .try_get("source_kind")
+                    .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?;
+                Ok(ApprovedBulkSender {
+                    deployment_id: DeploymentId::new(
+                        row.try_get::<String, _>("deployment_id")
+                            .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?
+                            .as_str(),
+                    ),
+                    customer_id: CustomerId::new(
+                        row.try_get::<String, _>("customer_id")
+                            .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?
+                            .as_str(),
+                    ),
+                    sender_address: row
+                        .try_get("sender_address")
+                        .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?,
+                    source_kind: OutboundSourceKind::try_from(source_kind.as_str())?,
+                    source_id: row
+                        .try_get("source_id")
+                        .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?,
+                    source_ip: row
+                        .try_get("source_ip")
+                        .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?,
+                    max_messages_per_minute: row
+                        .try_get::<i32, _>("max_messages_per_minute")
+                        .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?
+                        as u32,
+                    max_messages_per_hour: row
+                        .try_get::<i32, _>("max_messages_per_hour")
+                        .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?
+                        as u32,
+                    max_recipients_per_message: row
+                        .try_get::<i32, _>("max_recipients_per_message")
+                        .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?
+                        as u32,
+                    max_unique_recipients_per_hour: row
+                        .try_get::<i32, _>("max_unique_recipients_per_hour")
+                        .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?
+                        as u32,
+                    active: row
+                        .try_get("active")
+                        .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?,
+                    expires_at: row
+                        .try_get("expires_at")
+                        .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?,
+                })
+            })
+            .collect()
+    }
+
+    /// Persists the content-free rollup/campaign/event projection for one
+    /// decision. This never writes raw content or full recipient addresses.
+    pub async fn persist_decision(
+        &self,
+        input: &OutboundIntelligenceInput,
+        decision: &OutboundIntelligenceDecision,
+    ) -> Result<(), OutboundIntelligenceStoreError> {
+        let mut transaction = begin_scoped(&self.pool, &input.source).await?;
+        upsert_rollup(&mut transaction, input)
+            .await
+            .map_err(|_| OutboundIntelligenceStoreError::Stage("rollup"))?;
+        if input.signals.campaign_fingerprint.is_some() {
+            upsert_campaign(&mut transaction, input, decision)
+                .await
+                .map_err(|_| OutboundIntelligenceStoreError::Stage("campaign"))?;
+        }
+        if let Some(event_key) = decision.event_key.as_deref() {
+            upsert_security_event(&mut transaction, input, decision, event_key)
+                .await
+                .map_err(|_| OutboundIntelligenceStoreError::Stage("event"))?;
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|_| OutboundIntelligenceStoreError::Stage("commit"))?;
+        Ok(())
+    }
 }
 
 /// Evaluate outbound abuse, bulk and compromised-sender behaviour.
@@ -372,14 +513,19 @@ fn event_key(
         .campaign_fingerprint
         .as_deref()
         .unwrap_or("no-campaign");
+    let mut hasher = Sha256::new();
+    hasher.update(normalize_token(&input.sender_address));
+    hasher.update(b":");
+    hasher.update(normalize_token(campaign));
+    hasher.update(b":");
+    hasher.update(event_suffix);
+    let digest = hex::encode(hasher.finalize());
     format!(
-        "{}:{}:{}:{}:{}:{}",
+        "{}:{}:{}:{}",
         input.source.deployment_id.0,
         input.source.customer_id.0,
         event_type.as_str(),
-        normalize_token(&input.sender_address),
-        normalize_token(campaign),
-        event_suffix
+        &digest[..24]
     )
 }
 
@@ -397,6 +543,235 @@ impl OutboundSecurityEventType {
             Self::CampaignOutbreak => "campaign-outbreak",
             Self::DeliveryFailureSpike => "delivery-failure-spike",
         }
+    }
+}
+
+impl OutboundSourceKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::SmtpMta => "smtp_mta",
+            Self::InternalApi => "internal_api",
+            Self::Webhook => "webhook",
+            Self::Connector => "connector",
+        }
+    }
+}
+
+impl TryFrom<&str> for OutboundSourceKind {
+    type Error = OutboundIntelligenceStoreError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "smtp_mta" => Ok(Self::SmtpMta),
+            "internal_api" => Ok(Self::InternalApi),
+            "webhook" => Ok(Self::Webhook),
+            "connector" => Ok(Self::Connector),
+            _ => Err(OutboundIntelligenceStoreError::Unavailable),
+        }
+    }
+}
+
+impl OutboundDecisionOutcome {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Warn => "warn",
+            Self::Throttle => "throttle",
+            Self::Defer => "defer",
+            Self::Hold => "hold",
+            Self::BlockSender => "block_sender",
+            Self::SuspendOutbound => "suspend_outbound",
+        }
+    }
+}
+
+async fn begin_scoped<'a>(
+    pool: &'a PgPool,
+    source: &OutboundSourceContext,
+) -> Result<Transaction<'a, Postgres>, OutboundIntelligenceStoreError> {
+    let mut transaction = pool
+        .begin()
+        .await
+        .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?;
+    set_scope(&mut transaction, source).await?;
+    Ok(transaction)
+}
+
+async fn set_scope(
+    transaction: &mut Transaction<'_, Postgres>,
+    source: &OutboundSourceContext,
+) -> Result<(), OutboundIntelligenceStoreError> {
+    sqlx::query(
+        "SELECT set_config('app.current_deployment_id', $1, true), \
+                set_config('app.current_customer_id', $2, true)",
+    )
+    .bind(&source.deployment_id.0)
+    .bind(&source.customer_id.0)
+    .execute(&mut **transaction)
+    .await
+    .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?;
+    Ok(())
+}
+
+async fn upsert_rollup(
+    transaction: &mut Transaction<'_, Postgres>,
+    input: &OutboundIntelligenceInput,
+) -> Result<(), OutboundIntelligenceStoreError> {
+    sqlx::query(
+        "INSERT INTO outbound_behavior_rollups (\
+            deployment_id, customer_id, source_kind, source_id, source_ip, sender_address, \
+            sending_domain, campaign_fingerprint, recipient_domain, window_start, window_seconds, \
+            message_count, recipient_count, unique_recipient_count, new_recipient_count, \
+            bounce_count, failure_count, malware_count, auth_source_change_count, unusual_time_count\
+         ) VALUES (\
+            $1,$2,$3,$4,$5::inet,lower($6),lower($7),$8,NULL,$9,60,$10,$11,$12,$13,$14,$14,$15,$16,$17\
+         ) ON CONFLICT (\
+            deployment_id, customer_id, source_kind, source_id, sender_address, \
+            (COALESCE(campaign_fingerprint, '')), (COALESCE(recipient_domain, '')), window_start, window_seconds\
+         ) DO UPDATE SET \
+            source_ip = EXCLUDED.source_ip, \
+            message_count = GREATEST(outbound_behavior_rollups.message_count, EXCLUDED.message_count), \
+            recipient_count = GREATEST(outbound_behavior_rollups.recipient_count, EXCLUDED.recipient_count), \
+            unique_recipient_count = GREATEST(outbound_behavior_rollups.unique_recipient_count, EXCLUDED.unique_recipient_count), \
+            new_recipient_count = GREATEST(outbound_behavior_rollups.new_recipient_count, EXCLUDED.new_recipient_count), \
+            bounce_count = GREATEST(outbound_behavior_rollups.bounce_count, EXCLUDED.bounce_count), \
+            failure_count = GREATEST(outbound_behavior_rollups.failure_count, EXCLUDED.failure_count), \
+            malware_count = GREATEST(outbound_behavior_rollups.malware_count, EXCLUDED.malware_count), \
+            auth_source_change_count = GREATEST(outbound_behavior_rollups.auth_source_change_count, EXCLUDED.auth_source_change_count), \
+            unusual_time_count = GREATEST(outbound_behavior_rollups.unusual_time_count, EXCLUDED.unusual_time_count), \
+            updated_at = now()",
+    )
+    .bind(&input.source.deployment_id.0)
+    .bind(&input.source.customer_id.0)
+    .bind(input.source.source_kind.as_str())
+    .bind(&input.source.source_id)
+    .bind(input.source.source_ip.as_deref())
+    .bind(input.sender_address.trim())
+    .bind(input.sending_domain.trim())
+    .bind(input.signals.campaign_fingerprint.as_deref())
+    .bind(window_start(input.now, 60))
+    .bind(input.metrics.messages_last_minute as i32)
+    .bind(input.metrics.recipients_this_message as i32)
+    .bind(input.metrics.unique_recipients_last_hour as i32)
+    .bind(input.metrics.new_recipients_last_hour as i32)
+    .bind(input.metrics.bounce_failures_last_hour as i32)
+    .bind(i32::from(input.signals.malware_detected || input.signals.malicious_url_detected))
+    .bind(i32::from(input.signals.auth_source_changed))
+    .bind(i32::from(input.signals.unusual_sending_time))
+    .execute(&mut **transaction)
+    .await
+    .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?;
+    Ok(())
+}
+
+async fn upsert_campaign(
+    transaction: &mut Transaction<'_, Postgres>,
+    input: &OutboundIntelligenceInput,
+    decision: &OutboundIntelligenceDecision,
+) -> Result<(), OutboundIntelligenceStoreError> {
+    sqlx::query(
+        "INSERT INTO outbound_campaign_fingerprints (\
+            deployment_id, customer_id, fingerprint, algorithm, message_count, recipient_count, disposition\
+         ) VALUES ($1,$2,$3,'nullapart_v1',$4,$5,$6) \
+         ON CONFLICT (deployment_id, customer_id, fingerprint, algorithm) DO UPDATE SET \
+            last_seen_at = now(), \
+            message_count = GREATEST(outbound_campaign_fingerprints.message_count, EXCLUDED.message_count), \
+            recipient_count = GREATEST(outbound_campaign_fingerprints.recipient_count, EXCLUDED.recipient_count), \
+            disposition = EXCLUDED.disposition",
+    )
+    .bind(&input.source.deployment_id.0)
+    .bind(&input.source.customer_id.0)
+    .bind(input.signals.campaign_fingerprint.as_deref())
+    .bind(input.metrics.campaign_messages_last_hour as i32)
+    .bind(input.metrics.unique_recipients_last_hour as i32)
+    .bind(campaign_disposition(decision.outcome))
+    .execute(&mut **transaction)
+    .await
+    .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?;
+    Ok(())
+}
+
+async fn upsert_security_event(
+    transaction: &mut Transaction<'_, Postgres>,
+    input: &OutboundIntelligenceInput,
+    decision: &OutboundIntelligenceDecision,
+    event_key: &str,
+) -> Result<(), OutboundIntelligenceStoreError> {
+    let Some(event_type) = decision.event_type else {
+        return Ok(());
+    };
+    let cooldown_until = default_event_cooldown(input.now);
+    let severity = event_severity(decision.outcome);
+    let details = serde_json::json!({
+        "messages_last_minute": input.metrics.messages_last_minute,
+        "messages_last_hour": input.metrics.messages_last_hour,
+        "recipients_this_message": input.metrics.recipients_this_message,
+        "unique_recipients_last_hour": input.metrics.unique_recipients_last_hour,
+        "new_recipients_last_hour": input.metrics.new_recipients_last_hour,
+        "approval_used": decision.approval_used
+    });
+    sqlx::query(
+        "INSERT INTO outbound_security_events (\
+            deployment_id, customer_id, event_key, event_type, severity, outcome, reason_code, \
+            sender_address, source_id, campaign_fingerprint, first_seen_at, last_seen_at, \
+            message_count, cooldown_until, details\
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,lower($8),$9,$10,$11,$11,1,$12,$13) \
+         ON CONFLICT (deployment_id, customer_id, event_key) DO UPDATE SET \
+            last_seen_at = EXCLUDED.last_seen_at, \
+            message_count = outbound_security_events.message_count + 1, \
+            cooldown_until = EXCLUDED.cooldown_until, \
+            outcome = EXCLUDED.outcome, \
+            reason_code = EXCLUDED.reason_code, \
+            severity = EXCLUDED.severity, \
+            details = EXCLUDED.details, \
+            updated_at = now()",
+    )
+    .bind(&input.source.deployment_id.0)
+    .bind(&input.source.customer_id.0)
+    .bind(event_key)
+    .bind(event_type.as_str().replace('-', "_"))
+    .bind(severity)
+    .bind(decision.outcome.as_str())
+    .bind(&decision.reason_code.0)
+    .bind(input.sender_address.trim())
+    .bind(&input.source.source_id)
+    .bind(input.signals.campaign_fingerprint.as_deref())
+    .bind(input.now)
+    .bind(cooldown_until)
+    .bind(sqlx::types::Json(details))
+    .execute(&mut **transaction)
+    .await
+    .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?;
+    Ok(())
+}
+
+fn window_start(now: DateTime<Utc>, window_seconds: i64) -> DateTime<Utc> {
+    let timestamp = now.timestamp();
+    let start = timestamp - timestamp.rem_euclid(window_seconds);
+    DateTime::<Utc>::from_timestamp(start, 0).unwrap_or(now)
+}
+
+fn campaign_disposition(outcome: OutboundDecisionOutcome) -> &'static str {
+    match outcome {
+        OutboundDecisionOutcome::Allow => "allowed",
+        OutboundDecisionOutcome::Warn => "warned",
+        OutboundDecisionOutcome::Throttle => "throttled",
+        OutboundDecisionOutcome::Defer | OutboundDecisionOutcome::Hold => "held",
+        OutboundDecisionOutcome::BlockSender | OutboundDecisionOutcome::SuspendOutbound => {
+            "blocked"
+        },
+    }
+}
+
+fn event_severity(outcome: OutboundDecisionOutcome) -> &'static str {
+    match outcome {
+        OutboundDecisionOutcome::Allow => "info",
+        OutboundDecisionOutcome::Warn
+        | OutboundDecisionOutcome::Throttle
+        | OutboundDecisionOutcome::Defer => "warning",
+        OutboundDecisionOutcome::Hold
+        | OutboundDecisionOutcome::BlockSender
+        | OutboundDecisionOutcome::SuspendOutbound => "critical",
     }
 }
 

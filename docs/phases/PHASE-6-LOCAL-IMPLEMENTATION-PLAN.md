@@ -31,8 +31,11 @@ completion unless the code, tests and local deployment evidence match it.
   - `postgres_outbound_intelligence.rs` proves unscoped sessions fail closed,
     scoped tenants see only their rows, and cross-tenant/deployment writes are
     rejected for the new Phase 6 tables.
-- [ ] Runtime persistence for behaviour rollups, campaign fingerprints and
+- [x] Runtime persistence for behaviour rollups, campaign fingerprints and
   aggregated outbound security events.
+  - `PostgresOutboundIntelligenceStore` loads active approved senders under
+    transaction-scoped RLS and persists rollups, campaign fingerprints and
+    deduplicated security events without storing raw content.
 - [ ] Wire evaluator into the trusted outbound path after server-derived
   customer/source/domain validation and before delivery.
 - [ ] Policy administration payloads for `bulk_sending`, `outbound_abuse` and
@@ -67,3 +70,7 @@ completion unless the code, tests and local deployment evidence match it.
     `nullapart-local-postgres-1`.
   - `NULLAPART_TEST_DATABASE_URL=postgres://...@127.0.0.1:15533/nullapart cargo test --test postgres_outbound_intelligence -- --ignored --test-threads=1`
     passed via SSH tunnel to the `.4` PostgreSQL container.
+- Added the Phase 6 Postgres persistence adapter after the first commit:
+  approval loading is tenant-scoped, rollups/campaign fingerprints upsert, and
+  security events deduplicate by a bounded hashed event key. The remote ignored
+  suite now covers both RLS isolation and persistence/event aggregation.
