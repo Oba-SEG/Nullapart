@@ -47,6 +47,7 @@ use crate::admin_audit::{source_ip_from, AuditEventRecord, AuditStore, PostgresA
 use crate::admin_rbac::{BUILTIN_ROLES, SUPPORT_ROLE, SYSTEM_ADMIN_ROLE};
 use crate::idempotency::{claim, complete, ClaimOutcome};
 use crate::inline_ml::thresholds::{validate_family_rules, ML_THREAT_CLASSIFICATION_FAMILY};
+use crate::outbound_intelligence::validate_outbound_policy_rules;
 
 pub const POLICIES_VIEW_PERMISSION: &str = "policies:view";
 pub const POLICIES_MANAGE_PERMISSION: &str = "policies:manage";
@@ -1314,6 +1315,13 @@ async fn publish_family(
             StatusCode::BAD_REQUEST,
             "INVALID_THRESHOLDS",
             "ML threshold configuration is invalid",
+        );
+    }
+    if !validate_outbound_policy_rules(&family_key, &body.rules) {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "INVALID_OUTBOUND_THRESHOLDS",
+            "Outbound intelligence threshold configuration is invalid",
         );
     }
     let rules = match serde_json::to_value(&body.rules) {

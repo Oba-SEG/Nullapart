@@ -7,7 +7,7 @@
 
 use chrono::{DateTime, Duration, Utc};
 use nullapart_mail_contracts::{
-    policy::ReasonCode,
+    policy::{PolicyRule, ReasonCode},
     transaction::{CustomerId, DeploymentId},
 };
 use serde::{Deserialize, Serialize};
@@ -21,6 +21,9 @@ const UNAPPROVED_UNIQUE_RECIPIENTS_PER_HOUR: u32 = 250;
 const ROTATING_RECIPIENT_NEW_PERCENT: f32 = 0.80;
 const CAMPAIGN_MIN_MESSAGES_PER_HOUR: u32 = 40;
 const EVENT_COOLDOWN_MINUTES: i64 = 30;
+pub const BULK_SENDING_POLICY_FAMILY: &str = "bulk_sending";
+pub const OUTBOUND_ABUSE_POLICY_FAMILY: &str = "outbound_abuse";
+pub const SENDER_REPUTATION_POLICY_FAMILY: &str = "sender_reputation";
 
 /// Trusted outbound source kind used by Phase 6 policy and persistence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +97,34 @@ pub struct OutboundThreatSignals {
     pub campaign_fingerprint: Option<String>,
 }
 
+/// Phase 6 policy thresholds loaded from policy administration metadata.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct OutboundPolicyThresholds {
+    pub unauthorized_messages_per_minute: u32,
+    pub unauthorized_messages_per_hour: u32,
+    pub unauthorized_recipients_per_message: u32,
+    pub unauthorized_unique_recipients_per_hour: u32,
+    pub rotating_recipient_new_ratio: f32,
+    pub campaign_min_messages_per_hour: u32,
+    pub bounce_failures_per_hour: u32,
+    pub event_cooldown_minutes: i64,
+}
+
+impl Default for OutboundPolicyThresholds {
+    fn default() -> Self {
+        Self {
+            unauthorized_messages_per_minute: UNAPPROVED_MESSAGES_PER_MINUTE,
+            unauthorized_messages_per_hour: UNAPPROVED_MESSAGES_PER_HOUR,
+            unauthorized_recipients_per_message: UNAPPROVED_RECIPIENTS_PER_MESSAGE,
+            unauthorized_unique_recipients_per_hour: UNAPPROVED_UNIQUE_RECIPIENTS_PER_HOUR,
+            rotating_recipient_new_ratio: ROTATING_RECIPIENT_NEW_PERCENT,
+            campaign_min_messages_per_hour: CAMPAIGN_MIN_MESSAGES_PER_HOUR,
+            bounce_failures_per_hour: 25,
+            event_cooldown_minutes: EVENT_COOLDOWN_MINUTES,
+        }
+    }
+}
+
 /// Input to one outbound intelligence decision.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutboundIntelligenceInput {
@@ -102,6 +133,7 @@ pub struct OutboundIntelligenceInput {
     pub sending_domain: String,
     pub metrics: OutboundBehaviorMetrics,
     pub signals: OutboundThreatSignals,
+    pub policy_thresholds: OutboundPolicyThresholds,
     pub approved_senders: Vec<ApprovedBulkSender>,
     pub now: DateTime<Utc>,
     pub existing_event: Option<ExistingOutboundEvent>,
@@ -262,6 +294,48 @@ impl PostgresOutboundIntelligenceStore {
             .collect()
     }
 
+    /// Loads active Phase 6 policy thresholds from tenant policy revisions.
+    /// Missing metadata falls back to safe built-in defaults.
+    pub async fn load_policy_thresholds(
+        &self,
+        source: &OutboundSourceContext,
+    ) -> Result<OutboundPolicyThresholds, OutboundIntelligenceStoreError> {
+        let mut transaction = begin_scoped(&self.pool, source).await?;
+        let rows = sqlx::query(
+            "SELECT family_id, rules \
+             FROM policy_revisions \
+             WHERE deployment_id = $1 \
+               AND customer_id = $2 \
+               AND scope_level = 'tenant' \
+               AND deactivated_at IS NULL \
+               AND family_id IN ('bulk_sending', 'outbound_abuse', 'sender_reputation')",
+        )
+        .bind(&source.deployment_id.0)
+        .bind(&source.customer_id.0)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?;
+
+        let mut thresholds = OutboundPolicyThresholds::default();
+        for row in rows {
+            let family_id: String = row
+                .try_get("family_id")
+                .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?;
+            let rules = row
+                .try_get::<sqlx::types::Json<serde_json::Value>, _>("rules")
+                .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?
+                .0;
+            let rules: Vec<PolicyRule> = serde_json::from_value(rules)
+                .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?;
+            apply_policy_threshold_rules(&mut thresholds, &family_id, &rules);
+        }
+        Ok(thresholds)
+    }
+
     /// Persists the content-free rollup/campaign/event projection for one
     /// decision. This never writes raw content or full recipient addresses.
     pub async fn persist_decision(
@@ -331,6 +405,27 @@ pub fn evaluate_outbound_intelligence(
     evaluate_unapproved_sender(input)
 }
 
+/// Publish-time validation for Phase 6 threshold policy metadata.
+pub fn validate_outbound_policy_rules(family_key: &str, rules: &[PolicyRule]) -> bool {
+    if !matches!(
+        family_key,
+        BULK_SENDING_POLICY_FAMILY | OUTBOUND_ABUSE_POLICY_FAMILY | SENDER_REPUTATION_POLICY_FAMILY
+    ) {
+        return true;
+    }
+    rules.iter().all(|rule| {
+        let Some(metadata) = rule.action.metadata.as_ref() else {
+            return true;
+        };
+        match family_key {
+            BULK_SENDING_POLICY_FAMILY => valid_bulk_sending_metadata(metadata),
+            OUTBOUND_ABUSE_POLICY_FAMILY => valid_outbound_abuse_metadata(metadata),
+            SENDER_REPUTATION_POLICY_FAMILY => valid_sender_reputation_metadata(metadata),
+            _ => true,
+        }
+    })
+}
+
 fn evaluate_approved_bulk(
     input: &OutboundIntelligenceInput,
     approval: &ApprovedBulkSender,
@@ -385,8 +480,9 @@ fn evaluate_approved_bulk(
 }
 
 fn evaluate_unapproved_sender(input: &OutboundIntelligenceInput) -> OutboundIntelligenceDecision {
-    if input.metrics.messages_last_minute > UNAPPROVED_MESSAGES_PER_MINUTE
-        || input.metrics.recipients_this_message > UNAPPROVED_RECIPIENTS_PER_MESSAGE
+    let thresholds = input.policy_thresholds;
+    if input.metrics.messages_last_minute > thresholds.unauthorized_messages_per_minute
+        || input.metrics.recipients_this_message > thresholds.unauthorized_recipients_per_message
     {
         return decision(
             input,
@@ -398,8 +494,9 @@ fn evaluate_unapproved_sender(input: &OutboundIntelligenceInput) -> OutboundInte
         );
     }
 
-    if input.metrics.messages_last_hour > UNAPPROVED_MESSAGES_PER_HOUR
-        || input.metrics.unique_recipients_last_hour > UNAPPROVED_UNIQUE_RECIPIENTS_PER_HOUR
+    if input.metrics.messages_last_hour > thresholds.unauthorized_messages_per_hour
+        || input.metrics.unique_recipients_last_hour
+            > thresholds.unauthorized_unique_recipients_per_hour
     {
         return decision(
             input,
@@ -412,7 +509,7 @@ fn evaluate_unapproved_sender(input: &OutboundIntelligenceInput) -> OutboundInte
     }
 
     if input.metrics.unique_recipients_last_hour >= 50
-        && input.metrics.new_recipient_ratio() >= ROTATING_RECIPIENT_NEW_PERCENT
+        && input.metrics.new_recipient_ratio() >= thresholds.rotating_recipient_new_ratio
     {
         return decision(
             input,
@@ -424,7 +521,7 @@ fn evaluate_unapproved_sender(input: &OutboundIntelligenceInput) -> OutboundInte
         );
     }
 
-    if input.metrics.campaign_messages_last_hour >= CAMPAIGN_MIN_MESSAGES_PER_HOUR
+    if input.metrics.campaign_messages_last_hour >= thresholds.campaign_min_messages_per_hour
         && input.signals.campaign_fingerprint.is_some()
     {
         return decision(
@@ -437,7 +534,7 @@ fn evaluate_unapproved_sender(input: &OutboundIntelligenceInput) -> OutboundInte
         );
     }
 
-    if input.metrics.bounce_failures_last_hour >= 25 {
+    if input.metrics.bounce_failures_last_hour >= thresholds.bounce_failures_per_hour {
         return decision(
             input,
             OutboundDecisionOutcome::Defer,
@@ -700,7 +797,8 @@ async fn upsert_security_event(
     let Some(event_type) = decision.event_type else {
         return Ok(());
     };
-    let cooldown_until = default_event_cooldown(input.now);
+    let cooldown_until =
+        input.now + Duration::minutes(input.policy_thresholds.event_cooldown_minutes);
     let severity = event_severity(decision.outcome);
     let details = serde_json::json!({
         "messages_last_minute": input.metrics.messages_last_minute,
@@ -738,11 +836,174 @@ async fn upsert_security_event(
     .bind(input.signals.campaign_fingerprint.as_deref())
     .bind(input.now)
     .bind(cooldown_until)
-    .bind(sqlx::types::Json(details))
+    .bind(sqlx::types::Json(details.clone()))
     .execute(&mut **transaction)
     .await
     .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?;
+    enqueue_outbound_security_notification(
+        transaction,
+        OutboundSecurityNotification {
+            input,
+            decision,
+            event_key,
+            event_type,
+            severity,
+            cooldown_until,
+            details,
+        },
+    )
+    .await?;
     Ok(())
+}
+
+struct OutboundSecurityNotification<'a> {
+    input: &'a OutboundIntelligenceInput,
+    decision: &'a OutboundIntelligenceDecision,
+    event_key: &'a str,
+    event_type: OutboundSecurityEventType,
+    severity: &'a str,
+    cooldown_until: DateTime<Utc>,
+    details: serde_json::Value,
+}
+
+async fn enqueue_outbound_security_notification(
+    transaction: &mut Transaction<'_, Postgres>,
+    notification: OutboundSecurityNotification<'_>,
+) -> Result<(), OutboundIntelligenceStoreError> {
+    if notification.severity == "info" {
+        return Ok(());
+    }
+    sqlx::query(
+        "INSERT INTO outbox_events \
+         (event_type, event_version, payload, idempotency_key, customer_id, deployment_id, trace_id) \
+         VALUES ('outbound.security_event', 1, $1, $2, $3, $4, $5) \
+         ON CONFLICT (idempotency_key) DO NOTHING",
+    )
+    .bind(sqlx::types::Json(serde_json::json!({
+        "event_key": notification.event_key,
+        "event_type": notification.event_type.as_str().replace('-', "_"),
+        "severity": notification.severity,
+        "outcome": notification.decision.outcome.as_str(),
+        "reason_code": notification.decision.reason_code.0,
+        "sender_address": notification.input.sender_address,
+        "source_id": notification.input.source.source_id,
+        "campaign_fingerprint": notification.input.signals.campaign_fingerprint,
+        "cooldown_until": notification.cooldown_until,
+        "details": notification.details,
+    })))
+    .bind(format!(
+        "outbound-security:{}:{}:{}",
+        notification.input.source.deployment_id.0,
+        notification.input.source.customer_id.0,
+        notification.event_key
+    ))
+    .bind(&notification.input.source.customer_id.0)
+    .bind(&notification.input.source.deployment_id.0)
+    .bind(notification.event_key)
+    .execute(&mut **transaction)
+    .await
+    .map(|_| ())
+    .map_err(|_| OutboundIntelligenceStoreError::Unavailable)
+}
+
+fn apply_policy_threshold_rules(
+    thresholds: &mut OutboundPolicyThresholds,
+    family_id: &str,
+    rules: &[PolicyRule],
+) {
+    for rule in rules.iter().filter(|rule| rule.enabled) {
+        let Some(metadata) = rule.action.metadata.as_ref() else {
+            continue;
+        };
+        match family_id {
+            "bulk_sending" => {
+                if let Some(value) = positive_u32(metadata, "max_messages_per_minute") {
+                    thresholds.unauthorized_messages_per_minute = value;
+                }
+                if let Some(value) = positive_u32(metadata, "max_messages_per_hour") {
+                    thresholds.unauthorized_messages_per_hour = value;
+                }
+                if let Some(value) = positive_u32(metadata, "max_recipients_per_message") {
+                    thresholds.unauthorized_recipients_per_message = value;
+                }
+                if let Some(value) = positive_u32(metadata, "max_unique_recipients_per_hour") {
+                    thresholds.unauthorized_unique_recipients_per_hour = value;
+                }
+            },
+            "outbound_abuse" => {
+                if let Some(value) = positive_u32(metadata, "campaign_min_messages_per_hour") {
+                    thresholds.campaign_min_messages_per_hour = value;
+                }
+                if let Some(value) = bounded_ratio(metadata, "rotating_recipient_new_ratio") {
+                    thresholds.rotating_recipient_new_ratio = value;
+                }
+                if let Some(value) = positive_i64(metadata, "event_cooldown_minutes") {
+                    thresholds.event_cooldown_minutes = value;
+                }
+            },
+            "sender_reputation" => {
+                if let Some(value) = positive_u32(metadata, "bounce_failures_per_hour") {
+                    thresholds.bounce_failures_per_hour = value;
+                }
+            },
+            _ => {},
+        }
+    }
+}
+
+fn positive_u32(metadata: &serde_json::Value, key: &str) -> Option<u32> {
+    let value = metadata.get(key)?.as_u64()?;
+    u32::try_from(value).ok().filter(|value| *value > 0)
+}
+
+fn positive_i64(metadata: &serde_json::Value, key: &str) -> Option<i64> {
+    let value = metadata.get(key)?.as_i64()?;
+    (value > 0).then_some(value)
+}
+
+fn bounded_ratio(metadata: &serde_json::Value, key: &str) -> Option<f32> {
+    let value = metadata.get(key)?.as_f64()?;
+    (value > 0.0 && value <= 1.0).then_some(value as f32)
+}
+
+fn valid_bulk_sending_metadata(metadata: &serde_json::Value) -> bool {
+    has_exact_keys(
+        metadata,
+        &[
+            "max_messages_per_minute",
+            "max_messages_per_hour",
+            "max_recipients_per_message",
+            "max_unique_recipients_per_hour",
+        ],
+    ) && positive_u32(metadata, "max_messages_per_minute").is_some()
+        && positive_u32(metadata, "max_messages_per_hour").is_some()
+        && positive_u32(metadata, "max_recipients_per_message").is_some()
+        && positive_u32(metadata, "max_unique_recipients_per_hour").is_some()
+}
+
+fn valid_outbound_abuse_metadata(metadata: &serde_json::Value) -> bool {
+    has_exact_keys(
+        metadata,
+        &[
+            "campaign_min_messages_per_hour",
+            "rotating_recipient_new_ratio",
+            "event_cooldown_minutes",
+        ],
+    ) && positive_u32(metadata, "campaign_min_messages_per_hour").is_some()
+        && bounded_ratio(metadata, "rotating_recipient_new_ratio").is_some()
+        && positive_i64(metadata, "event_cooldown_minutes").is_some()
+}
+
+fn valid_sender_reputation_metadata(metadata: &serde_json::Value) -> bool {
+    has_exact_keys(metadata, &["bounce_failures_per_hour"])
+        && positive_u32(metadata, "bounce_failures_per_hour").is_some()
+}
+
+fn has_exact_keys(metadata: &serde_json::Value, expected: &[&str]) -> bool {
+    let Some(object) = metadata.as_object() else {
+        return false;
+    };
+    object.len() == expected.len() && expected.iter().all(|key| object.contains_key(*key))
 }
 
 fn window_start(now: DateTime<Utc>, window_seconds: i64) -> DateTime<Utc> {
@@ -783,6 +1044,7 @@ pub fn default_event_cooldown(now: DateTime<Utc>) -> DateTime<Utc> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uuid::Uuid;
 
     fn source() -> OutboundSourceContext {
         OutboundSourceContext {
@@ -831,10 +1093,35 @@ mod tests {
             sending_domain: "example.test".to_string(),
             metrics: metrics(),
             signals: OutboundThreatSignals::default(),
+            policy_thresholds: OutboundPolicyThresholds::default(),
             approved_senders: vec![approval(now)],
             now,
             existing_event: None,
         }
+    }
+
+    fn rule_with_metadata(metadata: serde_json::Value) -> PolicyRule {
+        serde_json::from_value(serde_json::json!({
+            "id": Uuid::new_v4(),
+            "name": "phase 6 thresholds",
+            "priority": 1,
+            "enabled": true,
+            "condition": {
+                "sender": null,
+                "recipient": null,
+                "auth": null,
+                "content": null,
+                "finding": null,
+                "scope": "transaction"
+            },
+            "action": {
+                "disposition": "hold",
+                "reason_code": "OUTBOUND_POLICY",
+                "notify": null,
+                "metadata": metadata
+            }
+        }))
+        .expect("test policy rule must deserialize")
     }
 
     #[test]
@@ -942,5 +1229,47 @@ mod tests {
         assert_eq!(repeated.outcome, first.outcome);
         assert!(repeated.aggregate_into_existing_event);
         assert_eq!(repeated.event_key, first.event_key);
+    }
+
+    #[test]
+    fn outbound_policy_thresholds_are_validated_and_applied() {
+        let rules = vec![rule_with_metadata(serde_json::json!({
+            "max_messages_per_minute": 2,
+            "max_messages_per_hour": 5,
+            "max_recipients_per_message": 8,
+            "max_unique_recipients_per_hour": 13
+        }))];
+        assert!(validate_outbound_policy_rules(
+            BULK_SENDING_POLICY_FAMILY,
+            &rules
+        ));
+
+        let mut thresholds = OutboundPolicyThresholds::default();
+        apply_policy_threshold_rules(&mut thresholds, BULK_SENDING_POLICY_FAMILY, &rules);
+        assert_eq!(thresholds.unauthorized_messages_per_minute, 2);
+        assert_eq!(thresholds.unauthorized_unique_recipients_per_hour, 13);
+    }
+
+    #[test]
+    fn outbound_policy_thresholds_reject_unknown_or_invalid_metadata() {
+        let invalid = vec![rule_with_metadata(serde_json::json!({
+            "max_messages_per_minute": 0,
+            "max_messages_per_hour": 5,
+            "max_recipients_per_message": 8,
+            "max_unique_recipients_per_hour": 13
+        }))];
+        assert!(!validate_outbound_policy_rules(
+            BULK_SENDING_POLICY_FAMILY,
+            &invalid
+        ));
+
+        let extra_key = vec![rule_with_metadata(serde_json::json!({
+            "bounce_failures_per_hour": 25,
+            "surprise": true
+        }))];
+        assert!(!validate_outbound_policy_rules(
+            SENDER_REPUTATION_POLICY_FAMILY,
+            &extra_key
+        ));
     }
 }

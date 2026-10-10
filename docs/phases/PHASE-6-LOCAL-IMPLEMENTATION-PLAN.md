@@ -42,11 +42,11 @@ completion unless the code, tests and local deployment evidence match it.
     validation first, loads approved senders from trusted source context,
     evaluates/persists Phase 6 intelligence and maps containment decisions to
     outbound transport disposition.
-- [ ] Policy administration payloads for `bulk_sending`, `outbound_abuse` and
+- [x] Policy administration payloads for `bulk_sending`, `outbound_abuse` and
   `sender_reputation` thresholds.
-- [ ] Customer/system notifications and async incident/outbox linkage for
+- [x] Customer/system notifications and async incident/outbox linkage for
   compromised sender and suspended outbound capability.
-- [ ] Control-plane API and UI for outbound volume, sender/source behaviour,
+- [x] Control-plane API and UI for outbound volume, sender/source behaviour,
   approved bulk senders, held/blocked events, campaigns, failure/bounce trends,
   policy/action history and notification state.
 - [ ] Local `.4` migrated runtime verification: approved bulk allowed,
@@ -81,3 +81,31 @@ completion unless the code, tests and local deployment evidence match it.
 - Added module-level outbound validation wiring:
   `cargo test -p nullapart-mail-core outbound --lib` and
   `cargo clippy -p nullapart-mail-core --lib --tests -- -D warnings` passed.
+- Added the Phase 6 Control Plane slice:
+  - `outbound_intelligence_api` exposes an authenticated, tenant-scoped
+    `/api/v1/outbound-intelligence` projection plus an audited,
+    step-up/idempotency-protected approved bulk sender mutation route.
+  - `029_outbound_intelligence_control_plane.sql` grants
+    `outbound-intelligence:view|manage` to System/Support and view-only access
+    to Customer Admin.
+  - The React Control Plane now has an Outbound intelligence route with
+    operator-facing volume, sender/source, events, campaigns, approvals,
+    policy-history and notification-state sections; it is covered by
+    `OutboundIntelligence.test.tsx`.
+  - Phase 6 policy metadata for `bulk_sending`, `outbound_abuse` and
+    `sender_reputation` is publish-validated and loaded by the outbound
+    evaluator, so thresholds are no longer only hard-coded defaults.
+  - Aggregated outbound security events enqueue `outbound.security_event`
+    outbox events for async customer/support/system notification and incident
+    handling without direct external calls on the mail path.
+- Local verification for this slice:
+  - `cargo fmt --all -- --check`
+  - `cargo clippy -p nullapart-mail-core --lib --tests -- -D warnings`
+  - `cargo clippy --workspace --all-targets -- -D warnings`
+  - `cargo test -p nullapart-mail-core outbound_intelligence --lib`
+  - `cargo test --test postgres_outbound_intelligence --no-run`
+  - `cargo test --workspace`
+  - `pnpm --dir frontend check-all`
+- Remote verification is currently pending because this host cannot reach
+  `192.168.8.4`: `ping` reported host down and `ssh -o ConnectTimeout=8`
+  timed out on port 22 on 2026-10-11.

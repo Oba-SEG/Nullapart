@@ -22,6 +22,9 @@ use nullapart_mail_core::handoff::HandoffConfig;
 use nullapart_mail_core::inline_ml::stage::InlineMlStage;
 use nullapart_mail_core::model_registry::{model_registry_router, ModelRegistryState};
 use nullapart_mail_core::operations_api::{operations_router, OperationsState};
+use nullapart_mail_core::outbound_intelligence_api::{
+    outbound_intelligence_router, OutboundIntelligenceApiState,
+};
 use nullapart_mail_core::phase2_handoff::{durable_handoff_router, DurableHandoffState};
 use nullapart_mail_core::policy_admin::{policy_admin_router, AdminPolicyState};
 use nullapart_mail_core::quarantine::{PostgresQuarantineRepository, QuarantineService};
@@ -321,6 +324,9 @@ async fn local_quarantine_api(
             pool.clone(),
             deployment_id.clone(),
         )))
+        .merge(outbound_intelligence_router(
+            OutboundIntelligenceApiState::new(pool.clone(), deployment_id.clone()),
+        ))
         .merge(admin_rbac_router(rbac_state.clone()))
         .merge(mail_trace_router(MailTraceState::new(
             pool.clone(),

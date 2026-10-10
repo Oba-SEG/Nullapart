@@ -361,6 +361,7 @@ async fn postgres_store_loads_approved_sender_and_deduplicates_events() {
             campaign_fingerprint: Some(format!("fp-store-{}", Uuid::new_v4().simple())),
             ..OutboundThreatSignals::default()
         },
+        policy_thresholds: Default::default(),
         approved_senders: vec![],
         now,
         existing_event: None,

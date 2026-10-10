@@ -9,6 +9,7 @@ import {
   Mail,
   Radar,
   ScrollText,
+  Send,
   Server,
   Settings,
   ShieldCheck,
@@ -125,6 +126,16 @@ export function Layout() {
             >
               <ShieldCheck size={17} aria-hidden="true" />
               <span>Domain security</span>
+            </Link>
+          ) : null}
+          {can("outbound-intelligence:view") ? (
+            <Link
+              to="/outbound-intelligence"
+              className="nav-link"
+              activeProps={{ className: "nav-link active" }}
+            >
+              <Send size={17} aria-hidden="true" />
+              <span>Outbound intelligence</span>
             </Link>
           ) : null}
           {can("audit:view") ? (

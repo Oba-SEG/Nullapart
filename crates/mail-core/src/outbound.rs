@@ -291,6 +291,10 @@ pub async fn validate_outbound_with_intelligence(
         )
         .await
         .map_err(|_| OutboundError::Internal("outbound intelligence unavailable".to_string()))?;
+    let policy_thresholds = store
+        .load_policy_thresholds(&source)
+        .await
+        .map_err(|_| OutboundError::Internal("outbound intelligence unavailable".to_string()))?;
     let input = OutboundIntelligenceInput {
         source,
         sender_address: request.envelope_sender.address().to_string(),
@@ -303,6 +307,7 @@ pub async fn validate_outbound_with_intelligence(
             .to_string(),
         metrics: snapshot.metrics,
         signals: snapshot.signals,
+        policy_thresholds,
         approved_senders,
         now: snapshot.observed_at,
         existing_event: None,

@@ -110,6 +110,16 @@ const domainSecurityRoute = createRoute({
   component: lazyRouteComponent(() => import("../pages/DomainSecurity"), "DomainSecurity"),
 });
 
+const outboundIntelligenceRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/outbound-intelligence",
+  beforeLoad: () => requirePermission("outbound-intelligence:view"),
+  component: lazyRouteComponent(
+    () => import("../pages/OutboundIntelligence"),
+    "OutboundIntelligence",
+  ),
+});
+
 const operationsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/operations",
@@ -189,6 +199,7 @@ const routeTree = rootRoute.addChildren([
   quarantineDetailRoute,
   scannerOperationsRoute,
   domainSecurityRoute,
+  outboundIntelligenceRoute,
   operationsRoute,
   auditLogRoute,
   adminUsersRoute,
