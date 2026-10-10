@@ -36,8 +36,12 @@ completion unless the code, tests and local deployment evidence match it.
   - `PostgresOutboundIntelligenceStore` loads active approved senders under
     transaction-scoped RLS and persists rollups, campaign fingerprints and
     deduplicated security events without storing raw content.
-- [ ] Wire evaluator into the trusted outbound path after server-derived
+- [x] Wire evaluator into the trusted outbound path after server-derived
   customer/source/domain validation and before delivery.
+  - `validate_outbound_with_intelligence` runs existing connector/domain
+    validation first, loads approved senders from trusted source context,
+    evaluates/persists Phase 6 intelligence and maps containment decisions to
+    outbound transport disposition.
 - [ ] Policy administration payloads for `bulk_sending`, `outbound_abuse` and
   `sender_reputation` thresholds.
 - [ ] Customer/system notifications and async incident/outbox linkage for
@@ -74,3 +78,6 @@ completion unless the code, tests and local deployment evidence match it.
   approval loading is tenant-scoped, rollups/campaign fingerprints upsert, and
   security events deduplicate by a bounded hashed event key. The remote ignored
   suite now covers both RLS isolation and persistence/event aggregation.
+- Added module-level outbound validation wiring:
+  `cargo test -p nullapart-mail-core outbound --lib` and
+  `cargo clippy -p nullapart-mail-core --lib --tests -- -D warnings` passed.

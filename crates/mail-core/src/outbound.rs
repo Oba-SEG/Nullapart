@@ -13,6 +13,12 @@ use nullapart_mail_contracts::{
     CustomerId,
 };
 
+use crate::outbound_intelligence::{
+    evaluate_outbound_intelligence, OutboundBehaviorMetrics, OutboundDecisionOutcome,
+    OutboundIntelligenceDecision, OutboundIntelligenceInput, OutboundSourceContext,
+    OutboundSourceKind, OutboundThreatSignals, PostgresOutboundIntelligenceStore,
+};
+
 /// Connector/MTA identity that submitted outbound mail.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutboundConnector {
@@ -133,6 +139,22 @@ pub struct OutboundSigning {
     pub spf_helo: Option<String>,
 }
 
+/// Phase 6 behaviour/threat snapshot supplied by trusted server stages.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutboundIntelligenceSnapshot {
+    pub metrics: OutboundBehaviorMetrics,
+    pub signals: OutboundThreatSignals,
+    pub observed_at: DateTime<Utc>,
+}
+
+/// Outbound validation plus the Phase 6 intelligence decision used to contain
+/// bulk abuse or compromised senders.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutboundIntakeWithIntelligence {
+    pub intake: OutboundIntakeResult,
+    pub intelligence: OutboundIntelligenceDecision,
+}
+
 /// Validate an outbound intake request.
 pub fn validate_outbound(
     request: &OutboundIntakeRequest,
@@ -242,6 +264,89 @@ pub fn validate_outbound(
         signing,
         validated_at: Utc::now(),
     })
+}
+
+/// Validate outbound intake and apply Phase 6 intelligence after the trusted
+/// connector/source/domain checks have passed.
+pub async fn validate_outbound_with_intelligence(
+    request: &OutboundIntakeRequest,
+    allowed_domains: &[DomainValidation],
+    authorization: &DomainAuthorization,
+    snapshot: OutboundIntelligenceSnapshot,
+    store: &PostgresOutboundIntelligenceStore,
+) -> Result<OutboundIntakeWithIntelligence, OutboundError> {
+    let intake = validate_outbound(request, allowed_domains, authorization)?;
+    let source = OutboundSourceContext {
+        deployment_id: request.connector.deployment_id.clone(),
+        customer_id: request.connector.customer_id.clone(),
+        source_kind: OutboundSourceKind::from(request.connector.connector_type),
+        source_id: request.connector.connector_id.clone(),
+        source_ip: Some(request.connector.ip_address.clone()),
+    };
+    let approved_senders = store
+        .load_approved_senders(
+            &source,
+            request.envelope_sender.address(),
+            snapshot.observed_at,
+        )
+        .await
+        .map_err(|_| OutboundError::Internal("outbound intelligence unavailable".to_string()))?;
+    let input = OutboundIntelligenceInput {
+        source,
+        sender_address: request.envelope_sender.address().to_string(),
+        sending_domain: request
+            .envelope_sender
+            .address()
+            .rsplit('@')
+            .next()
+            .unwrap_or("")
+            .to_string(),
+        metrics: snapshot.metrics,
+        signals: snapshot.signals,
+        approved_senders,
+        now: snapshot.observed_at,
+        existing_event: None,
+    };
+    let intelligence = evaluate_outbound_intelligence(&input);
+    store
+        .persist_decision(&input, &intelligence)
+        .await
+        .map_err(|_| OutboundError::Internal("outbound intelligence unavailable".to_string()))?;
+
+    Ok(OutboundIntakeWithIntelligence {
+        intake: apply_intelligence_disposition(intake, &intelligence),
+        intelligence,
+    })
+}
+
+fn apply_intelligence_disposition(
+    mut intake: OutboundIntakeResult,
+    intelligence: &OutboundIntelligenceDecision,
+) -> OutboundIntakeResult {
+    match intelligence.outcome {
+        OutboundDecisionOutcome::Allow | OutboundDecisionOutcome::Warn => {},
+        OutboundDecisionOutcome::Throttle | OutboundDecisionOutcome::Defer => {
+            intake.disposition = OutboundDisposition::Deferred;
+            intake.reason_code = intelligence.reason_code.clone();
+        },
+        OutboundDecisionOutcome::Hold
+        | OutboundDecisionOutcome::BlockSender
+        | OutboundDecisionOutcome::SuspendOutbound => {
+            intake.disposition = OutboundDisposition::Rejected;
+            intake.reason_code = intelligence.reason_code.clone();
+        },
+    }
+    intake
+}
+
+impl From<ConnectorType> for OutboundSourceKind {
+    fn from(value: ConnectorType) -> Self {
+        match value {
+            ConnectorType::InternalApi => Self::InternalApi,
+            ConnectorType::SmtpMta => Self::SmtpMta,
+            ConnectorType::Webhook => Self::Webhook,
+        }
+    }
 }
 
 /// Outbound error types.
@@ -380,5 +485,40 @@ mod tests {
         };
         let result = validate_outbound(&request, &test_domains(), &DomainAuthorization::Full);
         assert!(matches!(result, Err(OutboundError::NoRecipients)));
+    }
+
+    #[test]
+    fn intelligence_decision_updates_transport_disposition() {
+        let request = OutboundIntakeRequest {
+            connector: test_connector(),
+            envelope_sender: EnvelopeSender::new("sender@customer-a.com"),
+            recipients: vec![Recipient {
+                address: "user@external.com".to_string(),
+                orcpt: None,
+                notify: None,
+            }],
+            message_id: None,
+            content_hash: "abc".to_string(),
+        };
+        let intake = validate_outbound(&request, &test_domains(), &DomainAuthorization::Full)
+            .expect("base validation must pass");
+        let intelligence = OutboundIntelligenceDecision {
+            outcome: OutboundDecisionOutcome::Hold,
+            reason_code: ReasonCode::new("OUTBOUND_UNAUTHORIZED_BULK"),
+            event_type: None,
+            event_key: None,
+            aggregate_into_existing_event: false,
+            approval_used: false,
+            customer_id: CustomerId::new("cust-a"),
+            deployment_id: DeploymentId::new("CZA-1"),
+        };
+
+        let updated = apply_intelligence_disposition(intake, &intelligence);
+
+        assert_eq!(updated.disposition, OutboundDisposition::Rejected);
+        assert_eq!(
+            updated.reason_code,
+            ReasonCode::new("OUTBOUND_UNAUTHORIZED_BULK")
+        );
     }
 }
