@@ -150,7 +150,12 @@ completion unless the code, tests and local deployment evidence match it.
   - `cargo test --test postgres_outbound_intelligence --no-run`
   - `cargo clippy -p nullapart-mail-core --lib --tests -- -D warnings`
   - `cargo clippy -p nullapart-mail-core --test postgres_outbound_intelligence -- -D warnings`
+- Full local gates after commit `3226e88`:
+  - `cargo fmt --all -- --check`
+  - `cargo clippy --workspace --all-targets -- -D warnings`
+  - `cargo test --workspace`
+  - `pnpm --dir frontend check-all`
 - Remote verification is currently pending because this host cannot reach
   `192.168.8.4`: `ping` reported host down and `ssh -o ConnectTimeout=8`
   timed out on port 22 on 2026-10-11; later `nc -vz -G 5 192.168.8.4 22`
-  checks also timed out, including after commit `15ec5a6`.
+  checks also timed out, including after commits `15ec5a6` and `3226e88`.
