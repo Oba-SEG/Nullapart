@@ -98,14 +98,20 @@ completion unless the code, tests and local deployment evidence match it.
   - Aggregated outbound security events enqueue `outbound.security_event`
     outbox events for async customer/support/system notification and incident
     handling without direct external calls on the mail path.
+  - The ignored Postgres suite now also proves `load_policy_thresholds` reads
+    the three Phase 6 policy families under tenant scope and that persisted
+    warning/critical outbound events create one deduplicated
+    `outbound.security_event` outbox notification.
 - Local verification for this slice:
   - `cargo fmt --all -- --check`
   - `cargo clippy -p nullapart-mail-core --lib --tests -- -D warnings`
   - `cargo clippy --workspace --all-targets -- -D warnings`
   - `cargo test -p nullapart-mail-core outbound_intelligence --lib`
   - `cargo test --test postgres_outbound_intelligence --no-run`
+  - `cargo clippy -p nullapart-mail-core --test postgres_outbound_intelligence -- -D warnings`
   - `cargo test --workspace`
   - `pnpm --dir frontend check-all`
 - Remote verification is currently pending because this host cannot reach
   `192.168.8.4`: `ping` reported host down and `ssh -o ConnectTimeout=8`
-  timed out on port 22 on 2026-10-11.
+  timed out on port 22 on 2026-10-11; a later `nc -vz -G 5 192.168.8.4 22`
+  also timed out.

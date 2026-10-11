@@ -8,7 +8,7 @@ use chrono::Utc;
 use nullapart_mail_contracts::transaction::{CustomerId, DeploymentId};
 use nullapart_mail_core::outbound_intelligence::{
     evaluate_outbound_intelligence, OutboundBehaviorMetrics, OutboundIntelligenceInput,
-    OutboundSourceContext, OutboundSourceKind, OutboundThreatSignals,
+    OutboundPolicyThresholds, OutboundSourceContext, OutboundSourceKind, OutboundThreatSignals,
     PostgresOutboundIntelligenceStore,
 };
 use sqlx::postgres::PgPoolOptions;
@@ -51,6 +51,8 @@ async fn ensure_request_role(pool: &PgPool) {
         "GRANT SELECT, INSERT, UPDATE, DELETE ON outbound_behavior_rollups TO nullapart_local_request",
         "GRANT SELECT, INSERT, UPDATE, DELETE ON outbound_campaign_fingerprints TO nullapart_local_request",
         "GRANT SELECT, INSERT, UPDATE, DELETE ON outbound_security_events TO nullapart_local_request",
+        "GRANT SELECT, INSERT, UPDATE ON outbox_events TO nullapart_local_request",
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON policy_revisions TO nullapart_local_request",
     ] {
         sqlx::query(grant)
             .execute(&mut *transaction)
@@ -163,6 +165,29 @@ async fn seed(pool: &PgPool) -> Fixture {
     fixture
 }
 
+fn threshold_rule(metadata: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "id": Uuid::new_v4(),
+        "name": "phase 6 policy threshold",
+        "priority": 1,
+        "condition": {
+            "sender": null,
+            "recipient": null,
+            "auth": null,
+            "content": null,
+            "finding": null,
+            "scope": "transaction"
+        },
+        "action": {
+            "disposition": "hold",
+            "reason_code": "OUTBOUND_POLICY",
+            "notify": ["admin"],
+            "metadata": metadata
+        },
+        "enabled": true
+    })
+}
+
 async fn insert_phase6_rows(pool: &PgPool, deployment: &str, customer: &str, sender: &str) {
     sqlx::query(
         "INSERT INTO approved_bulk_senders \
@@ -219,6 +244,49 @@ async fn insert_phase6_rows(pool: &PgPool, deployment: &str, customer: &str, sen
     .execute(pool)
     .await
     .expect("security event row must insert");
+
+    for (family, metadata) in [
+        (
+            "bulk_sending",
+            serde_json::json!({
+                "max_messages_per_minute": 2,
+                "max_messages_per_hour": 5,
+                "max_recipients_per_message": 8,
+                "max_unique_recipients_per_hour": 13
+            }),
+        ),
+        (
+            "outbound_abuse",
+            serde_json::json!({
+                "campaign_min_messages_per_hour": 9,
+                "rotating_recipient_new_ratio": 0.70,
+                "event_cooldown_minutes": 45
+            }),
+        ),
+        (
+            "sender_reputation",
+            serde_json::json!({
+                "bounce_failures_per_hour": 4
+            }),
+        ),
+    ] {
+        sqlx::query(
+            "INSERT INTO policy_revisions \
+                (id, customer_id, deployment_id, family_id, scope_level, revision_number, rules, \
+                 published_by, activated_at) \
+             VALUES ($1,$2,$3,$4,'tenant',1,$5,'phase6-test',now())",
+        )
+        .bind(Uuid::new_v4())
+        .bind(customer)
+        .bind(deployment)
+        .bind(family)
+        .bind(sqlx::types::Json(serde_json::json!([threshold_rule(
+            metadata
+        )])))
+        .execute(pool)
+        .await
+        .expect("policy threshold revision must insert");
+    }
 }
 
 async fn visible_count(transaction: &mut Transaction<'_, sqlx::Postgres>, table: &str) -> i64 {
@@ -326,6 +394,17 @@ async fn postgres_store_loads_approved_sender_and_deduplicates_events() {
         .expect("approval lookup must succeed");
     assert_eq!(approvals.len(), 1);
     assert_eq!(approvals[0].sender_address, fixture.sender_a);
+    let thresholds = store
+        .load_policy_thresholds(&source)
+        .await
+        .expect("policy thresholds must load");
+    assert_eq!(thresholds.unauthorized_messages_per_minute, 2);
+    assert_eq!(thresholds.unauthorized_messages_per_hour, 5);
+    assert_eq!(thresholds.unauthorized_recipients_per_message, 8);
+    assert_eq!(thresholds.unauthorized_unique_recipients_per_hour, 13);
+    assert_eq!(thresholds.campaign_min_messages_per_hour, 9);
+    assert_eq!(thresholds.bounce_failures_per_hour, 4);
+    assert_eq!(thresholds.event_cooldown_minutes, 45);
 
     let foreign_source = OutboundSourceContext {
         deployment_id: DeploymentId::new(&fixture.deployment_b),
@@ -361,7 +440,7 @@ async fn postgres_store_loads_approved_sender_and_deduplicates_events() {
             campaign_fingerprint: Some(format!("fp-store-{}", Uuid::new_v4().simple())),
             ..OutboundThreatSignals::default()
         },
-        policy_thresholds: Default::default(),
+        policy_thresholds: OutboundPolicyThresholds::default(),
         approved_senders: vec![],
         now,
         existing_event: None,
@@ -383,17 +462,28 @@ async fn postgres_store_loads_approved_sender_and_deduplicates_events() {
             (SELECT count(*)::bigint FROM outbound_campaign_fingerprints \
              WHERE deployment_id = $1 AND customer_id = $2 AND fingerprint = $4) AS campaigns, \
             (SELECT message_count::bigint FROM outbound_security_events \
-             WHERE deployment_id = $1 AND customer_id = $2 AND event_key = $5) AS event_messages",
+             WHERE deployment_id = $1 AND customer_id = $2 AND event_key = $5) AS event_messages, \
+            (SELECT count(*)::bigint FROM outbox_events \
+             WHERE deployment_id = $1 AND customer_id = $2 \
+               AND event_type = 'outbound.security_event' \
+               AND idempotency_key = $6) AS outbox_events",
     )
     .bind(&fixture.deployment_a)
     .bind(&fixture.customer_a)
     .bind(&input.sender_address)
     .bind(input.signals.campaign_fingerprint.as_deref())
     .bind(decision.event_key.as_deref())
+    .bind(format!(
+        "outbound-security:{}:{}:{}",
+        fixture.deployment_a,
+        fixture.customer_a,
+        decision.event_key.as_deref().expect("event key")
+    ))
     .fetch_one(&pool)
     .await
     .expect("persisted rows must be readable");
     assert_eq!(row.get::<i64, _>("rollups"), 1);
     assert_eq!(row.get::<i64, _>("campaigns"), 1);
     assert_eq!(row.get::<i64, _>("event_messages"), 2);
+    assert_eq!(row.get::<i64, _>("outbox_events"), 1);
 }
