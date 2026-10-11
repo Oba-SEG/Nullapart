@@ -4,6 +4,8 @@
 //! validates domain ownership, and routes to delivery (direct MX or smart-host).
 //! Follows: docs/phases/PHASE-1-EXECUTION-PLAN.md Work Package 9
 
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -15,8 +17,9 @@ use nullapart_mail_contracts::{
 
 use crate::outbound_intelligence::{
     evaluate_outbound_intelligence, OutboundBehaviorMetrics, OutboundDecisionOutcome,
-    OutboundIntelligenceDecision, OutboundIntelligenceInput, OutboundSourceContext,
-    OutboundSourceKind, OutboundThreatSignals, PostgresOutboundIntelligenceStore,
+    OutboundIntelligenceDecision, OutboundIntelligenceInput, OutboundRecipientDomainMetrics,
+    OutboundSourceContext, OutboundSourceKind, OutboundThreatSignals,
+    PostgresOutboundIntelligenceStore,
 };
 
 /// Connector/MTA identity that submitted outbound mail.
@@ -306,6 +309,7 @@ pub async fn validate_outbound_with_intelligence(
             .unwrap_or("")
             .to_string(),
         metrics: snapshot.metrics,
+        recipient_domain_metrics: recipient_domain_metrics(&request.recipients),
         signals: snapshot.signals,
         policy_thresholds,
         approved_senders,
@@ -322,6 +326,29 @@ pub async fn validate_outbound_with_intelligence(
         intake: apply_intelligence_disposition(intake, &intelligence),
         intelligence,
     })
+}
+
+fn recipient_domain_metrics(recipients: &[Recipient]) -> Vec<OutboundRecipientDomainMetrics> {
+    let mut counts = BTreeMap::<String, u32>::new();
+    for recipient in recipients {
+        let Some((_, domain)) = recipient.address.rsplit_once('@') else {
+            continue;
+        };
+        let domain = domain.trim().to_lowercase();
+        if domain.is_empty() || domain.len() > 253 {
+            continue;
+        }
+        *counts.entry(domain).or_insert(0) += 1;
+    }
+    counts
+        .into_iter()
+        .map(|(recipient_domain, count)| OutboundRecipientDomainMetrics {
+            recipient_domain,
+            recipient_count: count,
+            unique_recipient_count: count,
+            new_recipient_count: 0,
+        })
+        .collect()
 }
 
 fn apply_intelligence_disposition(
@@ -525,5 +552,32 @@ mod tests {
             updated.reason_code,
             ReasonCode::new("OUTBOUND_UNAUTHORIZED_BULK")
         );
+    }
+
+    #[test]
+    fn recipient_domain_metrics_store_domains_not_addresses() {
+        let metrics = recipient_domain_metrics(&[
+            Recipient {
+                address: "one@Example.COM".to_string(),
+                orcpt: None,
+                notify: None,
+            },
+            Recipient {
+                address: "two@example.com".to_string(),
+                orcpt: None,
+                notify: None,
+            },
+            Recipient {
+                address: "missing-at-sign".to_string(),
+                orcpt: None,
+                notify: None,
+            },
+        ]);
+
+        assert_eq!(metrics.len(), 1);
+        assert_eq!(metrics[0].recipient_domain, "example.com");
+        assert_eq!(metrics[0].recipient_count, 2);
+        assert_eq!(metrics[0].unique_recipient_count, 2);
+        assert_eq!(metrics[0].new_recipient_count, 0);
     }
 }

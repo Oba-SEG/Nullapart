@@ -8,8 +8,8 @@ use chrono::Utc;
 use nullapart_mail_contracts::transaction::{CustomerId, DeploymentId};
 use nullapart_mail_core::outbound_intelligence::{
     evaluate_outbound_intelligence, OutboundBehaviorMetrics, OutboundIntelligenceInput,
-    OutboundPolicyThresholds, OutboundSourceContext, OutboundSourceKind, OutboundThreatSignals,
-    PostgresOutboundIntelligenceStore,
+    OutboundPolicyThresholds, OutboundRecipientDomainMetrics, OutboundSourceContext,
+    OutboundSourceKind, OutboundThreatSignals, PostgresOutboundIntelligenceStore,
 };
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row, Transaction};
@@ -436,6 +436,12 @@ async fn postgres_store_loads_approved_sender_and_deduplicates_events() {
             campaign_messages_last_hour: 45,
             bounce_failures_last_hour: 3,
         },
+        recipient_domain_metrics: vec![OutboundRecipientDomainMetrics {
+            recipient_domain: "recipient-a.test".to_string(),
+            recipient_count: 40,
+            unique_recipient_count: 35,
+            new_recipient_count: 30,
+        }],
         signals: OutboundThreatSignals {
             campaign_fingerprint: Some(format!("fp-store-{}", Uuid::new_v4().simple())),
             ..OutboundThreatSignals::default()
@@ -459,6 +465,9 @@ async fn postgres_store_loads_approved_sender_and_deduplicates_events() {
         "SELECT \
             (SELECT count(*)::bigint FROM outbound_behavior_rollups \
              WHERE deployment_id = $1 AND customer_id = $2 AND sender_address = lower($3)) AS rollups, \
+            (SELECT count(*)::bigint FROM outbound_behavior_rollups \
+             WHERE deployment_id = $1 AND customer_id = $2 AND sender_address = lower($3) \
+               AND recipient_domain = 'recipient-a.test') AS recipient_domain_rollups, \
             (SELECT count(*)::bigint FROM outbound_campaign_fingerprints \
              WHERE deployment_id = $1 AND customer_id = $2 AND fingerprint = $4) AS campaigns, \
             (SELECT message_count::bigint FROM outbound_security_events \
@@ -482,7 +491,8 @@ async fn postgres_store_loads_approved_sender_and_deduplicates_events() {
     .fetch_one(&pool)
     .await
     .expect("persisted rows must be readable");
-    assert_eq!(row.get::<i64, _>("rollups"), 1);
+    assert_eq!(row.get::<i64, _>("rollups"), 2);
+    assert_eq!(row.get::<i64, _>("recipient_domain_rollups"), 1);
     assert_eq!(row.get::<i64, _>("campaigns"), 1);
     assert_eq!(row.get::<i64, _>("event_messages"), 2);
     assert_eq!(row.get::<i64, _>("outbox_events"), 1);

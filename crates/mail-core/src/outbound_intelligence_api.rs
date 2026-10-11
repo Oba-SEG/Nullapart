@@ -529,6 +529,7 @@ async fn load_summary(
              SELECT * FROM outbound_behavior_rollups \
              WHERE deployment_id = $1 AND customer_id = $2 \
                AND window_start >= now() - interval '1 hour' \
+               AND recipient_domain IS NULL \
          ), events AS ( \
              SELECT * FROM outbound_security_events \
              WHERE deployment_id = $1 AND customer_id = $2 AND status = 'open' \
@@ -623,6 +624,7 @@ async fn load_sender_behaviour(
          FROM outbound_behavior_rollups \
          WHERE deployment_id = $1 AND customer_id = $2 \
            AND window_start >= now() - interval '1 hour' \
+           AND recipient_domain IS NULL \
          GROUP BY sender_address, sending_domain, source_kind, source_id \
          ORDER BY sum(message_count) DESC, max(updated_at) DESC \
          LIMIT 25",

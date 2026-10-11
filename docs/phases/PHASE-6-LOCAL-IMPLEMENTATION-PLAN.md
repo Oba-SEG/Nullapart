@@ -36,6 +36,10 @@ completion unless the code, tests and local deployment evidence match it.
   - `PostgresOutboundIntelligenceStore` loads active approved senders under
     transaction-scoped RLS and persists rollups, campaign fingerprints and
     deduplicated security events without storing raw content.
+  - Recipient-domain rollups are populated from trusted outbound RCPT domains
+    as aggregate counts only; full recipient addresses are not persisted, and
+    control-plane summary/sender queries filter to aggregate rollup rows to
+    avoid double-counting domain-specific rows.
 - [x] Wire evaluator into the trusted outbound path after server-derived
   customer/source/domain validation and before delivery.
   - `validate_outbound_with_intelligence` runs existing connector/domain
@@ -119,6 +123,17 @@ completion unless the code, tests and local deployment evidence match it.
 - Added `scripts/phase6_remote_verify.sh` so the remaining `.4` gate is
   repeatable once SSH returns. Local validation: `bash -n
   scripts/phase6_remote_verify.sh` and `git diff --check`.
+- Closed a Phase 6 fidelity gap in behaviour persistence: recipient-domain
+  rollup rows are now written alongside aggregate sender/source rollups, and
+  the Control Plane excludes those domain rows from top-level totals to keep
+  system-admin counts actionable. Focused verification:
+  - `cargo fmt --all`
+  - `cargo fmt --all -- --check`
+  - `cargo test -p nullapart-mail-core outbound_intelligence --lib`
+  - `cargo test -p nullapart-mail-core outbound --lib`
+  - `cargo test --test postgres_outbound_intelligence --no-run`
+  - `cargo clippy -p nullapart-mail-core --lib --tests -- -D warnings`
+  - `cargo clippy -p nullapart-mail-core --test postgres_outbound_intelligence -- -D warnings`
 - Remote verification is currently pending because this host cannot reach
   `192.168.8.4`: `ping` reported host down and `ssh -o ConnectTimeout=8`
   timed out on port 22 on 2026-10-11; a later `nc -vz -G 5 192.168.8.4 22`

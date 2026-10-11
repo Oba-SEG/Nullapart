@@ -77,6 +77,16 @@ pub struct OutboundBehaviorMetrics {
     pub bounce_failures_last_hour: u32,
 }
 
+/// Tenant-safe aggregate for one recipient domain. Stores only the domain and
+/// counts, never full recipient addresses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutboundRecipientDomainMetrics {
+    pub recipient_domain: String,
+    pub recipient_count: u32,
+    pub unique_recipient_count: u32,
+    pub new_recipient_count: u32,
+}
+
 impl OutboundBehaviorMetrics {
     fn new_recipient_ratio(self) -> f32 {
         if self.unique_recipients_last_hour == 0 {
@@ -132,6 +142,7 @@ pub struct OutboundIntelligenceInput {
     pub sender_address: String,
     pub sending_domain: String,
     pub metrics: OutboundBehaviorMetrics,
+    pub recipient_domain_metrics: Vec<OutboundRecipientDomainMetrics>,
     pub signals: OutboundThreatSignals,
     pub policy_thresholds: OutboundPolicyThresholds,
     pub approved_senders: Vec<ApprovedBulkSender>,
@@ -714,6 +725,27 @@ async fn upsert_rollup(
     transaction: &mut Transaction<'_, Postgres>,
     input: &OutboundIntelligenceInput,
 ) -> Result<(), OutboundIntelligenceStoreError> {
+    upsert_rollup_row(transaction, input, None).await?;
+    for domain in &input.recipient_domain_metrics {
+        upsert_rollup_row(transaction, input, Some(domain)).await?;
+    }
+    Ok(())
+}
+
+async fn upsert_rollup_row(
+    transaction: &mut Transaction<'_, Postgres>,
+    input: &OutboundIntelligenceInput,
+    recipient_domain: Option<&OutboundRecipientDomainMetrics>,
+) -> Result<(), OutboundIntelligenceStoreError> {
+    let recipient_count = recipient_domain
+        .map(|metric| metric.recipient_count)
+        .unwrap_or(input.metrics.recipients_this_message);
+    let unique_recipient_count = recipient_domain
+        .map(|metric| metric.unique_recipient_count)
+        .unwrap_or(input.metrics.unique_recipients_last_hour);
+    let new_recipient_count = recipient_domain
+        .map(|metric| metric.new_recipient_count)
+        .unwrap_or(input.metrics.new_recipients_last_hour);
     sqlx::query(
         "INSERT INTO outbound_behavior_rollups (\
             deployment_id, customer_id, source_kind, source_id, source_ip, sender_address, \
@@ -721,7 +753,7 @@ async fn upsert_rollup(
             message_count, recipient_count, unique_recipient_count, new_recipient_count, \
             bounce_count, failure_count, malware_count, auth_source_change_count, unusual_time_count\
          ) VALUES (\
-            $1,$2,$3,$4,$5::inet,lower($6),lower($7),$8,NULL,$9,60,$10,$11,$12,$13,$14,$14,$15,$16,$17\
+            $1,$2,$3,$4,$5::inet,lower($6),lower($7),$8,lower($9),$10,60,$11,$12,$13,$14,$15,$15,$16,$17,$18\
          ) ON CONFLICT (\
             deployment_id, customer_id, source_kind, source_id, sender_address, \
             (COALESCE(campaign_fingerprint, '')), (COALESCE(recipient_domain, '')), window_start, window_seconds\
@@ -746,11 +778,12 @@ async fn upsert_rollup(
     .bind(input.sender_address.trim())
     .bind(input.sending_domain.trim())
     .bind(input.signals.campaign_fingerprint.as_deref())
+    .bind(recipient_domain.map(|metric| metric.recipient_domain.trim()))
     .bind(window_start(input.now, 60))
     .bind(input.metrics.messages_last_minute as i32)
-    .bind(input.metrics.recipients_this_message as i32)
-    .bind(input.metrics.unique_recipients_last_hour as i32)
-    .bind(input.metrics.new_recipients_last_hour as i32)
+    .bind(recipient_count as i32)
+    .bind(unique_recipient_count as i32)
+    .bind(new_recipient_count as i32)
     .bind(input.metrics.bounce_failures_last_hour as i32)
     .bind(i32::from(input.signals.malware_detected || input.signals.malicious_url_detected))
     .bind(i32::from(input.signals.auth_source_changed))
@@ -1092,6 +1125,12 @@ mod tests {
             sender_address: "bulk@example.test".to_string(),
             sending_domain: "example.test".to_string(),
             metrics: metrics(),
+            recipient_domain_metrics: vec![OutboundRecipientDomainMetrics {
+                recipient_domain: "recipient.test".to_string(),
+                recipient_count: 5,
+                unique_recipient_count: 5,
+                new_recipient_count: 1,
+            }],
             signals: OutboundThreatSignals::default(),
             policy_thresholds: OutboundPolicyThresholds::default(),
             approved_senders: vec![approval(now)],
