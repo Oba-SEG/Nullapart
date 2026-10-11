@@ -7,9 +7,10 @@
 use chrono::Utc;
 use nullapart_mail_contracts::transaction::{CustomerId, DeploymentId};
 use nullapart_mail_core::outbound_intelligence::{
-    evaluate_outbound_intelligence, OutboundBehaviorMetrics, OutboundIntelligenceInput,
-    OutboundPolicyThresholds, OutboundRecipientDomainMetrics, OutboundSourceContext,
-    OutboundSourceKind, OutboundThreatSignals, PostgresOutboundIntelligenceStore,
+    evaluate_outbound_intelligence, OutboundBehaviorMetrics, OutboundBehaviorMetricsLookup,
+    OutboundIntelligenceInput, OutboundPolicyThresholds, OutboundRecipientDomainMetrics,
+    OutboundSourceContext, OutboundSourceKind, OutboundThreatSignals,
+    PostgresOutboundIntelligenceStore,
 };
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row, Transaction};
@@ -460,6 +461,24 @@ async fn postgres_store_loads_approved_sender_and_deduplicates_events() {
         .persist_decision(&input, &decision)
         .await
         .expect("second persistence pass must aggregate");
+    let persisted_metrics = store
+        .load_behavior_metrics(&OutboundBehaviorMetricsLookup {
+            source: input.source.clone(),
+            sender_address: input.sender_address.clone(),
+            sending_domain: input.sending_domain.clone(),
+            campaign_fingerprint: input.signals.campaign_fingerprint.clone(),
+            now,
+            current_recipient_count: input.metrics.recipients_this_message,
+            current_recipient_domain_count: input.recipient_domain_metrics.len() as u32,
+        })
+        .await
+        .expect("persisted behavior metrics must load");
+    assert_eq!(persisted_metrics.messages_last_minute, 31);
+    assert_eq!(persisted_metrics.messages_last_hour, 31);
+    assert_eq!(persisted_metrics.recipients_this_message, 60);
+    assert_eq!(persisted_metrics.recipient_domain_count_last_hour, 1);
+    assert_eq!(persisted_metrics.campaign_messages_last_hour, 46);
+    assert_eq!(persisted_metrics.bounce_failures_last_hour, 3);
 
     let row = sqlx::query(
         "SELECT \

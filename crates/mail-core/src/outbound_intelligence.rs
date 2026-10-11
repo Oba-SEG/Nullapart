@@ -150,6 +150,18 @@ pub struct OutboundIntelligenceInput {
     pub existing_event: Option<ExistingOutboundEvent>,
 }
 
+/// Content-free lookup key for persisted rolling outbound behaviour metrics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutboundBehaviorMetricsLookup {
+    pub source: OutboundSourceContext,
+    pub sender_address: String,
+    pub sending_domain: String,
+    pub campaign_fingerprint: Option<String>,
+    pub now: DateTime<Utc>,
+    pub current_recipient_count: u32,
+    pub current_recipient_domain_count: u32,
+}
+
 /// Existing open event for cooldown/dedup aggregation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExistingOutboundEvent {
@@ -345,6 +357,77 @@ impl PostgresOutboundIntelligenceStore {
             apply_policy_threshold_rules(&mut thresholds, &family_id, &rules);
         }
         Ok(thresholds)
+    }
+
+    /// Loads the persisted rolling behaviour projection for the current
+    /// sender/source and adds the in-flight message counts. Callers may still
+    /// merge in richer trusted runtime snapshots; this database projection
+    /// prevents the outbound path from depending only on caller-populated
+    /// counters.
+    pub async fn load_behavior_metrics(
+        &self,
+        lookup: &OutboundBehaviorMetricsLookup,
+    ) -> Result<OutboundBehaviorMetrics, OutboundIntelligenceStoreError> {
+        let mut transaction = begin_scoped(&self.pool, &lookup.source).await?;
+        let minute_start = lookup.now - Duration::minutes(1);
+        let hour_start = lookup.now - Duration::hours(1);
+        let row = sqlx::query(
+            "SELECT \
+                COALESCE(MAX(message_count) FILTER (WHERE recipient_domain IS NULL AND window_start >= $7), 0)::bigint AS messages_last_minute, \
+                COALESCE(MAX(message_count) FILTER (WHERE recipient_domain IS NULL), 0)::bigint AS messages_last_hour, \
+                COALESCE(MAX(unique_recipient_count) FILTER (WHERE recipient_domain IS NULL), 0)::bigint AS unique_recipients_last_hour, \
+                COALESCE(MAX(new_recipient_count) FILTER (WHERE recipient_domain IS NULL), 0)::bigint AS new_recipients_last_hour, \
+                COALESCE(COUNT(DISTINCT recipient_domain) FILTER (WHERE recipient_domain IS NOT NULL), 0)::bigint AS recipient_domain_count_last_hour, \
+                COALESCE(MAX(message_count) FILTER (WHERE recipient_domain IS NULL AND campaign_fingerprint = $8), 0)::bigint AS campaign_messages_last_hour, \
+                COALESCE(MAX(failure_count) FILTER (WHERE recipient_domain IS NULL), 0)::bigint AS bounce_failures_last_hour \
+             FROM outbound_behavior_rollups \
+             WHERE deployment_id = $1 \
+               AND customer_id = $2 \
+               AND source_kind = $3 \
+               AND source_id = $4 \
+               AND sender_address = lower($5) \
+               AND sending_domain = lower($6) \
+               AND window_start >= $9",
+        )
+        .bind(&lookup.source.deployment_id.0)
+        .bind(&lookup.source.customer_id.0)
+        .bind(lookup.source.source_kind.as_str())
+        .bind(&lookup.source.source_id)
+        .bind(lookup.sender_address.trim())
+        .bind(lookup.sending_domain.trim())
+        .bind(minute_start)
+        .bind(lookup.campaign_fingerprint.as_deref())
+        .bind(hour_start)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?;
+
+        Ok(OutboundBehaviorMetrics {
+            messages_last_minute: i64_to_u32(row.get::<i64, _>("messages_last_minute"))
+                .saturating_add(1),
+            messages_last_hour: i64_to_u32(row.get::<i64, _>("messages_last_hour"))
+                .saturating_add(1),
+            recipients_this_message: lookup.current_recipient_count,
+            unique_recipients_last_hour: i64_to_u32(
+                row.get::<i64, _>("unique_recipients_last_hour"),
+            )
+            .max(lookup.current_recipient_count),
+            new_recipients_last_hour: i64_to_u32(row.get::<i64, _>("new_recipients_last_hour")),
+            recipient_domain_count_last_hour: i64_to_u32(
+                row.get::<i64, _>("recipient_domain_count_last_hour"),
+            )
+            .max(lookup.current_recipient_domain_count),
+            campaign_messages_last_hour: if lookup.campaign_fingerprint.is_some() {
+                i64_to_u32(row.get::<i64, _>("campaign_messages_last_hour")).saturating_add(1)
+            } else {
+                0
+            },
+            bounce_failures_last_hour: i64_to_u32(row.get::<i64, _>("bounce_failures_last_hour")),
+        })
     }
 
     /// Persists the content-free rollup/campaign/event projection for one
@@ -987,6 +1070,10 @@ fn apply_policy_threshold_rules(
 fn positive_u32(metadata: &serde_json::Value, key: &str) -> Option<u32> {
     let value = metadata.get(key)?.as_u64()?;
     u32::try_from(value).ok().filter(|value| *value > 0)
+}
+
+fn i64_to_u32(value: i64) -> u32 {
+    u32::try_from(value.max(0)).unwrap_or(u32::MAX)
 }
 
 fn positive_i64(metadata: &serde_json::Value, key: &str) -> Option<i64> {

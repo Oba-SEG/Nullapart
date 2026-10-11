@@ -16,10 +16,10 @@ use nullapart_mail_contracts::{
 };
 
 use crate::outbound_intelligence::{
-    evaluate_outbound_intelligence, OutboundBehaviorMetrics, OutboundDecisionOutcome,
-    OutboundIntelligenceDecision, OutboundIntelligenceInput, OutboundRecipientDomainMetrics,
-    OutboundSourceContext, OutboundSourceKind, OutboundThreatSignals,
-    PostgresOutboundIntelligenceStore,
+    evaluate_outbound_intelligence, OutboundBehaviorMetrics, OutboundBehaviorMetricsLookup,
+    OutboundDecisionOutcome, OutboundIntelligenceDecision, OutboundIntelligenceInput,
+    OutboundRecipientDomainMetrics, OutboundSourceContext, OutboundSourceKind,
+    OutboundThreatSignals, PostgresOutboundIntelligenceStore,
 };
 
 /// Connector/MTA identity that submitted outbound mail.
@@ -286,30 +286,35 @@ pub async fn validate_outbound_with_intelligence(
         source_id: request.connector.connector_id.clone(),
         source_ip: Some(request.connector.ip_address.clone()),
     };
+    let sender_address = request.envelope_sender.address().to_string();
+    let sending_domain = sender_address.rsplit('@').next().unwrap_or("").to_string();
+    let recipient_domain_metrics = recipient_domain_metrics(&request.recipients);
     let approved_senders = store
-        .load_approved_senders(
-            &source,
-            request.envelope_sender.address(),
-            snapshot.observed_at,
-        )
+        .load_approved_senders(&source, &sender_address, snapshot.observed_at)
         .await
         .map_err(|_| OutboundError::Internal("outbound intelligence unavailable".to_string()))?;
     let policy_thresholds = store
         .load_policy_thresholds(&source)
         .await
         .map_err(|_| OutboundError::Internal("outbound intelligence unavailable".to_string()))?;
+    let persisted_metrics = store
+        .load_behavior_metrics(&OutboundBehaviorMetricsLookup {
+            source: source.clone(),
+            sender_address: sender_address.clone(),
+            sending_domain: sending_domain.clone(),
+            campaign_fingerprint: snapshot.signals.campaign_fingerprint.clone(),
+            now: snapshot.observed_at,
+            current_recipient_count: request.recipients.len() as u32,
+            current_recipient_domain_count: recipient_domain_metrics.len() as u32,
+        })
+        .await
+        .map_err(|_| OutboundError::Internal("outbound intelligence unavailable".to_string()))?;
     let input = OutboundIntelligenceInput {
         source,
-        sender_address: request.envelope_sender.address().to_string(),
-        sending_domain: request
-            .envelope_sender
-            .address()
-            .rsplit('@')
-            .next()
-            .unwrap_or("")
-            .to_string(),
-        metrics: snapshot.metrics,
-        recipient_domain_metrics: recipient_domain_metrics(&request.recipients),
+        sender_address,
+        sending_domain,
+        metrics: merge_behavior_metrics(snapshot.metrics, persisted_metrics),
+        recipient_domain_metrics,
         signals: snapshot.signals,
         policy_thresholds,
         approved_senders,
@@ -349,6 +354,38 @@ fn recipient_domain_metrics(recipients: &[Recipient]) -> Vec<OutboundRecipientDo
             new_recipient_count: 0,
         })
         .collect()
+}
+
+fn merge_behavior_metrics(
+    snapshot: OutboundBehaviorMetrics,
+    persisted: OutboundBehaviorMetrics,
+) -> OutboundBehaviorMetrics {
+    OutboundBehaviorMetrics {
+        messages_last_minute: snapshot
+            .messages_last_minute
+            .max(persisted.messages_last_minute),
+        messages_last_hour: snapshot
+            .messages_last_hour
+            .max(persisted.messages_last_hour),
+        recipients_this_message: snapshot
+            .recipients_this_message
+            .max(persisted.recipients_this_message),
+        unique_recipients_last_hour: snapshot
+            .unique_recipients_last_hour
+            .max(persisted.unique_recipients_last_hour),
+        new_recipients_last_hour: snapshot
+            .new_recipients_last_hour
+            .max(persisted.new_recipients_last_hour),
+        recipient_domain_count_last_hour: snapshot
+            .recipient_domain_count_last_hour
+            .max(persisted.recipient_domain_count_last_hour),
+        campaign_messages_last_hour: snapshot
+            .campaign_messages_last_hour
+            .max(persisted.campaign_messages_last_hour),
+        bounce_failures_last_hour: snapshot
+            .bounce_failures_last_hour
+            .max(persisted.bounce_failures_last_hour),
+    }
 }
 
 fn apply_intelligence_disposition(
@@ -579,5 +616,39 @@ mod tests {
         assert_eq!(metrics[0].recipient_count, 2);
         assert_eq!(metrics[0].unique_recipient_count, 2);
         assert_eq!(metrics[0].new_recipient_count, 0);
+    }
+
+    #[test]
+    fn behavior_metrics_merge_uses_strongest_trusted_count() {
+        let snapshot = OutboundBehaviorMetrics {
+            messages_last_minute: 3,
+            messages_last_hour: 30,
+            recipients_this_message: 2,
+            unique_recipients_last_hour: 20,
+            new_recipients_last_hour: 15,
+            recipient_domain_count_last_hour: 4,
+            campaign_messages_last_hour: 9,
+            bounce_failures_last_hour: 1,
+        };
+        let persisted = OutboundBehaviorMetrics {
+            messages_last_minute: 8,
+            messages_last_hour: 28,
+            recipients_this_message: 2,
+            unique_recipients_last_hour: 25,
+            new_recipients_last_hour: 10,
+            recipient_domain_count_last_hour: 6,
+            campaign_messages_last_hour: 7,
+            bounce_failures_last_hour: 3,
+        };
+
+        let merged = merge_behavior_metrics(snapshot, persisted);
+
+        assert_eq!(merged.messages_last_minute, 8);
+        assert_eq!(merged.messages_last_hour, 30);
+        assert_eq!(merged.unique_recipients_last_hour, 25);
+        assert_eq!(merged.new_recipients_last_hour, 15);
+        assert_eq!(merged.recipient_domain_count_last_hour, 6);
+        assert_eq!(merged.campaign_messages_last_hour, 9);
+        assert_eq!(merged.bounce_failures_last_hour, 3);
     }
 }
