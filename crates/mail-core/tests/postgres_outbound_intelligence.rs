@@ -457,8 +457,28 @@ async fn postgres_store_loads_approved_sender_and_deduplicates_events() {
         .persist_decision(&input, &decision)
         .await
         .expect("first persistence pass must succeed");
+    let existing_event = store
+        .load_existing_event(
+            &input.source,
+            decision.event_key.as_deref().expect("event key"),
+            now,
+        )
+        .await
+        .expect("existing event lookup must succeed")
+        .expect("open event must be inside cooldown");
+    assert_eq!(
+        existing_event.event_key,
+        decision.event_key.clone().expect("event key")
+    );
+    let mut repeated_input = input.clone();
+    repeated_input.existing_event = Some(existing_event);
+    let repeated_decision = evaluate_outbound_intelligence(&repeated_input);
+    assert!(
+        repeated_decision.aggregate_into_existing_event,
+        "runtime decisions must mark repeated detections as aggregate events"
+    );
     store
-        .persist_decision(&input, &decision)
+        .persist_decision(&repeated_input, &repeated_decision)
         .await
         .expect("second persistence pass must aggregate");
     let persisted_metrics = store

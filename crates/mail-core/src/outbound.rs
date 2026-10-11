@@ -309,7 +309,7 @@ pub async fn validate_outbound_with_intelligence(
         })
         .await
         .map_err(|_| OutboundError::Internal("outbound intelligence unavailable".to_string()))?;
-    let input = OutboundIntelligenceInput {
+    let mut input = OutboundIntelligenceInput {
         source,
         sender_address,
         sending_domain,
@@ -321,7 +321,17 @@ pub async fn validate_outbound_with_intelligence(
         now: snapshot.observed_at,
         existing_event: None,
     };
-    let intelligence = evaluate_outbound_intelligence(&input);
+    let mut intelligence = evaluate_outbound_intelligence(&input);
+    if let Some(event_key) = intelligence.event_key.clone() {
+        if let Some(existing_event) = store
+            .load_existing_event(&input.source, &event_key, input.now)
+            .await
+            .map_err(|_| OutboundError::Internal("outbound intelligence unavailable".to_string()))?
+        {
+            input.existing_event = Some(existing_event);
+            intelligence = evaluate_outbound_intelligence(&input);
+        }
+    }
     store
         .persist_decision(&input, &intelligence)
         .await

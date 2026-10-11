@@ -155,6 +155,16 @@ completion unless the code, tests and local deployment evidence match it.
   - `cargo clippy --workspace --all-targets -- -D warnings`
   - `cargo test --workspace`
   - `pnpm --dir frontend check-all`
+- Closed the cooldown/dedup runtime wiring gap: the outbound intelligence path
+  now loads an open matching `outbound_security_events` row inside its cooldown
+  window and re-evaluates with `existing_event`, so repeated detections are
+  marked for aggregation before persistence/outbox handling. Focused
+  verification:
+  - `cargo fmt --all -- --check`
+  - `cargo test -p nullapart-mail-core outbound --lib`
+  - `cargo test --test postgres_outbound_intelligence --no-run`
+  - `cargo clippy -p nullapart-mail-core --lib --tests -- -D warnings`
+  - `cargo clippy -p nullapart-mail-core --test postgres_outbound_intelligence -- -D warnings`
 - Remote verification is currently pending because this host cannot reach
   `192.168.8.4`: `ping` reported host down and `ssh -o ConnectTimeout=8`
   timed out on port 22 on 2026-10-11; later `nc -vz -G 5 192.168.8.4 22`

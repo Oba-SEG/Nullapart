@@ -430,6 +430,50 @@ impl PostgresOutboundIntelligenceStore {
         })
     }
 
+    /// Loads an open matching event that is still inside its cooldown window,
+    /// so callers can aggregate repeated detections instead of treating every
+    /// message as a fresh incident.
+    pub async fn load_existing_event(
+        &self,
+        source: &OutboundSourceContext,
+        event_key: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<ExistingOutboundEvent>, OutboundIntelligenceStoreError> {
+        let mut transaction = begin_scoped(&self.pool, source).await?;
+        let row = sqlx::query(
+            "SELECT event_key, cooldown_until \
+             FROM outbound_security_events \
+             WHERE deployment_id = $1 \
+               AND customer_id = $2 \
+               AND event_key = $3 \
+               AND status = 'open' \
+               AND cooldown_until > $4",
+        )
+        .bind(&source.deployment_id.0)
+        .bind(&source.customer_id.0)
+        .bind(event_key)
+        .bind(now)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?;
+
+        row.map(|row| {
+            Ok(ExistingOutboundEvent {
+                event_key: row
+                    .try_get("event_key")
+                    .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?,
+                cooldown_until: row
+                    .try_get("cooldown_until")
+                    .map_err(|_| OutboundIntelligenceStoreError::Unavailable)?,
+            })
+        })
+        .transpose()
+    }
+
     /// Persists the content-free rollup/campaign/event projection for one
     /// decision. This never writes raw content or full recipient addresses.
     pub async fn persist_decision(
