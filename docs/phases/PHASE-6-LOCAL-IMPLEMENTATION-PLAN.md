@@ -52,6 +52,11 @@ completion unless the code, tests and local deployment evidence match it.
 - [ ] Local `.4` migrated runtime verification: approved bulk allowed,
   unauthorized burst held/throttled, source spoofing blocked, malware from
   approved sender held, event deduplication observed.
+  - Prepared repeatable remote gate:
+    `SSHPASS=1234 scripts/phase6_remote_verify.sh` syncs the Phase 6 files to
+    `ob1@192.168.8.4:/home/ob1/Nullapart`, applies migration `029`, runs the
+    ignored Postgres suite through an SSH tunnel and checks the authenticated
+    outbound-intelligence API projection.
 - [ ] Full local gates: `cargo fmt --all -- --check`,
   `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace`, frontend checks when UI is touched, and ignored
@@ -111,6 +116,9 @@ completion unless the code, tests and local deployment evidence match it.
   - `cargo clippy -p nullapart-mail-core --test postgres_outbound_intelligence -- -D warnings`
   - `cargo test --workspace`
   - `pnpm --dir frontend check-all`
+- Added `scripts/phase6_remote_verify.sh` so the remaining `.4` gate is
+  repeatable once SSH returns. Local validation: `bash -n
+  scripts/phase6_remote_verify.sh` and `git diff --check`.
 - Remote verification is currently pending because this host cannot reach
   `192.168.8.4`: `ping` reported host down and `ssh -o ConnectTimeout=8`
   timed out on port 22 on 2026-10-11; a later `nc -vz -G 5 192.168.8.4 22`
