@@ -102,6 +102,10 @@
   margin: var(--spacing-1) 0;
 }
 
+.outbound-event .outbound-event-remediation {
+  color: var(--color-text-primary);
+}
+
 .outbound-section-head {
   align-items: flex-start;
   display: flex;

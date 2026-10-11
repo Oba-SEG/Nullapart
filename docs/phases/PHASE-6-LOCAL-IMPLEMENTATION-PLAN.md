@@ -50,6 +50,9 @@ completion unless the code, tests and local deployment evidence match it.
   `sender_reputation` thresholds.
 - [x] Customer/system notifications and async incident/outbox linkage for
   compromised sender and suspended outbound capability.
+  - Compromised sender/source-spoofing/malware-from-bulk-sender events include
+    runbook linkage, credential-rotation guidance and incident escalation
+    metadata in event details/outbox payloads.
 - [x] Control-plane API and UI for outbound volume, sender/source behaviour,
   approved bulk senders, held/blocked events, campaigns, failure/bounce trends,
   policy/action history and notification state.
@@ -168,6 +171,17 @@ completion unless the code, tests and local deployment evidence match it.
 - Full local gates after commit `646a5e3`:
   - `cargo clippy --workspace --all-targets -- -D warnings`
   - `cargo test --workspace`
+  - `pnpm --dir frontend check-all`
+- Added operator remediation linkage for outbound abuse events:
+  `docs/runbooks/OUTBOUND-ABUSE-RESPONSE.md`, event details/outbox payloads and
+  the Control Plane event cards now show remediation summary, runbook path and
+  credential-rotation guidance without exposing message content. Focused
+  verification:
+  - `cargo fmt --all -- --check`
+  - `cargo test -p nullapart-mail-core outbound_intelligence --lib`
+  - `cargo test --test postgres_outbound_intelligence --no-run`
+  - `cargo clippy -p nullapart-mail-core --lib --tests -- -D warnings`
+  - `cargo clippy -p nullapart-mail-core --test postgres_outbound_intelligence -- -D warnings`
   - `pnpm --dir frontend check-all`
 - Remote verification is currently pending because this host cannot reach
   `192.168.8.4`: `ping` reported host down and `ssh -o ConnectTimeout=8`

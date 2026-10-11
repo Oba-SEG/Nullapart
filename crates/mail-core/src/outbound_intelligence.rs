@@ -960,13 +960,18 @@ async fn upsert_security_event(
     let cooldown_until =
         input.now + Duration::minutes(input.policy_thresholds.event_cooldown_minutes);
     let severity = event_severity(decision.outcome);
+    let remediation = remediation_profile(event_type);
     let details = serde_json::json!({
         "messages_last_minute": input.metrics.messages_last_minute,
         "messages_last_hour": input.metrics.messages_last_hour,
         "recipients_this_message": input.metrics.recipients_this_message,
         "unique_recipients_last_hour": input.metrics.unique_recipients_last_hour,
         "new_recipients_last_hour": input.metrics.new_recipients_last_hour,
-        "approval_used": decision.approval_used
+        "approval_used": decision.approval_used,
+        "remediation_runbook": remediation.runbook,
+        "remediation_summary": remediation.summary,
+        "credential_rotation_recommended": remediation.credential_rotation_recommended,
+        "incident_escalation": remediation.incident_escalation
     });
     sqlx::query(
         "INSERT INTO outbound_security_events (\
@@ -1197,6 +1202,35 @@ fn event_severity(outcome: OutboundDecisionOutcome) -> &'static str {
         OutboundDecisionOutcome::Hold
         | OutboundDecisionOutcome::BlockSender
         | OutboundDecisionOutcome::SuspendOutbound => "critical",
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RemediationProfile {
+    runbook: &'static str,
+    summary: &'static str,
+    credential_rotation_recommended: bool,
+    incident_escalation: &'static str,
+}
+
+fn remediation_profile(event_type: OutboundSecurityEventType) -> RemediationProfile {
+    match event_type {
+        OutboundSecurityEventType::CompromisedSender
+        | OutboundSecurityEventType::SourceSpoofing
+        | OutboundSecurityEventType::MalwareFromBulkSender => RemediationProfile {
+            runbook: "docs/runbooks/OUTBOUND-ABUSE-RESPONSE.md",
+            summary: "Contain sender/source, rotate connector credentials, preserve evidence, and verify outbound reputation recovery.",
+            credential_rotation_recommended: true,
+            incident_escalation: "security",
+        },
+        OutboundSecurityEventType::UnauthorizedBulk
+        | OutboundSecurityEventType::CampaignOutbreak
+        | OutboundSecurityEventType::DeliveryFailureSpike => RemediationProfile {
+            runbook: "docs/runbooks/OUTBOUND-ABUSE-RESPONSE.md",
+            summary: "Review approval status, throttle or hold the source, notify the customer, and monitor campaign/failure trends.",
+            credential_rotation_recommended: false,
+            incident_escalation: "support",
+        },
     }
 }
 
@@ -1441,5 +1475,17 @@ mod tests {
             SENDER_REPUTATION_POLICY_FAMILY,
             &extra_key
         ));
+    }
+
+    #[test]
+    fn compromised_source_events_link_credential_rotation_runbook() {
+        let remediation = remediation_profile(OutboundSecurityEventType::SourceSpoofing);
+
+        assert_eq!(
+            remediation.runbook,
+            "docs/runbooks/OUTBOUND-ABUSE-RESPONSE.md"
+        );
+        assert!(remediation.credential_rotation_recommended);
+        assert_eq!(remediation.incident_escalation, "security");
     }
 }

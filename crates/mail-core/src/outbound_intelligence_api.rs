@@ -145,6 +145,9 @@ struct SecurityEventView {
     first_seen_at: DateTime<Utc>,
     last_seen_at: DateTime<Utc>,
     cooldown_until: Option<DateTime<Utc>>,
+    remediation_runbook: Option<String>,
+    remediation_summary: Option<String>,
+    credential_rotation_recommended: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -696,7 +699,11 @@ async fn load_security_events(
 ) -> Result<Vec<SecurityEventView>, Response> {
     sqlx::query(
         "SELECT id, event_type, severity, outcome, reason_code, sender_address, source_id, \
-                campaign_fingerprint, status, message_count, first_seen_at, last_seen_at, cooldown_until \
+                campaign_fingerprint, status, message_count, first_seen_at, last_seen_at, cooldown_until, \
+                details->>'remediation_runbook' AS remediation_runbook, \
+                details->>'remediation_summary' AS remediation_summary, \
+                COALESCE((details->>'credential_rotation_recommended')::boolean, false) \
+                    AS credential_rotation_recommended \
          FROM outbound_security_events \
          WHERE deployment_id = $1 AND customer_id = $2 \
          ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END, last_seen_at DESC \
@@ -722,6 +729,9 @@ async fn load_security_events(
                 first_seen_at: row.get("first_seen_at"),
                 last_seen_at: row.get("last_seen_at"),
                 cooldown_until: row.get("cooldown_until"),
+                remediation_runbook: row.get("remediation_runbook"),
+                remediation_summary: row.get("remediation_summary"),
+                credential_rotation_recommended: row.get("credential_rotation_recommended"),
             })
             .collect()
     })

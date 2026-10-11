@@ -101,6 +101,10 @@ const baseSnapshot = {
       first_seen_at: "2026-01-06T09:50:00Z",
       last_seen_at: "2026-01-06T09:59:00Z",
       cooldown_until: "2026-01-06T10:29:00Z",
+      remediation_runbook: "docs/runbooks/OUTBOUND-ABUSE-RESPONSE.md",
+      remediation_summary:
+        "Contain sender/source, rotate connector credentials, preserve evidence, and verify outbound reputation recovery.",
+      credential_rotation_recommended: true,
     },
   ],
   policy_history: [
@@ -179,6 +183,8 @@ describe("OutboundIntelligence", () => {
     expect(within(summary).getByText("Messages")).toBeTruthy();
     expect(within(summary).getByText("42")).toBeTruthy();
     expect(screen.getByText("unauthorized bulk")).toBeTruthy();
+    expect(screen.getByText(/rotate connector credentials/i)).toBeTruthy();
+    expect(screen.getByText(/docs\/runbooks\/OUTBOUND-ABUSE-RESPONSE.md/)).toBeTruthy();
     expect(screen.getAllByText("bulk@example.test").length).toBeGreaterThan(0);
     expect(screen.getByText("campaign-abc")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Save approval" })).toBeTruthy();

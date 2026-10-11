@@ -511,6 +511,11 @@ async fn postgres_store_loads_approved_sender_and_deduplicates_events() {
              WHERE deployment_id = $1 AND customer_id = $2 AND fingerprint = $4) AS campaigns, \
             (SELECT message_count::bigint FROM outbound_security_events \
              WHERE deployment_id = $1 AND customer_id = $2 AND event_key = $5) AS event_messages, \
+            (SELECT details->>'remediation_runbook' FROM outbound_security_events \
+             WHERE deployment_id = $1 AND customer_id = $2 AND event_key = $5) AS remediation_runbook, \
+            (SELECT COALESCE((details->>'credential_rotation_recommended')::boolean, false) \
+             FROM outbound_security_events \
+             WHERE deployment_id = $1 AND customer_id = $2 AND event_key = $5) AS credential_rotation_recommended, \
             (SELECT count(*)::bigint FROM outbox_events \
              WHERE deployment_id = $1 AND customer_id = $2 \
                AND event_type = 'outbound.security_event' \
@@ -534,5 +539,13 @@ async fn postgres_store_loads_approved_sender_and_deduplicates_events() {
     assert_eq!(row.get::<i64, _>("recipient_domain_rollups"), 1);
     assert_eq!(row.get::<i64, _>("campaigns"), 1);
     assert_eq!(row.get::<i64, _>("event_messages"), 2);
+    assert_eq!(
+        row.get::<String, _>("remediation_runbook"),
+        "docs/runbooks/OUTBOUND-ABUSE-RESPONSE.md"
+    );
+    assert!(
+        !row.get::<bool, _>("credential_rotation_recommended"),
+        "unauthorized-bulk events require support triage but not automatic credential rotation"
+    );
     assert_eq!(row.get::<i64, _>("outbox_events"), 1);
 }

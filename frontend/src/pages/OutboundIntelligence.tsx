@@ -79,6 +79,9 @@ interface SecurityEvent {
   first_seen_at: string;
   last_seen_at: string;
   cooldown_until: string | null;
+  remediation_runbook: string | null;
+  remediation_summary: string | null;
+  credential_rotation_recommended: boolean;
 }
 
 interface PolicyHistory {
@@ -320,6 +323,17 @@ export function OutboundIntelligence() {
                     {event.source_id ?? "unknown source"} · {event.reason_code} ·{" "}
                     {event.message_count} observed messages
                   </p>
+                  {event.remediation_summary ? (
+                    <p className="outbound-event-remediation">
+                      Action: {event.remediation_summary}
+                      {event.credential_rotation_recommended
+                        ? " Rotate connector credentials."
+                        : ""}
+                    </p>
+                  ) : null}
+                  {event.remediation_runbook ? (
+                    <small>Runbook: {event.remediation_runbook}</small>
+                  ) : null}
                   <small>
                     Last seen {formatDate(event.last_seen_at)}
                     {event.cooldown_until
