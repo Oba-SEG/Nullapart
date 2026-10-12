@@ -63,15 +63,16 @@ completion unless the code, tests and local deployment evidence match it.
 - [x] Control-plane API and UI for outbound volume, sender/source behaviour,
   approved bulk senders, held/blocked events, campaigns, failure/bounce trends,
   policy/action history and notification state.
-- [ ] Local `.4` migrated runtime verification: approved bulk allowed,
+- [x] Local `.4` migrated runtime verification: approved bulk allowed,
   unauthorized burst held/throttled, source spoofing blocked, malware from
   approved sender held, event deduplication observed.
-  - Prepared repeatable remote gate:
+  - Repeatable remote gate:
     `SSHPASS=1234 scripts/phase6_remote_verify.sh` syncs the Phase 6 files to
-    `ob1@192.168.8.4:/home/ob1/Nullapart`, applies migration `029`, runs the
-    ignored Postgres suite through an SSH tunnel and checks the authenticated
-    outbound-intelligence API projection.
-- [ ] Full local gates: `cargo fmt --all -- --check`,
+    `ob1@192.168.8.4:/home/ob1/Nullapart`, rebuilds/recreates remote Mail
+    Core, applies migration `029`, runs the ignored Postgres suite through an
+    SSH tunnel and checks the authenticated outbound-intelligence API
+    projection.
+- [x] Full local gates: `cargo fmt --all -- --check`,
   `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace`, frontend checks when UI is touched, and ignored
   PostgreSQL tests on `192.168.8.4`.
@@ -221,9 +222,24 @@ completion unless the code, tests and local deployment evidence match it.
   - `cargo clippy --workspace --all-targets -- -D warnings`
   - `cargo test --workspace`
   - `pnpm --dir frontend check-all`
-- Remote verification is currently pending because this host cannot reach
-  `192.168.8.4`: `ping` reported host down and `ssh -o ConnectTimeout=8`
-  timed out on port 22 on 2026-10-11; later `nc -vz -G 5 192.168.8.4 22`
-  checks also timed out, including after commits `15ec5a6`, `3226e88`,
-  `646a5e3` and `370fa1d`; after `9089362`, `nc -vz -G 5 192.168.8.4 22`
-  reported `No route to host`.
+- Fixed the repeatable `.4` gate after remote verification exposed two real
+  issues:
+  - `scripts/phase6_remote_verify.sh` now uses `compose.local.yml` with
+    `.env.local`, waits for remote PostgreSQL readiness, rebuilds/recreates
+    remote Mail Core after source sync, discovers the compose-published API
+    address, and auto-selects an active `LOCAL-TEST` admin with
+    `outbound-intelligence:view`.
+  - `load_behavior_metrics` now reads persisted campaign counts from
+    `outbound_campaign_fingerprints` as well as behaviour rollups, fixing the
+    remote ignored-suite failure where campaign counts returned `31` instead
+    of `46`.
+  - `SSHPASS=1234 scripts/phase6_remote_verify.sh` passed end-to-end on
+    `ob1@192.168.8.4`: migration `029` applied idempotently, ignored
+    `postgres_outbound_intelligence` suite passed `2/2`, remote Mail Core was
+    rebuilt/recreated, and the authenticated `/api/v1/outbound-intelligence`
+    projection returned the deployment payload.
+- Final full local gates after the remote-verification fixes:
+  - `cargo fmt --all -- --check`
+  - `cargo clippy --workspace --all-targets -- -D warnings`
+  - `cargo test --workspace`
+  - `pnpm --dir frontend check-all`

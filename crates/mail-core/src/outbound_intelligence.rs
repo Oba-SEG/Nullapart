@@ -381,7 +381,17 @@ impl PostgresOutboundIntelligenceStore {
                 COALESCE(MAX(unique_recipient_count) FILTER (WHERE recipient_domain IS NULL), 0)::bigint AS unique_recipients_last_hour, \
                 COALESCE(MAX(new_recipient_count) FILTER (WHERE recipient_domain IS NULL), 0)::bigint AS new_recipients_last_hour, \
                 COALESCE(COUNT(DISTINCT recipient_domain) FILTER (WHERE recipient_domain IS NOT NULL), 0)::bigint AS recipient_domain_count_last_hour, \
-                COALESCE(MAX(message_count) FILTER (WHERE recipient_domain IS NULL AND campaign_fingerprint = $8), 0)::bigint AS campaign_messages_last_hour, \
+                GREATEST(\
+                    COALESCE(MAX(message_count) FILTER (WHERE recipient_domain IS NULL AND campaign_fingerprint = $8), 0), \
+                    COALESCE((\
+                        SELECT MAX(message_count) \
+                        FROM outbound_campaign_fingerprints \
+                        WHERE deployment_id = $1 \
+                          AND customer_id = $2 \
+                          AND fingerprint = $8 \
+                          AND last_seen_at >= $9\
+                    ), 0)\
+                )::bigint AS campaign_messages_last_hour, \
                 COALESCE(MAX(failure_count) FILTER (WHERE recipient_domain IS NULL), 0)::bigint AS bounce_failures_last_hour \
              FROM outbound_behavior_rollups \
              WHERE deployment_id = $1 \
