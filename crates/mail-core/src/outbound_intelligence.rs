@@ -509,6 +509,17 @@ pub fn evaluate_outbound_intelligence(
 ) -> OutboundIntelligenceDecision {
     let approval = matching_approval(input);
 
+    if input.signals.source_spoofing_detected && input.signals.auth_source_changed {
+        return decision(
+            input,
+            OutboundDecisionOutcome::SuspendOutbound,
+            ReasonCode::new("OUTBOUND_SOURCE_COMPROMISE"),
+            Some(OutboundSecurityEventType::SourceSpoofing),
+            "source-compromise-suspension",
+            approval.is_some(),
+        );
+    }
+
     if input.signals.source_spoofing_detected {
         return decision(
             input,
@@ -1388,6 +1399,27 @@ mod tests {
 
         assert_eq!(decision.outcome, OutboundDecisionOutcome::BlockSender);
         assert_eq!(decision.reason_code, ReasonCode::reject_spoofing());
+        assert_eq!(
+            decision.event_type,
+            Some(OutboundSecurityEventType::SourceSpoofing)
+        );
+    }
+
+    #[test]
+    fn source_spoofing_with_auth_change_suspends_outbound_capability() {
+        let now = Utc::now();
+        let mut request = input(now);
+        request.signals.source_spoofing_detected = true;
+        request.signals.auth_source_changed = true;
+        request.metrics.messages_last_minute = UNAPPROVED_MESSAGES_PER_MINUTE + 10;
+
+        let decision = evaluate_outbound_intelligence(&request);
+
+        assert_eq!(decision.outcome, OutboundDecisionOutcome::SuspendOutbound);
+        assert_eq!(
+            decision.reason_code,
+            ReasonCode::new("OUTBOUND_SOURCE_COMPROMISE")
+        );
         assert_eq!(
             decision.event_type,
             Some(OutboundSecurityEventType::SourceSpoofing)

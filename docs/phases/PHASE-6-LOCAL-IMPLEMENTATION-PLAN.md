@@ -53,6 +53,9 @@ completion unless the code, tests and local deployment evidence match it.
   - Compromised sender/source-spoofing/malware-from-bulk-sender events include
     runbook linkage, credential-rotation guidance and incident escalation
     metadata in event details/outbox payloads.
+  - Source spoofing combined with authentication-source change emits
+    `suspend_outbound`, treating it as likely connector/source compromise
+    pending operator review.
 - [x] Control-plane API and UI for outbound volume, sender/source behaviour,
   approved bulk senders, held/blocked events, campaigns, failure/bounce trends,
   policy/action history and notification state.
@@ -187,6 +190,16 @@ completion unless the code, tests and local deployment evidence match it.
   - `cargo clippy --workspace --all-targets -- -D warnings`
   - `cargo test --workspace`
   - `pnpm --dir frontend check-all`
+- Closed the suspended-outbound action gap: Phase 6 now has an evaluator path
+  for likely source/connector compromise (`source_spoofing_detected` plus
+  `auth_source_changed`) and ignored-DB coverage proves the persisted event
+  has `suspend_outbound` plus credential rotation guidance. Focused
+  verification:
+  - `cargo fmt --all -- --check`
+  - `cargo test -p nullapart-mail-core outbound_intelligence --lib`
+  - `cargo test --test postgres_outbound_intelligence --no-run`
+  - `cargo clippy -p nullapart-mail-core --lib --tests -- -D warnings`
+  - `cargo clippy -p nullapart-mail-core --test postgres_outbound_intelligence -- -D warnings`
 - Remote verification is currently pending because this host cannot reach
   `192.168.8.4`: `ping` reported host down and `ssh -o ConnectTimeout=8`
   timed out on port 22 on 2026-10-11; later `nc -vz -G 5 192.168.8.4 22`

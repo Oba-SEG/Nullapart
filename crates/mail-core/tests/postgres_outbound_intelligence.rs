@@ -8,9 +8,9 @@ use chrono::Utc;
 use nullapart_mail_contracts::transaction::{CustomerId, DeploymentId};
 use nullapart_mail_core::outbound_intelligence::{
     evaluate_outbound_intelligence, OutboundBehaviorMetrics, OutboundBehaviorMetricsLookup,
-    OutboundIntelligenceInput, OutboundPolicyThresholds, OutboundRecipientDomainMetrics,
-    OutboundSourceContext, OutboundSourceKind, OutboundThreatSignals,
-    PostgresOutboundIntelligenceStore,
+    OutboundDecisionOutcome, OutboundIntelligenceInput, OutboundPolicyThresholds,
+    OutboundRecipientDomainMetrics, OutboundSourceContext, OutboundSourceKind,
+    OutboundThreatSignals, PostgresOutboundIntelligenceStore,
 };
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row, Transaction};
@@ -548,4 +548,47 @@ async fn postgres_store_loads_approved_sender_and_deduplicates_events() {
         "unauthorized-bulk events require support triage but not automatic credential rotation"
     );
     assert_eq!(row.get::<i64, _>("outbox_events"), 1);
+
+    let mut suspended_input = input.clone();
+    suspended_input.sender_address = format!("Spoof-{}@Example.Test", Uuid::new_v4().simple());
+    suspended_input.signals = OutboundThreatSignals {
+        source_spoofing_detected: true,
+        auth_source_changed: true,
+        ..OutboundThreatSignals::default()
+    };
+    suspended_input.recipient_domain_metrics.clear();
+    let suspended_decision = evaluate_outbound_intelligence(&suspended_input);
+    assert_eq!(
+        suspended_decision.outcome,
+        OutboundDecisionOutcome::SuspendOutbound
+    );
+    store
+        .persist_decision(&suspended_input, &suspended_decision)
+        .await
+        .expect("source compromise suspension must persist");
+    let suspension_row = sqlx::query(
+        "SELECT outcome, details->>'remediation_runbook' AS remediation_runbook, \
+                COALESCE((details->>'credential_rotation_recommended')::boolean, false) \
+                    AS credential_rotation_recommended \
+         FROM outbound_security_events \
+         WHERE deployment_id = $1 AND customer_id = $2 AND event_key = $3",
+    )
+    .bind(&fixture.deployment_a)
+    .bind(&fixture.customer_a)
+    .bind(suspended_decision.event_key.as_deref().expect("event key"))
+    .fetch_one(&pool)
+    .await
+    .expect("suspended outbound event must be readable");
+    assert_eq!(
+        suspension_row.get::<String, _>("outcome"),
+        "suspend_outbound"
+    );
+    assert_eq!(
+        suspension_row.get::<String, _>("remediation_runbook"),
+        "docs/runbooks/OUTBOUND-ABUSE-RESPONSE.md"
+    );
+    assert!(
+        suspension_row.get::<bool, _>("credential_rotation_recommended"),
+        "source compromise events must recommend connector credential rotation"
+    );
 }
