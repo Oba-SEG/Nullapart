@@ -98,10 +98,13 @@ impl OutboundBehaviorMetrics {
 
 /// Content/authentication/security signals already derived by trusted stages.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct OutboundThreatSignals {
     pub malware_detected: bool,
     pub malicious_url_detected: bool,
     pub source_spoofing_detected: bool,
+    pub xoorg_spoofing_detected: bool,
+    pub queue_pressure_detected: bool,
     pub unusual_sending_time: bool,
     pub auth_source_changed: bool,
     pub campaign_fingerprint: Option<String>,
@@ -509,13 +512,26 @@ pub fn evaluate_outbound_intelligence(
 ) -> OutboundIntelligenceDecision {
     let approval = matching_approval(input);
 
-    if input.signals.source_spoofing_detected && input.signals.auth_source_changed {
+    if (input.signals.source_spoofing_detected || input.signals.xoorg_spoofing_detected)
+        && input.signals.auth_source_changed
+    {
         return decision(
             input,
             OutboundDecisionOutcome::SuspendOutbound,
             ReasonCode::new("OUTBOUND_SOURCE_COMPROMISE"),
             Some(OutboundSecurityEventType::SourceSpoofing),
             "source-compromise-suspension",
+            approval.is_some(),
+        );
+    }
+
+    if input.signals.xoorg_spoofing_detected {
+        return decision(
+            input,
+            OutboundDecisionOutcome::BlockSender,
+            ReasonCode::new("OUTBOUND_XOORG_SPOOFING"),
+            Some(OutboundSecurityEventType::SourceSpoofing),
+            "xoorg-spoofing",
             approval.is_some(),
         );
     }
@@ -543,6 +559,17 @@ pub fn evaluate_outbound_intelligence(
             ReasonCode::quarantine_malware(),
             event_type,
             "malware-or-malicious-content",
+            approval.is_some(),
+        );
+    }
+
+    if input.signals.queue_pressure_detected {
+        return decision(
+            input,
+            OutboundDecisionOutcome::Defer,
+            ReasonCode::new("OUTBOUND_QUEUE_PRESSURE"),
+            Some(OutboundSecurityEventType::UnauthorizedBulk),
+            "queue-pressure",
             approval.is_some(),
         );
     }
@@ -979,6 +1006,8 @@ async fn upsert_security_event(
         "unique_recipients_last_hour": input.metrics.unique_recipients_last_hour,
         "new_recipients_last_hour": input.metrics.new_recipients_last_hour,
         "approval_used": decision.approval_used,
+        "xoorg_spoofing_detected": input.signals.xoorg_spoofing_detected,
+        "queue_pressure_detected": input.signals.queue_pressure_detected,
         "remediation_runbook": remediation.runbook,
         "remediation_summary": remediation.summary,
         "credential_rotation_recommended": remediation.credential_rotation_recommended,
@@ -1423,6 +1452,46 @@ mod tests {
         assert_eq!(
             decision.event_type,
             Some(OutboundSecurityEventType::SourceSpoofing)
+        );
+    }
+
+    #[test]
+    fn xoorg_spoofing_outside_trusted_connector_blocks_sender() {
+        let now = Utc::now();
+        let mut request = input(now);
+        request.signals.xoorg_spoofing_detected = true;
+        request.metrics.messages_last_minute = UNAPPROVED_MESSAGES_PER_MINUTE + 10;
+
+        let decision = evaluate_outbound_intelligence(&request);
+
+        assert_eq!(decision.outcome, OutboundDecisionOutcome::BlockSender);
+        assert_eq!(
+            decision.reason_code,
+            ReasonCode::new("OUTBOUND_XOORG_SPOOFING")
+        );
+        assert_eq!(
+            decision.event_type,
+            Some(OutboundSecurityEventType::SourceSpoofing)
+        );
+    }
+
+    #[test]
+    fn queue_pressure_from_outbound_abuse_defers_source() {
+        let now = Utc::now();
+        let mut request = input(now);
+        request.approved_senders.clear();
+        request.signals.queue_pressure_detected = true;
+
+        let decision = evaluate_outbound_intelligence(&request);
+
+        assert_eq!(decision.outcome, OutboundDecisionOutcome::Defer);
+        assert_eq!(
+            decision.reason_code,
+            ReasonCode::new("OUTBOUND_QUEUE_PRESSURE")
+        );
+        assert_eq!(
+            decision.event_type,
+            Some(OutboundSecurityEventType::UnauthorizedBulk)
         );
     }
 

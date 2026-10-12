@@ -27,6 +27,10 @@ completion unless the code, tests and local deployment evidence match it.
   - `outbound_intelligence` evaluates approved bulk limits, unapproved burst
     behaviour, low-and-slow rotating recipients, source spoofing, malware
     precedence and event cooldown/deduplication.
+  - XOORG/cross-org spoofing outside a trusted connector is modeled as an
+    explicit trusted threat signal and blocks the sender before volume checks;
+    queue pressure from outbound abuse is modeled as an explicit defer action
+    with an aggregated outbound-abuse event.
 - [x] PostgreSQL RLS coverage for Phase 6 tables.
   - `postgres_outbound_intelligence.rs` proves unscoped sessions fail closed,
     scoped tenants see only their rows, and cross-tenant/deployment writes are
@@ -204,6 +208,15 @@ completion unless the code, tests and local deployment evidence match it.
   - `cargo clippy --workspace --all-targets -- -D warnings`
   - `cargo test --workspace`
   - `pnpm --dir frontend check-all`
+- Closed two remaining explicit Phase 6 security-test gaps:
+  XOORG/cross-org spoofing and queue pressure from outbound abuse now have
+  dedicated evaluator signals, deterministic decisions, event details and unit
+  coverage. Focused verification:
+  - `cargo fmt --all -- --check`
+  - `cargo test -p nullapart-mail-core outbound_intelligence --lib`
+  - `cargo clippy -p nullapart-mail-core --lib --tests -- -D warnings`
+  - `cargo test --test postgres_outbound_intelligence --no-run`
+  - `cargo clippy -p nullapart-mail-core --test postgres_outbound_intelligence -- -D warnings`
 - Remote verification is currently pending because this host cannot reach
   `192.168.8.4`: `ping` reported host down and `ssh -o ConnectTimeout=8`
   timed out on port 22 on 2026-10-11; later `nc -vz -G 5 192.168.8.4 22`
