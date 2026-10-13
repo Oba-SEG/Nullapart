@@ -57,6 +57,7 @@ remote "cd '${REMOTE_PATH}' && ${REMOTE_COMPOSE} config -q"
 
 echo "Syncing Phase 7 source, UI, docs and migration files..."
 PHASE7_FILES=(
+  compose.local.yml
   crates/mail-core/src/admin_rbac.rs
   crates/mail-core/src/bin/mailcore-server.rs
   crates/mail-core/src/deep_ai.rs
@@ -130,6 +131,44 @@ echo "Running ignored Phase 7 PostgreSQL suite against the remote DB..."
 NULLAPART_TEST_DATABASE_URL="postgres://nullapart:${REMOTE_DB_PASSWORD}@127.0.0.1:${LOCAL_TUNNEL_PORT}/nullapart" \
   cargo test --test postgres_deep_ai -- --ignored --test-threads=1
 
+echo "Preparing repeatable Deep AI rollback fixtures on the remote DB..."
+remote "cd '${REMOTE_PATH}' && \
+  pg_container=\$(${REMOTE_COMPOSE} ps -q postgres) && \
+  test -n \"\${pg_container}\" && \
+  docker exec \"\${pg_container}\" psql -U nullapart -d nullapart -v ON_ERROR_STOP=1 -c \"\
+    INSERT INTO deep_ai_skills (\
+      deployment_id, skill_id, skill_version, owner, purpose, allowed_data_classes,\
+      allowed_tools, max_input_tokens, max_output_tokens, max_artifacts, timeout_ms,\
+      concurrency_limit, model_requirement, prompt_template_version, input_schema_version,\
+      output_schema_version, evaluation_suite_version, release_state, rollback_skill_version,\
+      created_by\
+    )\
+    SELECT id, 'security.message.deep_analysis', 'v2', 'security-platform',\
+      'Remote Phase 7 rollback fixture for message analysis skill verification.',\
+      ARRAY['quarantined','blocked','reported_phishing'],\
+      ARRAY['artifact.retrieve','scanner.findings']::TEXT[],\
+      32768, 2048, 8, 120000, 4,\
+      'OpenAI-compatible regional Deep AI backend',\
+      'prompt-v2', 'input-v1', 'output-v1', 'eval-v1',\
+      'released', NULL, 'phase7-remote-verify'\
+    FROM deployments\
+    WHERE id = '${REMOTE_DEPLOYMENT_ID}'\
+    ON CONFLICT (deployment_id, skill_id, skill_version)\
+    DO UPDATE SET release_state = 'released', rollback_skill_version = NULL, updated_at = now();\
+    INSERT INTO deep_ai_model_releases (\
+      deployment_id, region, model_release, backend, serving_base_url, quantization,\
+      context_window, approval_state, approved_by, approved_at, rollback_to_model_release\
+    )\
+    SELECT id, region, 'local-qwen3.5-9b-phase7-v2', 'ollama',\
+      'http://127.0.0.1:11434/v1', 'q4_local_dev', 32768,\
+      'approved', 'phase7-remote-verify', now(), NULL\
+    FROM deployments\
+    WHERE id = '${REMOTE_DEPLOYMENT_ID}'\
+    ON CONFLICT (deployment_id, region, model_release)\
+    DO UPDATE SET approval_state = 'approved', approved_by = 'phase7-remote-verify',\
+      approved_at = now(), rollback_to_model_release = NULL, updated_at = now();\
+  \""
+
 echo "Checking authenticated Deep AI API on the remote host..."
 remote "cd '${REMOTE_PATH}' && \
   ${REMOTE_COMPOSE} up -d --force-recreate mailcore && \
@@ -155,7 +194,7 @@ remote "cd '${REMOTE_PATH}' && \
       JOIN admin_role_permissions rp ON rp.role_id = ur.role_id \
       WHERE u.deployment_id = '${REMOTE_DEPLOYMENT_ID}' \
         AND u.lifecycle = 'active' \
-        AND rp.permission = 'deep-ai:view' \
+        AND rp.permission = 'deep-ai:manage' \
       ORDER BY CASE \
           WHEN EXISTS (\
             SELECT 1 \
@@ -171,14 +210,32 @@ remote "cd '${REMOTE_PATH}' && \
   set -a && . ./.env.local 2>/dev/null || true && set +a && \
   test -n \"\${NULLAPART_LOCAL_CONTROL_TOKEN:-}\" && \
   cookie_file=\$(mktemp) && \
-  curl -fsS -c \"\${cookie_file}\" \
+  login_json=\$(curl -fsS -c \"\${cookie_file}\" \
     -H \"Authorization: Bearer \${NULLAPART_LOCAL_CONTROL_TOKEN}\" \
     -H \"X-Nullapart-Local-User: \${api_login}\" \
-    -X POST \"\${api_url}/api/v1/auth/login\" >/dev/null && \
+    -X POST \"\${api_url}/api/v1/auth/login\") && \
+  csrf_token=\$(printf '%s' \"\${login_json}\" | sed -n 's/.*\"csrfToken\":\"\([^\"]*\)\".*/\1/p') && \
+  test -n \"\${csrf_token}\" && \
   curl -fsS -b \"\${cookie_file}\" \
     -H \"Authorization: Bearer \${NULLAPART_LOCAL_CONTROL_TOKEN}\" \
     -H \"X-Nullapart-Local-User: \${api_login}\" \
     \"\${api_url}/api/v1/deep-ai\" | grep -q '\"released_skills\"' && \
+  curl -fsS -b \"\${cookie_file}\" \
+    -H \"Authorization: Bearer \${NULLAPART_LOCAL_CONTROL_TOKEN}\" \
+    -H \"X-Nullapart-Local-User: \${api_login}\" \
+    -H \"X-CSRF-Token: \${csrf_token}\" \
+    -H \"X-Idempotency-Key: phase7-rollback-probe-\$(date +%s)\" \
+    -H 'Content-Type: application/json' \
+    -d '{\"skill_id\":\"security.message.deep_analysis\",\"current_skill_version\":\"v2\",\"rollback_skill_version\":\"v1\",\"model_release\":\"local-qwen3.5-9b-phase7-v2\",\"rollback_to_model_release\":\"local-qwen3.5-9b-phase7\",\"reason\":\"Remote Phase 7 verifier exercises audited rollback control.\"}' \
+    \"\${api_url}/api/v1/deep-ai/rollback\" | grep -q '\"changed\":true' && \
+  curl -fsS \
+    -H \"Authorization: Bearer \${NULLAPART_DEEP_AI_WORKLOAD_TOKEN:-local-deep-ai-workload-token}\" \
+    \"\${api_url}/internal/deep-ai/v1/models\" | grep -q 'local-qwen3.5-9b-phase7' && \
+  curl -fsS \
+    -H \"Authorization: Bearer \${NULLAPART_DEEP_AI_WORKLOAD_TOKEN:-local-deep-ai-workload-token}\" \
+    -H 'Content-Type: application/json' \
+    -d '{\"model\":\"local-qwen3.5-9b-phase7\",\"messages\":[{\"role\":\"user\",\"content\":\"local phase 7 serving probe\"}]}' \
+    \"\${api_url}/internal/deep-ai/v1/chat/completions\" | grep -q 'chat.completion' && \
   rm -f \"\${cookie_file}\""
 
 echo "Phase 7 remote verification passed."

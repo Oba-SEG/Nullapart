@@ -146,6 +146,15 @@ interface GrantDraft {
   ttl_minutes: string;
 }
 
+interface RollbackDraft {
+  skill_id: string;
+  current_skill_version: string;
+  rollback_skill_version: string;
+  model_release: string;
+  rollback_to_model_release: string;
+  reason: string;
+}
+
 const defaultGrantDraft: GrantDraft = {
   artifact_id: "",
   tenant_message_id: "",
@@ -154,6 +163,15 @@ const defaultGrantDraft: GrantDraft = {
   skill: "",
   artifact_type: "message_rfc822",
   ttl_minutes: "30",
+};
+
+const defaultRollbackDraft: RollbackDraft = {
+  skill_id: "",
+  current_skill_version: "",
+  rollback_skill_version: "",
+  model_release: "",
+  rollback_to_model_release: "",
+  reason: "",
 };
 
 const resourceOptions = [
@@ -220,6 +238,7 @@ function skillKey(skill: DeepAiSkill): string {
 export function DeepAi() {
   const queryClient = useQueryClient();
   const [grantDraft, setGrantDraft] = useState<GrantDraft>(defaultGrantDraft);
+  const [rollbackDraft, setRollbackDraft] = useState<RollbackDraft>(defaultRollbackDraft);
   const [formError, setFormError] = useState<string | null>(null);
   const session = useQuery({
     queryKey: ["session"],
@@ -266,6 +285,26 @@ export function DeepAi() {
       await queryClient.invalidateQueries({ queryKey: ["deep-ai"] });
     },
   });
+  const rollbackRelease = useMutation({
+    mutationFn: (draft: RollbackDraft) =>
+      api.post<{ changed: boolean }>(
+        "/deep-ai/rollback",
+        {
+          skill_id: draft.skill_id.trim() || undefined,
+          current_skill_version: draft.current_skill_version.trim() || undefined,
+          rollback_skill_version: draft.rollback_skill_version.trim() || undefined,
+          model_release: draft.model_release.trim() || undefined,
+          rollback_to_model_release: draft.rollback_to_model_release.trim() || undefined,
+          reason: draft.reason.trim(),
+        },
+        { idempotencyKey: randomUuid() },
+      ),
+    onSuccess: async () => {
+      setRollbackDraft(defaultRollbackDraft);
+      setFormError(null);
+      await queryClient.invalidateQueries({ queryKey: ["deep-ai"] });
+    },
+  });
 
   if (deepAi.isPending) {
     return (
@@ -286,6 +325,7 @@ export function DeepAi() {
   const activeSkill = grantDraft.skill || skillOptions[0]?.value || "";
   const latestBenchmark = data.regional_benchmarks[0] ?? null;
   const grantError = createGrant.isError ? errorMessage(createGrant.error) : null;
+  const rollbackError = rollbackRelease.isError ? errorMessage(rollbackRelease.error) : null;
 
   return (
     <div className="deep-ai-page">
@@ -547,6 +587,97 @@ export function DeepAi() {
             ))}
           </div>
         </article>
+      </section>
+
+      <section className="deep-ai-panel">
+        <h2>Release rollback</h2>
+        <p className="deep-ai-muted">
+          Roll back a released skill and/or approved model release. This is audited and requires an
+          idempotency key; it does not execute mail or remediation actions.
+        </p>
+        {canManage ? (
+          <form
+            className="deep-ai-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const hasSkill =
+                rollbackDraft.skill_id.trim() &&
+                rollbackDraft.current_skill_version.trim() &&
+                rollbackDraft.rollback_skill_version.trim();
+              const hasModel =
+                rollbackDraft.model_release.trim() &&
+                rollbackDraft.rollback_to_model_release.trim();
+              if ((!hasSkill && !hasModel) || rollbackDraft.reason.trim().length < 12) {
+                setFormError("Provide a skill or model rollback target and a substantive reason.");
+                return;
+              }
+              setFormError(null);
+              rollbackRelease.mutate(rollbackDraft);
+            }}
+          >
+            <Input
+              label="Skill ID"
+              value={rollbackDraft.skill_id}
+              onChange={(event) =>
+                setRollbackDraft({ ...rollbackDraft, skill_id: event.target.value })
+              }
+              placeholder="security.message.deep_analysis"
+            />
+            <Input
+              label="Current skill version"
+              value={rollbackDraft.current_skill_version}
+              onChange={(event) =>
+                setRollbackDraft({ ...rollbackDraft, current_skill_version: event.target.value })
+              }
+              placeholder="v2"
+            />
+            <Input
+              label="Rollback skill version"
+              value={rollbackDraft.rollback_skill_version}
+              onChange={(event) =>
+                setRollbackDraft({ ...rollbackDraft, rollback_skill_version: event.target.value })
+              }
+              placeholder="v1"
+            />
+            <Input
+              label="Model release"
+              value={rollbackDraft.model_release}
+              onChange={(event) =>
+                setRollbackDraft({ ...rollbackDraft, model_release: event.target.value })
+              }
+              placeholder="qwen-phase7-v2"
+            />
+            <Input
+              label="Rollback model release"
+              value={rollbackDraft.rollback_to_model_release}
+              onChange={(event) =>
+                setRollbackDraft({
+                  ...rollbackDraft,
+                  rollback_to_model_release: event.target.value,
+                })
+              }
+              placeholder="qwen-phase7-v1"
+            />
+            <Input
+              label="Rollback reason"
+              value={rollbackDraft.reason}
+              onChange={(event) =>
+                setRollbackDraft({ ...rollbackDraft, reason: event.target.value })
+              }
+              placeholder="Failed evaluation gate; restoring prior release"
+            />
+            {formError || rollbackError ? (
+              <p className="deep-ai-error">{formError ?? rollbackError}</p>
+            ) : null}
+            <Button type="submit" variant="danger" disabled={rollbackRelease.isPending}>
+              {rollbackRelease.isPending ? "Rolling back…" : "Record rollback"}
+            </Button>
+          </form>
+        ) : (
+          <p className="deep-ai-muted">
+            You can view release state, but cannot roll back releases.
+          </p>
+        )}
       </section>
 
       <section className="deep-ai-panel">

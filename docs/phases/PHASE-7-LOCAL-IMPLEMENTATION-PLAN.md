@@ -1,6 +1,6 @@
 # Phase 7 Local Implementation Plan — Regional Deep AI
 
-Status: in progress, implemented locally pending full remote evidence.
+Status: complete for local/dev Phase 7 scope.
 
 This plan maps the canonical Phase 7 requirements in
 `docs/phases/PHASE-7-DEEP-AI.md` to the local/dev implementation. Phase 7 is
@@ -19,7 +19,16 @@ keeping ordinary mail delivery independent of Deep AI availability.
   - `GET /api/v1/deep-ai`;
   - `POST /api/v1/deep-ai/artifact-grants`;
   - `POST /api/v1/deep-ai/analysis-results`;
+  - `POST /api/v1/deep-ai/rollback`;
   - permissions `deep-ai:view` and `deep-ai:manage`.
+- [x] Local/dev OpenAI-compatible serving contract:
+  - authenticated internal endpoints
+    `/internal/deep-ai/v1/models` and
+    `/internal/deep-ai/v1/chat/completions`;
+  - workload bearer token required;
+  - action/tool requests rejected by the local serving shim;
+  - deterministic structured local response proves the serving API contract
+    without putting Deep AI into the normal mail hot path.
 - [x] Scoped artifact access broker:
   - `deep_ai_artifact_access_grants`;
   - deployment/customer RLS;
@@ -40,6 +49,11 @@ keeping ordinary mail delivery independent of Deep AI availability.
   - `deep_ai_regional_benchmarks` records region, accelerator, context,
     throughput, failover and approval notes;
   - local/dev benchmark seed is explicitly not production ZA capacity approval.
+- [x] Model/skill rollback:
+  - audited rollback endpoint;
+  - idempotency key required;
+  - current released skill can be marked `rolled_back` to a target version;
+  - approved model release can be rejected back to a named approved target.
 - [x] Training governance:
   - `deep_ai_training_datasets`;
   - approved dataset version, allowed data classes, provenance, labeling,
@@ -51,11 +65,13 @@ keeping ordinary mail delivery independent of Deep AI availability.
   - short-lived artifact grant form with idempotency;
   - no raw JSON UI.
 - [x] Tests:
-  - Rust unit tests for permission failure, grant validation and hallucinated
-    evidence rejection;
+  - Rust unit tests for permission failure, grant validation, audited rollback,
+    private serving authentication/tool denial and hallucinated evidence
+    rejection;
   - ignored PostgreSQL tests for RLS fail-closed behavior, tenant isolation,
     cross-tenant write rejection, benchmark and training-governance scope;
-  - frontend tests for rendering and idempotent grant creation.
+  - frontend tests for rendering, idempotent grant creation and rollback
+    submission.
 
 ## Non-goals preserved
 
@@ -76,8 +92,10 @@ keeping ordinary mail delivery independent of Deep AI availability.
 - Remote `.4`:
   - `SSHPASS=1234 scripts/phase7_remote_verify.sh`
   - script applies migration `030_deep_ai.sql`, rebuilds/recreates Mail Core,
-    runs `postgres_deep_ai` against the tunneled remote DB and checks the
-    authenticated `/api/v1/deep-ai` projection.
+    runs `postgres_deep_ai` against the tunneled remote DB, checks the
+    authenticated `/api/v1/deep-ai` projection, exercises the authenticated
+    CSRF/idempotency-protected rollback API, and probes the authenticated local
+    OpenAI-compatible serving contract.
 
 ## Follow-up before production
 

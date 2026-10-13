@@ -166,6 +166,9 @@ function stubFetch() {
     if (method === "POST" && url.endsWith("/deep-ai/artifact-grants")) {
       return ok({ data: { id: "grant-new", expires_at: "2026-10-12T11:00:00Z" } });
     }
+    if (method === "POST" && url.endsWith("/deep-ai/rollback")) {
+      return ok({ data: { changed: true } });
+    }
     if (url.includes("/deep-ai")) {
       return ok({ data: snapshot });
     }
@@ -209,6 +212,7 @@ describe("DeepAi", () => {
     expect(screen.getByText("Deep AI found trusted evidence for a credential lure.")).toBeTruthy();
     expect(screen.getByText("phase7-governance-v1")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Create scoped grant" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Record rollback" })).toBeTruthy();
   });
 
   it("creates scoped artifact grants with an idempotency key", async () => {
@@ -227,6 +231,29 @@ describe("DeepAi", () => {
       );
       expect(grantCall).toBeTruthy();
       expect((grantCall?.[1]?.headers as Record<string, string>)["X-Idempotency-Key"]).toBeTruthy();
+    });
+  });
+
+  it("posts release rollback requests with an idempotency key", async () => {
+    const fetchMock = stubFetch();
+    const user = userEvent.setup();
+    renderAt("/deep-ai");
+    await screen.findByRole("heading", { name: "Regional Deep AI" });
+
+    await user.type(screen.getByLabelText("Skill ID"), "security.message.deep_analysis");
+    await user.type(screen.getByLabelText("Current skill version"), "v2");
+    await user.type(screen.getByLabelText("Rollback skill version"), "v1");
+    await user.type(screen.getByLabelText("Rollback reason"), "Failed evaluation gate");
+    await user.click(screen.getByRole("button", { name: "Record rollback" }));
+
+    await waitFor(() => {
+      const rollbackCall = fetchMock.mock.calls.find(
+        ([input, init]) => String(input).endsWith("/deep-ai/rollback") && init?.method === "POST",
+      );
+      expect(rollbackCall).toBeTruthy();
+      expect(
+        (rollbackCall?.[1]?.headers as Record<string, string>)["X-Idempotency-Key"],
+      ).toBeTruthy();
     });
   });
 });

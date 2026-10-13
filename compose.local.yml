@@ -63,6 +63,8 @@ services:
       NULLAPART_LOCAL_CONTROL_CUSTOMER_ID: ${NULLAPART_LOCAL_CONTROL_CUSTOMER_ID:-CZA-1}
       NULLAPART_TRACE_WORKLOAD_TOKEN: ${NULLAPART_TRACE_WORKLOAD_TOKEN:-}
       NULLAPART_DNS_RESOLVER: ${NULLAPART_DNS_RESOLVER:-}
+      NULLAPART_DEEP_AI_WORKLOAD_TOKEN: ${NULLAPART_DEEP_AI_WORKLOAD_TOKEN:-local-deep-ai-workload-token}
+      NULLAPART_DEEP_AI_MODEL: ${NULLAPART_DEEP_AI_MODEL:-local-qwen3.5-9b-phase7}
       # Inline ML pass-2 stage (Phase 4 increment 3). The feature switch
       # `inline_ml_classification` is seeded enabled, so the local
       # deployment provisions the evaluated checkpoint artifacts below; a

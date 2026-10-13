@@ -7,7 +7,7 @@
 
 use axum::{
     extract::{rejection::JsonRejection, Extension, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -18,6 +18,7 @@ use nullapart_policy::{CustomerLifecycle, TenantContext};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
+use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
 use crate::admin_audit::{source_ip_from, AuditEventRecord, PostgresAuditStore};
@@ -30,11 +31,17 @@ pub const DEEP_AI_MANAGE_PERMISSION: &str = "deep-ai:manage";
 const DEEP_AI_PATH: &str = "/api/v1/deep-ai";
 const DEEP_AI_GRANTS_PATH: &str = "/api/v1/deep-ai/artifact-grants";
 const DEEP_AI_RESULTS_PATH: &str = "/api/v1/deep-ai/analysis-results";
+const DEEP_AI_ROLLBACK_PATH: &str = "/api/v1/deep-ai/rollback";
+const DEEP_AI_SERVING_MODELS_PATH: &str = "/internal/deep-ai/v1/models";
+const DEEP_AI_SERVING_CHAT_PATH: &str = "/internal/deep-ai/v1/chat/completions";
 const IDEMPOTENCY_HEADER: &str = "x-idempotency-key";
+const AUTHORIZATION_HEADER: &str = "authorization";
 const GRANT_OPERATION: &str = "deep-ai-artifact-grant";
 const RESULT_OPERATION: &str = "deep-ai-analysis-result";
+const ROLLBACK_OPERATION: &str = "deep-ai-rollback";
 const AUDIT_RESOURCE_GRANT: &str = "deep_ai_artifact_grant";
 const AUDIT_RESOURCE_RESULT: &str = "deep_ai_analysis_result";
+const AUDIT_RESOURCE_ROLLBACK: &str = "deep_ai_release_rollback";
 
 #[derive(Clone)]
 pub struct DeepAiState {
@@ -48,6 +55,24 @@ impl DeepAiState {
             pool,
             deployment_id,
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct DeepAiServingState {
+    workload_token: String,
+    model: String,
+}
+
+impl DeepAiServingState {
+    pub fn new(workload_token: String, model: String) -> Result<Self, &'static str> {
+        if workload_token.len() < 16 || model.trim().is_empty() {
+            return Err("Deep AI serving token/model configuration is invalid");
+        }
+        Ok(Self {
+            workload_token,
+            model,
+        })
     }
 }
 
@@ -244,6 +269,72 @@ struct RecordResultResponse {
     created: bool,
 }
 
+#[derive(Debug, Deserialize)]
+struct RollbackRequest {
+    skill_id: Option<String>,
+    current_skill_version: Option<String>,
+    rollback_skill_version: Option<String>,
+    model_release: Option<String>,
+    rollback_to_model_release: Option<String>,
+    reason: String,
+}
+
+#[derive(Debug, Serialize)]
+struct RollbackResponse {
+    skill_rolled_back: bool,
+    model_rolled_back: bool,
+    reason: String,
+    changed: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatCompletionRequest {
+    model: String,
+    messages: Vec<ChatMessage>,
+    tools: Option<Vec<Value>>,
+    tool_choice: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatMessage {
+    role: String,
+    content: Value,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiModelList {
+    object: &'static str,
+    data: Vec<OpenAiModel>,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiModel {
+    id: String,
+    object: &'static str,
+    owned_by: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct ChatCompletionResponse {
+    id: String,
+    object: &'static str,
+    model: String,
+    choices: Vec<ChatCompletionChoice>,
+}
+
+#[derive(Debug, Serialize)]
+struct ChatCompletionChoice {
+    index: u8,
+    message: AssistantMessage,
+    finish_reason: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct AssistantMessage {
+    role: &'static str,
+    content: String,
+}
+
 struct ValidatedGrantRequest {
     tenant_message_id: Option<Uuid>,
     artifact_id: Uuid,
@@ -253,6 +344,23 @@ struct ValidatedGrantRequest {
     skill_version: String,
     artifact_type: String,
     expires_at: DateTime<Utc>,
+}
+
+struct ValidatedRollbackRequest {
+    skill: Option<SkillRollback>,
+    model: Option<ModelRollback>,
+    reason: String,
+}
+
+struct SkillRollback {
+    skill_id: String,
+    current_skill_version: String,
+    rollback_skill_version: String,
+}
+
+struct ModelRollback {
+    model_release: String,
+    rollback_to_model_release: String,
 }
 
 struct ValidatedResultRequest {
@@ -298,6 +406,17 @@ pub fn deep_ai_router(state: DeepAiState) -> Router {
         .route(DEEP_AI_PATH, get(get_deep_ai))
         .route(DEEP_AI_GRANTS_PATH, post(post_artifact_grant))
         .route(DEEP_AI_RESULTS_PATH, post(post_analysis_result))
+        .route(DEEP_AI_ROLLBACK_PATH, post(post_rollback))
+        .with_state(state)
+}
+
+pub fn deep_ai_serving_router(state: DeepAiServingState) -> Router {
+    Router::new()
+        .route(DEEP_AI_SERVING_MODELS_PATH, get(get_serving_models))
+        .route(
+            DEEP_AI_SERVING_CHAT_PATH,
+            post(post_serving_chat_completion),
+        )
         .with_state(state)
 }
 
@@ -564,6 +683,348 @@ async fn post_analysis_result(
         return unavailable();
     }
     (StatusCode::CREATED, Json(ApiEnvelope { data: response })).into_response()
+}
+
+async fn post_rollback(
+    State(state): State<DeepAiState>,
+    headers: HeaderMap,
+    context: Option<Extension<TenantContext>>,
+    body: Result<Json<RollbackRequest>, JsonRejection>,
+) -> Response {
+    let Some(Extension(context)) = context else {
+        return api_error(
+            StatusCode::UNAUTHORIZED,
+            "UNAUTHENTICATED",
+            "Authentication is required",
+        );
+    };
+    if !authorized(&state, &context, DEEP_AI_MANAGE_PERMISSION) {
+        return api_error(StatusCode::FORBIDDEN, "FORBIDDEN", "Permission is required");
+    }
+    let Json(request) = match body {
+        Ok(body) => body,
+        Err(_) => return invalid_request(),
+    };
+    let request = match validate_rollback_request(request) {
+        Ok(request) => request,
+        Err(_) => return invalid_request(),
+    };
+    let idempotency_key = match require_idempotency_key(&headers) {
+        Ok(key) => key,
+        Err(rejection) => return idempotency_rejection_response(rejection),
+    };
+
+    let mut transaction = match state.pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(_) => return unavailable(),
+    };
+    if set_scope(
+        &mut transaction,
+        &state.deployment_id.0,
+        &context.customer_id.0,
+    )
+    .await
+    .is_err()
+    {
+        return unavailable();
+    }
+    match claim(&mut transaction, &idempotency_key, ROLLBACK_OPERATION).await {
+        Ok(ClaimOutcome::Fresh) => {},
+        Ok(ClaimOutcome::Replay(value)) => return replay_response(value),
+        Ok(ClaimOutcome::InProgress) => return conflict("A matching request is still in progress"),
+        Ok(ClaimOutcome::OperationMismatch) => {
+            return conflict("Idempotency key operation mismatch")
+        },
+        Err(_) => return unavailable(),
+    }
+
+    let skill_rolled_back = match &request.skill {
+        Some(skill) => {
+            match rollback_skill(&mut transaction, &state.deployment_id.0, skill).await {
+                Ok(changed) => changed,
+                Err(response) => return response,
+            }
+        },
+        None => false,
+    };
+    let model_rolled_back = match &request.model {
+        Some(model) => {
+            match rollback_model(&mut transaction, &state.deployment_id.0, model).await {
+                Ok(changed) => changed,
+                Err(response) => return response,
+            }
+        },
+        None => false,
+    };
+    let response = RollbackResponse {
+        skill_rolled_back,
+        model_rolled_back,
+        reason: request.reason.clone(),
+        changed: skill_rolled_back || model_rolled_back,
+    };
+    if let Err(response) = write_audit(
+        &mut transaction,
+        &state.deployment_id.0,
+        &context,
+        &headers,
+        DeepAiAudit {
+            action: "deep_ai_release_rolled_back",
+            resource_type: AUDIT_RESOURCE_ROLLBACK,
+            resource_id: request
+                .skill
+                .as_ref()
+                .map(|skill| format!("{}:{}", skill.skill_id, skill.current_skill_version))
+                .or_else(|| {
+                    request
+                        .model
+                        .as_ref()
+                        .map(|model| model.model_release.clone())
+                }),
+            details: json!({
+                "skill_rolled_back": response.skill_rolled_back,
+                "model_rolled_back": response.model_rolled_back,
+                "reason": request.reason,
+            }),
+        },
+    )
+    .await
+    {
+        return response;
+    }
+    let Some(envelope) = envelope(&response) else {
+        return unavailable();
+    };
+    if complete(
+        &mut transaction,
+        &idempotency_key,
+        ROLLBACK_OPERATION,
+        envelope,
+    )
+    .await
+    .is_err()
+    {
+        return unavailable();
+    }
+    if transaction.commit().await.is_err() {
+        return unavailable();
+    }
+    (StatusCode::OK, Json(ApiEnvelope { data: response })).into_response()
+}
+
+async fn get_serving_models(
+    State(state): State<DeepAiServingState>,
+    headers: HeaderMap,
+) -> Response {
+    if !serving_authorized(&state, &headers) {
+        return api_error(
+            StatusCode::UNAUTHORIZED,
+            "UNAUTHENTICATED",
+            "Deep AI workload authentication is required",
+        );
+    }
+    let body = OpenAiModelList {
+        object: "list",
+        data: vec![OpenAiModel {
+            id: state.model,
+            object: "model",
+            owned_by: "nullapart-regional",
+        }],
+    };
+    (StatusCode::OK, Json(body)).into_response()
+}
+
+async fn post_serving_chat_completion(
+    State(state): State<DeepAiServingState>,
+    headers: HeaderMap,
+    body: Result<Json<ChatCompletionRequest>, JsonRejection>,
+) -> Response {
+    if !serving_authorized(&state, &headers) {
+        return api_error(
+            StatusCode::UNAUTHORIZED,
+            "UNAUTHENTICATED",
+            "Deep AI workload authentication is required",
+        );
+    }
+    let Json(request) = match body {
+        Ok(body) => body,
+        Err(_) => return invalid_request(),
+    };
+    if request.model != state.model
+        || request.messages.is_empty()
+        || request.messages.len() > 32
+        || request
+            .tools
+            .as_ref()
+            .is_some_and(|tools| !tools.is_empty())
+        || request.tool_choice.is_some()
+        || request
+            .messages
+            .iter()
+            .any(|message| !matches!(message.role.as_str(), "system" | "user" | "assistant"))
+    {
+        return invalid_request();
+    }
+    let observed_chars: usize = request
+        .messages
+        .iter()
+        .map(|message| match &message.content {
+            Value::String(value) => value.len(),
+            other => other.to_string().len(),
+        })
+        .sum();
+    if observed_chars > 256_000 {
+        return api_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "PAYLOAD_TOO_LARGE",
+            "Deep AI request exceeds the local context budget",
+        );
+    }
+    let structured = json!({
+        "classification": "unknown",
+        "attack_type": "unknown",
+        "severity": "unknown",
+        "confidence": 0.0,
+        "evidence_references": [],
+        "observations": ["local development Deep AI serving contract responded"],
+        "recommended_action": "unknown",
+        "analyst_summary": "Local development serving endpoint is operational; production model inference is configured per regional release.",
+        "processing_duration_ms": 0
+    });
+    let body = ChatCompletionResponse {
+        id: format!("chatcmpl-{}", Uuid::new_v4().simple()),
+        object: "chat.completion",
+        model: state.model,
+        choices: vec![ChatCompletionChoice {
+            index: 0,
+            message: AssistantMessage {
+                role: "assistant",
+                content: structured.to_string(),
+            },
+            finish_reason: "stop",
+        }],
+    };
+    (StatusCode::OK, Json(body)).into_response()
+}
+
+async fn rollback_skill(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    deployment_id: &str,
+    rollback: &SkillRollback,
+) -> Result<bool, Response> {
+    let target_exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS ( \
+            SELECT 1 FROM deep_ai_skills \
+            WHERE deployment_id = $1 AND skill_id = $2 AND skill_version = $3 \
+         )",
+    )
+    .bind(deployment_id)
+    .bind(&rollback.skill_id)
+    .bind(&rollback.rollback_skill_version)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(|_| unavailable())?;
+    if !target_exists {
+        return Err(api_error(
+            StatusCode::CONFLICT,
+            "ROLLBACK_TARGET_NOT_FOUND",
+            "Rollback target does not exist",
+        ));
+    }
+
+    let changed_current = sqlx::query(
+        "UPDATE deep_ai_skills \
+         SET release_state = 'rolled_back', rollback_skill_version = $4, updated_at = now() \
+         WHERE deployment_id = $1 AND skill_id = $2 AND skill_version = $3 \
+           AND release_state = 'released'",
+    )
+    .bind(deployment_id)
+    .bind(&rollback.skill_id)
+    .bind(&rollback.current_skill_version)
+    .bind(&rollback.rollback_skill_version)
+    .execute(&mut **transaction)
+    .await
+    .map_err(|_| unavailable())?
+    .rows_affected();
+    if changed_current != 1 {
+        return Err(api_error(
+            StatusCode::CONFLICT,
+            "ROLLBACK_SOURCE_NOT_RELEASED",
+            "Current skill version is not released",
+        ));
+    }
+
+    let changed_target = sqlx::query(
+        "UPDATE deep_ai_skills \
+         SET release_state = 'released', rollback_skill_version = NULL, updated_at = now() \
+         WHERE deployment_id = $1 AND skill_id = $2 AND skill_version = $3",
+    )
+    .bind(deployment_id)
+    .bind(&rollback.skill_id)
+    .bind(&rollback.rollback_skill_version)
+    .execute(&mut **transaction)
+    .await
+    .map_err(|_| unavailable())?
+    .rows_affected();
+    Ok(changed_target == 1)
+}
+
+async fn rollback_model(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    deployment_id: &str,
+    rollback: &ModelRollback,
+) -> Result<bool, Response> {
+    let target_exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS ( \
+            SELECT 1 FROM deep_ai_model_releases \
+            WHERE deployment_id = $1 AND model_release = $2 \
+         )",
+    )
+    .bind(deployment_id)
+    .bind(&rollback.rollback_to_model_release)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(|_| unavailable())?;
+    if !target_exists {
+        return Err(api_error(
+            StatusCode::CONFLICT,
+            "ROLLBACK_TARGET_NOT_FOUND",
+            "Rollback target does not exist",
+        ));
+    }
+
+    let changed_current = sqlx::query(
+        "UPDATE deep_ai_model_releases \
+         SET approval_state = 'rejected', approved_by = NULL, approved_at = NULL, \
+             rollback_to_model_release = $3, updated_at = now() \
+         WHERE deployment_id = $1 AND model_release = $2 AND approval_state = 'approved'",
+    )
+    .bind(deployment_id)
+    .bind(&rollback.model_release)
+    .bind(&rollback.rollback_to_model_release)
+    .execute(&mut **transaction)
+    .await
+    .map_err(|_| unavailable())?
+    .rows_affected();
+    if changed_current != 1 {
+        return Err(api_error(
+            StatusCode::CONFLICT,
+            "ROLLBACK_SOURCE_NOT_APPROVED",
+            "Current model release is not approved",
+        ));
+    }
+
+    let changed_target = sqlx::query(
+        "UPDATE deep_ai_model_releases \
+         SET approval_state = 'approved', approved_by = 'rollback', approved_at = now(), updated_at = now() \
+         WHERE deployment_id = $1 AND model_release = $2",
+    )
+    .bind(deployment_id)
+    .bind(&rollback.rollback_to_model_release)
+    .execute(&mut **transaction)
+    .await
+    .map_err(|_| unavailable())?
+    .rows_affected();
+    Ok(changed_target == 1)
 }
 
 async fn load_deep_ai_response(
@@ -1161,6 +1622,64 @@ fn validate_grant_request(request: CreateGrantRequest) -> Result<ValidatedGrantR
     })
 }
 
+fn validate_rollback_request(request: RollbackRequest) -> Result<ValidatedRollbackRequest, ()> {
+    let reason = request.reason.trim().to_string();
+    if !(12..=500).contains(&reason.len()) {
+        return Err(());
+    }
+    let skill = match (
+        request.skill_id,
+        request.current_skill_version,
+        request.rollback_skill_version,
+    ) {
+        (Some(skill_id), Some(current_skill_version), Some(rollback_skill_version)) => {
+            let skill_id = skill_id.trim().to_string();
+            let current_skill_version = current_skill_version.trim().to_string();
+            let rollback_skill_version = rollback_skill_version.trim().to_string();
+            if !valid_skill_id(&skill_id)
+                || !valid_skill_version(&current_skill_version)
+                || !valid_skill_version(&rollback_skill_version)
+                || current_skill_version == rollback_skill_version
+            {
+                return Err(());
+            }
+            Some(SkillRollback {
+                skill_id,
+                current_skill_version,
+                rollback_skill_version,
+            })
+        },
+        (None, None, None) => None,
+        _ => return Err(()),
+    };
+    let model = match (request.model_release, request.rollback_to_model_release) {
+        (Some(model_release), Some(rollback_to_model_release)) => {
+            let model_release = model_release.trim().to_string();
+            let rollback_to_model_release = rollback_to_model_release.trim().to_string();
+            if !valid_release_identifier(&model_release)
+                || !valid_release_identifier(&rollback_to_model_release)
+                || model_release == rollback_to_model_release
+            {
+                return Err(());
+            }
+            Some(ModelRollback {
+                model_release,
+                rollback_to_model_release,
+            })
+        },
+        (None, None) => None,
+        _ => return Err(()),
+    };
+    if skill.is_none() && model.is_none() {
+        return Err(());
+    }
+    Ok(ValidatedRollbackRequest {
+        skill,
+        model,
+        reason,
+    })
+}
+
 fn validate_result_request(request: RecordResultRequest) -> Result<ValidatedResultRequest, ()> {
     let skill_id = request.skill_id.trim().to_string();
     let skill_version = request.skill_version.trim().to_string();
@@ -1244,6 +1763,18 @@ fn valid_skill_id(value: &str) -> bool {
             .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_' || ch == '.')
 }
 
+fn valid_skill_version(value: &str) -> bool {
+    matches!(value, "v1" | "v2" | "v3")
+}
+
+fn valid_release_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 160
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | ':'))
+}
+
 fn authorized(state: &DeepAiState, context: &TenantContext, permission: &str) -> bool {
     context.customer_lifecycle == CustomerLifecycle::Active
         && context.deployment_id == state.deployment_id
@@ -1251,6 +1782,22 @@ fn authorized(state: &DeepAiState, context: &TenantContext, permission: &str) ->
             .permissions
             .iter()
             .any(|granted| granted == permission)
+}
+
+fn serving_authorized(state: &DeepAiServingState, headers: &HeaderMap) -> bool {
+    let Some(value) = headers.get(AUTHORIZATION_HEADER) else {
+        return false;
+    };
+    bearer_matches(value, &state.workload_token)
+}
+
+fn bearer_matches(value: &HeaderValue, expected_token: &str) -> bool {
+    let Ok(raw) = value.to_str() else {
+        return false;
+    };
+    raw.strip_prefix("Bearer ")
+        .map(|token| token.as_bytes().ct_eq(expected_token.as_bytes()).into())
+        .unwrap_or(false)
 }
 
 fn require_idempotency_key(headers: &HeaderMap) -> Result<String, IdempotencyRejection> {
@@ -1324,6 +1871,14 @@ mod tests {
             .connect_lazy("postgresql://unused:unused@127.0.0.1:1/unused")
             .expect("lazy test pool must parse");
         DeepAiState::new(pool, DeploymentId::new("LOCAL-TEST"))
+    }
+
+    fn serving_state() -> DeepAiServingState {
+        DeepAiServingState::new(
+            "local-serving-token-123".to_string(),
+            "local-qwen3.5-9b-phase7".to_string(),
+        )
+        .expect("serving state should validate")
     }
 
     fn context(permissions: Vec<String>) -> TenantContext {
@@ -1456,6 +2011,31 @@ mod tests {
         assert!(structured_output_is_valid(&request, &grant).is_err());
     }
 
+    #[test]
+    fn rollback_request_requires_substantive_target_and_reason() {
+        let request = validate_rollback_request(RollbackRequest {
+            skill_id: Some("security.message.deep_analysis".to_string()),
+            current_skill_version: Some("v2".to_string()),
+            rollback_skill_version: Some("v1".to_string()),
+            model_release: Some("qwen-phase7-v2".to_string()),
+            rollback_to_model_release: Some("qwen-phase7-v1".to_string()),
+            reason: "rollback after failed evaluation gate".to_string(),
+        })
+        .expect("rollback request should validate");
+        assert!(request.skill.is_some());
+        assert!(request.model.is_some());
+
+        assert!(validate_rollback_request(RollbackRequest {
+            skill_id: Some("security.message.deep_analysis".to_string()),
+            current_skill_version: Some("v1".to_string()),
+            rollback_skill_version: Some("v1".to_string()),
+            model_release: None,
+            rollback_to_model_release: None,
+            reason: "same version".to_string(),
+        })
+        .is_err());
+    }
+
     #[tokio::test]
     async fn unauthenticated_deep_ai_projection_is_401() {
         let app = deep_ai_router(state());
@@ -1485,5 +2065,58 @@ mod tests {
             .await
             .expect("router must answer");
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn serving_contract_requires_workload_bearer() {
+        let app = deep_ai_serving_router(serving_state());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/internal/deep-ai/v1/models")
+                    .body(Body::empty())
+                    .expect("request must build"),
+            )
+            .await
+            .expect("router must answer");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn serving_contract_lists_model_and_rejects_action_tools() {
+        let app = deep_ai_serving_router(serving_state());
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/internal/deep-ai/v1/models")
+                    .header(AUTHORIZATION_HEADER, "Bearer local-serving-token-123")
+                    .body(Body::empty())
+                    .expect("request must build"),
+            )
+            .await
+            .expect("router must answer");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/internal/deep-ai/v1/chat/completions")
+                    .header(AUTHORIZATION_HEADER, "Bearer local-serving-token-123")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "model": "local-qwen3.5-9b-phase7",
+                            "messages": [{"role": "user", "content": "probe"}],
+                            "tools": [{"type": "function"}]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request must build"),
+            )
+            .await
+            .expect("router must answer");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }

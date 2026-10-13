@@ -14,7 +14,9 @@ use nullapart_mail_core::admin_rbac::{
 };
 use nullapart_mail_core::artifact_recovery::recover_persisted_artifacts;
 use nullapart_mail_core::artifact_store::{FilesystemArtifactRuntime, FilesystemArtifactStore};
-use nullapart_mail_core::deep_ai::{deep_ai_router, DeepAiState};
+use nullapart_mail_core::deep_ai::{
+    deep_ai_router, deep_ai_serving_router, DeepAiServingState, DeepAiState,
+};
 use nullapart_mail_core::dmarc_ingress::{DmarcReportIngressConfig, DmarcReportIngressWorker};
 use nullapart_mail_core::dns_txt::DnsTxtResolver;
 use nullapart_mail_core::domain_observer::{DomainObserverConfig, DomainObserverWorker};
@@ -176,6 +178,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let app = handoff
+        .merge(deep_ai_serving_router(local_deep_ai_serving_state()?))
         .merge(quarantine_api)
         .merge(trace_router(trace_config))
         .layer(axum::extract::DefaultBodyLimit::max(52_428_800));
@@ -194,6 +197,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(bind = %bind, "Mail Core internal server listening");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+fn local_deep_ai_serving_state() -> Result<DeepAiServingState, Box<dyn std::error::Error>> {
+    if !matches!(
+        env::var("NULLAPART_ENVIRONMENT").as_deref(),
+        Ok("local") | Ok("dev")
+    ) {
+        return Err("the embedded Deep AI serving contract is restricted to local/dev".into());
+    }
+    DeepAiServingState::new(
+        env::var("NULLAPART_DEEP_AI_WORKLOAD_TOKEN")
+            .map_err(|_| "NULLAPART_DEEP_AI_WORKLOAD_TOKEN is required")?,
+        env::var("NULLAPART_DEEP_AI_MODEL")
+            .unwrap_or_else(|_| "local-qwen3.5-9b-phase7".to_string()),
+    )
+    .map_err(Into::into)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
