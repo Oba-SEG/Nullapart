@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Outlet, Link, useRouterState } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 import {
+  Bot,
   Building2,
   BrainCircuit,
   LayoutDashboard,
@@ -136,6 +137,12 @@ export function Layout() {
             >
               <Send size={17} aria-hidden="true" />
               <span>Outbound intelligence</span>
+            </Link>
+          ) : null}
+          {can("deep-ai:view") ? (
+            <Link to="/deep-ai" className="nav-link" activeProps={{ className: "nav-link active" }}>
+              <Bot size={17} aria-hidden="true" />
+              <span>Deep AI</span>
             </Link>
           ) : null}
           {can("audit:view") ? (

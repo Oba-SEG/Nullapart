@@ -120,6 +120,13 @@ const outboundIntelligenceRoute = createRoute({
   ),
 });
 
+const deepAiRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/deep-ai",
+  beforeLoad: () => requirePermission("deep-ai:view"),
+  component: lazyRouteComponent(() => import("../pages/DeepAi"), "DeepAi"),
+});
+
 const operationsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/operations",
@@ -200,6 +207,7 @@ const routeTree = rootRoute.addChildren([
   scannerOperationsRoute,
   domainSecurityRoute,
   outboundIntelligenceRoute,
+  deepAiRoute,
   operationsRoute,
   auditLogRoute,
   adminUsersRoute,

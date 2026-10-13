@@ -1,0 +1,214 @@
+.deep-ai-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.deep-ai-header {
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.deep-ai-subtitle {
+  color: var(--color-text-secondary);
+  margin: 0.35rem 0 0;
+  max-width: 70ch;
+}
+
+.deep-ai-state {
+  border: 1px solid var(--color-border);
+  border-radius: 24px;
+  padding: 2rem;
+  background: var(--color-bg-glass);
+  color: var(--color-text-secondary);
+}
+
+.deep-ai-state.error,
+.deep-ai-error {
+  color: var(--color-error);
+}
+
+.deep-ai-summary {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.deep-ai-summary-card,
+.deep-ai-panel {
+  border: 1px solid var(--color-border);
+  border-radius: 24px;
+  background: var(--color-bg-glass);
+  box-shadow: var(--shadow-sm);
+}
+
+.deep-ai-summary-card {
+  display: grid;
+  gap: 0.35rem;
+  padding: 1rem;
+}
+
+.deep-ai-summary-card svg {
+  color: var(--color-primary);
+}
+
+.deep-ai-summary-card span,
+.deep-ai-summary-card small,
+.deep-ai-muted,
+.deep-ai-release small,
+.deep-ai-release span,
+.deep-ai-grant span,
+.deep-ai-result small,
+.deep-ai-dataset span,
+.deep-ai-dataset small {
+  color: var(--color-text-secondary);
+}
+
+.deep-ai-summary-card strong {
+  font-size: clamp(1.5rem, 3vw, 2.15rem);
+}
+
+.deep-ai-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
+  gap: 1rem;
+}
+
+.deep-ai-panel {
+  padding: 1rem;
+}
+
+.deep-ai-panel h2 {
+  margin: 0 0 0.85rem;
+}
+
+.deep-ai-table-wrap {
+  overflow-x: auto;
+}
+
+.deep-ai-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.deep-ai-table th,
+.deep-ai-table td {
+  border-bottom: 1px solid var(--color-border);
+  padding: 0.75rem 0.6rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.deep-ai-table th {
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.deep-ai-table td small,
+.deep-ai-release small,
+.deep-ai-result small,
+.deep-ai-dataset small {
+  display: block;
+  margin-top: 0.25rem;
+}
+
+.deep-ai-release-list,
+.deep-ai-results,
+.deep-ai-grants,
+.deep-ai-datasets {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.deep-ai-release,
+.deep-ai-grant,
+.deep-ai-result,
+.deep-ai-dataset,
+.deep-ai-benchmark {
+  border: 1px solid var(--color-border);
+  border-radius: 18px;
+  background: var(--color-bg-secondary);
+  padding: 0.85rem;
+}
+
+.deep-ai-release,
+.deep-ai-grant,
+.deep-ai-result-head,
+.deep-ai-dataset {
+  align-items: flex-start;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.deep-ai-benchmark {
+  margin-top: 0.85rem;
+}
+
+.deep-ai-benchmark p {
+  color: var(--color-text-secondary);
+}
+
+.deep-ai-benchmark dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.deep-ai-benchmark dt {
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+}
+
+.deep-ai-benchmark dd {
+  margin: 0.15rem 0 0;
+}
+
+.deep-ai-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 1rem 0;
+}
+
+.deep-ai-form button,
+.deep-ai-error {
+  grid-column: 1 / -1;
+}
+
+.deep-ai-result {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.deep-ai-result p,
+.deep-ai-dataset p {
+  margin: 0;
+}
+
+.deep-ai-dataset {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.deep-ai-dataset p,
+.deep-ai-dataset small {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 1100px) {
+  .deep-ai-summary,
+  .deep-ai-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .deep-ai-form,
+  .deep-ai-benchmark dl {
+    grid-template-columns: 1fr;
+  }
+}

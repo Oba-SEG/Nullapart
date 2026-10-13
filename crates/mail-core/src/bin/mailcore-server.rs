@@ -14,6 +14,7 @@ use nullapart_mail_core::admin_rbac::{
 };
 use nullapart_mail_core::artifact_recovery::recover_persisted_artifacts;
 use nullapart_mail_core::artifact_store::{FilesystemArtifactRuntime, FilesystemArtifactStore};
+use nullapart_mail_core::deep_ai::{deep_ai_router, DeepAiState};
 use nullapart_mail_core::dmarc_ingress::{DmarcReportIngressConfig, DmarcReportIngressWorker};
 use nullapart_mail_core::dns_txt::DnsTxtResolver;
 use nullapart_mail_core::domain_observer::{DomainObserverConfig, DomainObserverWorker};
@@ -227,6 +228,9 @@ async fn validate_database_role(pool: &PgPool) -> Result<(), Box<dyn std::error:
                           'quarantine_cases', 'quarantine_reinjection_envelopes', \
                           'reinjection_deliveries', 'reinjection_dead_letters', \
                           'audit_events', 'outbox_events', 'inline_ml_models' \
+                          , 'deep_ai_skills', 'deep_ai_model_releases', \
+                          'deep_ai_regional_benchmarks', 'deep_ai_training_datasets', \
+                          'deep_ai_artifact_access_grants', 'deep_ai_analysis_results' \
                       ) \
                       AND class.relowner = role.oid \
                 ) AS owns_protected_table \
@@ -321,6 +325,10 @@ async fn local_quarantine_api(
             deployment_id.clone(),
         )))
         .merge(domain_security_router(DomainSecurityState::new(
+            pool.clone(),
+            deployment_id.clone(),
+        )))
+        .merge(deep_ai_router(DeepAiState::new(
             pool.clone(),
             deployment_id.clone(),
         )))
