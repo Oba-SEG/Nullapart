@@ -2,6 +2,10 @@
 
 **Status:** working readiness register.
 
+**Dated reconciliation:** [2026-10-13 Phase 0/1 Authoritative Conformance Review](../reviews/2026-10-13-phase-0-1-conformance.md).
+Use that review when interpreting Phase 0/1 gate status against the current
+repo, infra docs and diagrams. Local/dev evidence is not production evidence.
+
 This file distinguishes documented design from controls that are actually activated/verified.
 
 | Gate | Required state before normal implementation | Current documentation state | Operational/technical activation |

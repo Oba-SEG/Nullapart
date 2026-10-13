@@ -2,6 +2,11 @@
 
 Infrastructure-as-code for regional Nullapart deployments.
 
+Phase 0/1 AWS and SMTP commissioning conformance is tracked in
+[docs/reviews/2026-10-13-phase-0-1-conformance.md](../../docs/reviews/2026-10-13-phase-0-1-conformance.md).
+This directory contains implementation structure; it is not itself proof that
+the AWS production gate has been commissioned.
+
 Primary domain: `nullapart.com`.
 Additional protected domains: `nullapart.io`, `nullapart.co`, `nullapart.co.za`.
 

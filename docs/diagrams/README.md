@@ -4,6 +4,11 @@ Mermaid `.mmd` files in this directory are the **canonical architecture diagram 
 
 Do not duplicate Mermaid bodies manually in this README. If rendered SVG/PNG/embedded diagrams are added later, generate them automatically from these sources in CI.
 
+Phase 0/1 conformance linkage is recorded in the
+[2026-10-13 Phase 0/1 Authoritative Conformance Review](../reviews/2026-10-13-phase-0-1-conformance.md).
+When a Phase 0/1 gate changes, update the relevant diagram source and the
+dated conformance link instead of relying on prose-only claims.
+
 ## Diagram index
 
 1. [System context](00-system-context.mmd)

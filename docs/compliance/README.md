@@ -36,6 +36,9 @@ The applicable legal/regulatory/framework scope is determined by qualified busin
 
 These templates distinguish documented design from controls that are actually operating.
 
+Current Phase 0/1 conformance reconciliation:
+[2026-10-13 Phase 0/1 Authoritative Conformance Review](../reviews/2026-10-13-phase-0-1-conformance.md).
+
 ## Operating model
 
 For every control:

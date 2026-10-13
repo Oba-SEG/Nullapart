@@ -4,6 +4,10 @@ These documents are the execution specifications for Nullapart implementation.
 
 They are written for both human engineers and AI coding agents.
 
+Current dated reconciliation between the authoritative Phase 0/1 plans and the
+actual repository/infra/diagram structure:
+[2026-10-13 Phase 0/1 Authoritative Conformance Review](../reviews/2026-10-13-phase-0-1-conformance.md).
+
 ## Required working method
 
 For any implementation task:

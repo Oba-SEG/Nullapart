@@ -4,6 +4,10 @@
 authorize AWS commissioning or a production deployment, and does not expand
 the current project scope into later phases.
 
+**Conformance review:** [2026-10-13 Phase 0/1 Authoritative Conformance Review](../reviews/2026-10-13-phase-0-1-conformance.md).
+Use that review to distinguish local/dev evidence from open production/AWS
+Phase 1 gates.
+
 ## Exit target
 
 One locally submitted SMTP message is durably accepted by Postfix, processed by
@@ -51,8 +55,15 @@ and retry behavior are proven locally.
      prevention, queue pressure, and unauthorized access attempts.
    - Record commands and evidence in the local test runbook.
 
-## Current blocker
+## Current status as of 2026-10-13
 
-The host Docker daemon is not available. `docker compose -f compose.local.yml
-up` must succeed before the PostgreSQL integration test and SMTP container work
-can execute.
+The earlier Docker-daemon blocker is stale. Local/dev deployment and verification
+evidence now exists in later local implementation plans, including Phase 2/3
+SMTP handoff, quarantine release/reinjection, trace UI and Phase 9 operations
+hardening evidence on `ob1@192.168.8.4`.
+
+This does not close the production Phase 1 gate. AWS SMTP commissioning,
+production-like live security/reliability tests, branch/CI evidence and the
+unchecked rows in
+[Phase 1 Security/Reliability Gate](../compliance/19-PHASE-1-SECURITY-RELIABILITY-GATE.md)
+remain open until dated evidence is attached.

@@ -1,5 +1,11 @@
 # Container Infrastructure
 
+Local/dev container evidence is reconciled against the authoritative Phase 0/1
+plans in
+[docs/reviews/2026-10-13-phase-0-1-conformance.md](../../docs/reviews/2026-10-13-phase-0-1-conformance.md).
+Do not treat a successful local container run as AWS SMTP commissioning or
+production readiness evidence.
+
 ## Orchestration
 
 Amazon ECS is the initial baseline for ordinary Nullapart application/worker/scanner containers.

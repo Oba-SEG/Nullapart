@@ -2,6 +2,12 @@
 
 **Status:** execution plan. Implementation work is blocked until Phase 0 exit criteria are satisfied.
 
+**Conformance review:** [2026-10-13 Phase 0/1 Authoritative Conformance Review](../reviews/2026-10-13-phase-0-1-conformance.md).
+That review is the dated reconciliation between this authoritative plan, the
+current codebase, infra docs and diagrams. Local/dev implementation evidence
+does not close the AWS SMTP commissioning or production security/reliability
+gates until those evidence rows are explicitly recorded.
+
 ## Work package status
 
 | WP | Name | Code status | Infrastructure status | Remaining |

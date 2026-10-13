@@ -1,5 +1,10 @@
 # Phase 0 — Contracts and Foundations
 
+**Conformance review:** [2026-10-13 Phase 0/1 Authoritative Conformance Review](../reviews/2026-10-13-phase-0-1-conformance.md).
+This dated review links Phase 0 gates to the actual repository structure,
+infrastructure documents, diagrams and evidence registers. It does not relax
+the exit criteria below.
+
 ## Objective
 
 Create the stable contracts, schemas, repository controls, build tooling, tenant-context primitives, testing foundations and UI/security/reliability primitives required so later phases do not invent incompatible models independently.
