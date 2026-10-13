@@ -95,6 +95,102 @@ const baseSnapshot = {
   },
 };
 
+const baseHardening = {
+  deployment_id: "dep-1",
+  generated_at: "2026-01-06T10:00:00Z",
+  summary: {
+    tier3_capabilities: 2,
+    capabilities_tested: 0,
+    alert_rules: 3,
+    enabled_alert_rules: 0,
+    readiness_ready: 1,
+    readiness_partial: 2,
+    readiness_not_ready: 1,
+    readiness_blocked: 0,
+  },
+  tier3_capabilities: [
+    {
+      capability_id: "inbound_smtp_acceptance",
+      display_name: "Inbound SMTP acceptance",
+      owner: "mail-operations",
+      sli: "Eligible SMTP sessions receive a correct response.",
+      slo_target: "99.95% monthly design target",
+      error_budget: "0.05% monthly",
+      measurement_source: "Postfix and Mail Core telemetry",
+      rto_minutes: 30,
+      rpo_minutes: 5,
+      dependency_map: "MX node, queue, Mail Core, PostgreSQL",
+      redundancy_design: "Multiple commissioned MX nodes before production.",
+      degraded_mode: "Temporary defer before unsafe overload.",
+      capacity_threshold: "Queue depth and oldest age.",
+      runbook: "docs/runbooks/PHASE9-OPERATIONS-HARDENING.md",
+      readiness_state: "defined",
+      last_exercise_at: null,
+      updated_at: "2026-01-06T10:00:00Z",
+    },
+    {
+      capability_id: "audit_persistence",
+      display_name: "Audit persistence",
+      owner: "security-operations",
+      sli: "High-risk mutations commit durable audit records or fail closed.",
+      slo_target: "100% by design",
+      error_budget: "0 accepted unaudited mutations",
+      measurement_source: "Audit events and checkpoint metadata",
+      rto_minutes: 30,
+      rpo_minutes: 1,
+      dependency_map: "PostgreSQL audit_events and checkpoint path",
+      redundancy_design: "Durable database and archive before production.",
+      degraded_mode: "Mutation fails closed if audit cannot persist.",
+      capacity_threshold: "Audit insert failures and checkpoint staleness.",
+      runbook: "docs/runbooks/PHASE9-OPERATIONS-HARDENING.md",
+      readiness_state: "instrumented",
+      last_exercise_at: null,
+      updated_at: "2026-01-06T10:00:00Z",
+    },
+  ],
+  alert_rules: [
+    {
+      alert_key: "inbound_smtp_acceptance:fast-burn",
+      capability_id: "inbound_smtp_acceptance",
+      severity: "page",
+      burn_rate: "14.40",
+      long_window_minutes: 60,
+      short_window_minutes: 5,
+      threshold_description: "Page when both 1h and 5m windows burn at 14.4x.",
+      owner: "mail-operations",
+      runbook: "docs/runbooks/PHASE9-OPERATIONS-HARDENING.md",
+      suppression: "Approved maintenance only.",
+      escalation: "Primary on-call, then platform lead.",
+      enabled: false,
+      last_tested_at: null,
+    },
+  ],
+  readiness_checks: [
+    {
+      check_id: "tier3_slo_alerts",
+      category: "reliability",
+      title: "Tier-3 SLO/error-budget/burn-rate alerting active",
+      status: "partial",
+      owner: "platform-operations",
+      evidence_ref: "docs/compliance/08-TIER3-SLO-EVIDENCE.md",
+      runbook: "docs/runbooks/PHASE9-OPERATIONS-HARDENING.md",
+      last_verified_at: null,
+      notes: "Rules are defined but not enabled until monitoring is live.",
+    },
+    {
+      check_id: "zero_day_exercise",
+      category: "zero_day",
+      title: "Zero-day parser/dependency exercise completed",
+      status: "not_ready",
+      owner: "security-operations",
+      evidence_ref: "docs/compliance/15-ZERO-DAY-TABLETOP-TEMPLATE.md",
+      runbook: "docs/security/27-ZERO-DAY-INTELLIGENCE-RESPONSE.md",
+      last_verified_at: null,
+      notes: "Exercise evidence is required before production readiness.",
+    },
+  ],
+};
+
 function ok(body: unknown, status = 200) {
   return {
     ok: true,
@@ -116,7 +212,9 @@ function fail(status: number, body: unknown) {
 interface StubOptions {
   session: unknown;
   snapshot?: unknown;
+  hardening?: unknown;
   snapshotError?: { status: number; code: string; message: string };
+  hardeningError?: { status: number; code: string; message: string };
   refreshResult?: unknown;
   refreshError?: { status: number; code: string; message: string };
 }
@@ -143,8 +241,17 @@ function stubFetch(options: StubOptions) {
         message: options.snapshotError.message,
       });
     }
+    if (options.hardeningError && url.includes("/operations/hardening")) {
+      return fail(options.hardeningError.status, {
+        code: options.hardeningError.code,
+        message: options.hardeningError.message,
+      });
+    }
     if (url.includes("/operations/runtime")) {
       return ok({ data: options.snapshot ?? baseSnapshot });
+    }
+    if (url.includes("/operations/hardening")) {
+      return ok({ data: options.hardening ?? baseHardening });
     }
     throw new Error(`unexpected fetch ${url}`);
   });
@@ -205,6 +312,39 @@ describe("Operations", () => {
     expect(within(summary).getByText("1")).toBeTruthy();
     expect(within(summary).getByText("Scanner nodes")).toBeTruthy();
     expect(within(summary).getByText("2/4")).toBeTruthy();
+  });
+
+  it("renders Phase 9 hardening evidence without claiming production readiness", async () => {
+    stubFetch({ session: managerSession, snapshot: baseSnapshot, hardening: baseHardening });
+    renderAt("/operations");
+
+    const summary = await screen.findByRole("region", { name: "Phase 9 hardening summary" });
+    expect(within(summary).getByText("Tier-3 capabilities")).toBeTruthy();
+    expect(within(summary).getByText("2")).toBeTruthy();
+    expect(within(summary).getByText("Enabled burn alerts")).toBeTruthy();
+    expect(within(summary).getByText("0/3")).toBeTruthy();
+    expect(within(summary).getByText("Readiness ready")).toBeTruthy();
+    expect(within(summary).getByText("Not ready")).toBeTruthy();
+    expect(summary).toHaveTextContent("Readiness ready1");
+    expect(summary).toHaveTextContent("Not ready1");
+
+    const tier3 = await screen.findByRole("region", { name: "Tier-3 SLO capabilities" });
+    expect(within(tier3).getByText("Inbound SMTP acceptance")).toBeTruthy();
+    expect(within(tier3).getByText("99.95% monthly design target")).toBeTruthy();
+    expect(within(tier3).getByText("defined")).toBeTruthy();
+
+    const alerts = await screen.findByRole("region", { name: "Burn-rate alert rules" });
+    expect(within(alerts).getByText("inbound_smtp_acceptance:fast-burn")).toBeTruthy();
+    expect(within(alerts).getByText("14.40x")).toBeTruthy();
+    expect(within(alerts).getByText("not ready")).toBeTruthy();
+
+    const readiness = await screen.findByRole("region", {
+      name: "Production-readiness evidence",
+    });
+    expect(
+      within(readiness).getByText("Zero-day parser/dependency exercise completed"),
+    ).toBeTruthy();
+    expect(within(readiness).getByText("not ready")).toBeTruthy();
   });
 
   it("renders stale badges for nodes and unknown freshness as muted", async () => {

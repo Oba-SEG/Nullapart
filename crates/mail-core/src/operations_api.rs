@@ -48,9 +48,11 @@ const IDEMPOTENCY_HEADER: &str = "x-idempotency-key";
 const NODE_ID_MAX_LEN: usize = 64;
 
 const RUNTIME_PATH: &str = "/api/v1/operations/runtime";
+const HARDENING_PATH: &str = "/api/v1/operations/hardening";
 const REFRESH_PATH: &str = "/api/v1/operations/refresh";
 
 const ACTION_RUNTIME_VIEW: &str = "runtime_snapshot_view";
+const ACTION_HARDENING_VIEW: &str = "operations_hardening_view";
 const ACTION_RUNTIME_REFRESH: &str = "runtime_refresh_requested";
 
 const RESOURCE_RUNTIME_CONFIG: &str = "runtime_config";
@@ -77,6 +79,19 @@ const DEAD_LETTERS_SQL: &str = "SELECT count(*)::bigint AS count \
 const OUTBOX_INSERT_SQL: &str = "INSERT INTO outbox_events \
      (event_type, event_version, payload, idempotency_key, customer_id, deployment_id, trace_id) \
      VALUES ($1, $2, $3, $4, $5, $6, $7)";
+const TIER3_CAPABILITIES_SQL: &str = "SELECT capability_id, display_name, owner, sli, \
+     slo_target, error_budget, measurement_source, rto_minutes, rpo_minutes, \
+     dependency_map, redundancy_design, degraded_mode, capacity_threshold, runbook, \
+     readiness_state, last_exercise_at, updated_at \
+     FROM operations_tier3_capabilities WHERE deployment_id = $1 ORDER BY capability_id";
+const ALERT_RULES_SQL: &str =
+    "SELECT alert_key, capability_id, severity, burn_rate::text AS burn_rate, \
+     long_window_minutes, short_window_minutes, threshold_description, owner, runbook, \
+     suppression, escalation, enabled, last_tested_at \
+     FROM operations_alert_rules WHERE deployment_id = $1 ORDER BY capability_id, alert_key";
+const READINESS_CHECKS_SQL: &str = "SELECT check_id, category, title, status, owner, \
+     evidence_ref, runbook, last_verified_at, notes \
+     FROM operations_readiness_checks WHERE deployment_id = $1 ORDER BY category, check_id";
 
 #[derive(Clone)]
 pub struct OperationsState(Arc<OperationsStateInner>);
@@ -176,6 +191,79 @@ struct RuntimeSnapshotResponse {
     smtp: SmtpResponse,
 }
 
+#[derive(Serialize)]
+struct OperationsHardeningResponse {
+    deployment_id: String,
+    generated_at: DateTime<Utc>,
+    summary: HardeningSummaryResponse,
+    tier3_capabilities: Vec<Tier3CapabilityResponse>,
+    alert_rules: Vec<AlertRuleResponse>,
+    readiness_checks: Vec<ReadinessCheckResponse>,
+}
+
+#[derive(Serialize, Default)]
+struct HardeningSummaryResponse {
+    tier3_capabilities: i64,
+    capabilities_tested: i64,
+    alert_rules: i64,
+    enabled_alert_rules: i64,
+    readiness_ready: i64,
+    readiness_partial: i64,
+    readiness_not_ready: i64,
+    readiness_blocked: i64,
+}
+
+#[derive(Serialize)]
+struct Tier3CapabilityResponse {
+    capability_id: String,
+    display_name: String,
+    owner: String,
+    sli: String,
+    slo_target: String,
+    error_budget: String,
+    measurement_source: String,
+    rto_minutes: i32,
+    rpo_minutes: i32,
+    dependency_map: String,
+    redundancy_design: String,
+    degraded_mode: String,
+    capacity_threshold: String,
+    runbook: String,
+    readiness_state: String,
+    last_exercise_at: Option<DateTime<Utc>>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Serialize)]
+struct AlertRuleResponse {
+    alert_key: String,
+    capability_id: String,
+    severity: String,
+    burn_rate: String,
+    long_window_minutes: i32,
+    short_window_minutes: i32,
+    threshold_description: String,
+    owner: String,
+    runbook: String,
+    suppression: String,
+    escalation: String,
+    enabled: bool,
+    last_tested_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Serialize)]
+struct ReadinessCheckResponse {
+    check_id: String,
+    category: String,
+    title: String,
+    status: String,
+    owner: String,
+    evidence_ref: String,
+    runbook: Option<String>,
+    last_verified_at: Option<DateTime<Utc>>,
+    notes: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum RefreshTarget {
@@ -211,6 +299,7 @@ struct RefreshResponse {
 pub fn operations_router(state: OperationsState) -> Router {
     Router::new()
         .route(RUNTIME_PATH, get(get_runtime))
+        .route(HARDENING_PATH, get(get_hardening))
         .route(REFRESH_PATH, post(post_refresh))
         .with_state(state)
 }
@@ -649,6 +738,29 @@ fn scanner_fleet(nodes: &[RuntimeNodeResponse]) -> ScannerFleetResponse {
     }
 }
 
+fn hardening_summary(
+    capabilities: &[Tier3CapabilityResponse],
+    alert_rules: &[AlertRuleResponse],
+    checks: &[ReadinessCheckResponse],
+) -> HardeningSummaryResponse {
+    let count_checks = |status: &str| -> i64 {
+        checks.iter().filter(|check| check.status == status).count() as i64
+    };
+    HardeningSummaryResponse {
+        tier3_capabilities: capabilities.len() as i64,
+        capabilities_tested: capabilities
+            .iter()
+            .filter(|capability| capability.readiness_state == "tested")
+            .count() as i64,
+        alert_rules: alert_rules.len() as i64,
+        enabled_alert_rules: alert_rules.iter().filter(|rule| rule.enabled).count() as i64,
+        readiness_ready: count_checks("ready"),
+        readiness_partial: count_checks("partial"),
+        readiness_not_ready: count_checks("not_ready"),
+        readiness_blocked: count_checks("blocked"),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Routes
 // ---------------------------------------------------------------------------
@@ -770,6 +882,125 @@ async fn get_runtime(
         dead_letters,
     };
     (StatusCode::OK, Json(ApiEnvelope { data: snapshot })).into_response()
+}
+
+async fn get_hardening(
+    State(state): State<OperationsState>,
+    headers: HeaderMap,
+    context: Option<Extension<TenantContext>>,
+) -> Response {
+    let Some(Extension(context)) = context else {
+        return unauthenticated();
+    };
+    let route = Route::new(
+        ACTION_HARDENING_VIEW,
+        RESOURCE_RUNTIME_CONFIG,
+        OPERATIONS_VIEW_PERMISSION,
+    );
+    if let Err(response) = authorize(&state, &context, &headers, &route).await {
+        return response;
+    }
+    let mut transaction = match state.0.pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(_) => return unavailable(),
+    };
+    if let Err(response) = set_scope(
+        &mut transaction,
+        &state.0.deployment_id.0,
+        &context.customer_id.0,
+    )
+    .await
+    {
+        return response;
+    }
+
+    let capabilities = match sqlx::query(TIER3_CAPABILITIES_SQL)
+        .bind(&state.0.deployment_id.0)
+        .fetch_all(&mut *transaction)
+        .await
+    {
+        Ok(rows) => rows
+            .iter()
+            .map(|row| Tier3CapabilityResponse {
+                capability_id: row.get("capability_id"),
+                display_name: row.get("display_name"),
+                owner: row.get("owner"),
+                sli: row.get("sli"),
+                slo_target: row.get("slo_target"),
+                error_budget: row.get("error_budget"),
+                measurement_source: row.get("measurement_source"),
+                rto_minutes: row.get("rto_minutes"),
+                rpo_minutes: row.get("rpo_minutes"),
+                dependency_map: row.get("dependency_map"),
+                redundancy_design: row.get("redundancy_design"),
+                degraded_mode: row.get("degraded_mode"),
+                capacity_threshold: row.get("capacity_threshold"),
+                runbook: row.get("runbook"),
+                readiness_state: row.get("readiness_state"),
+                last_exercise_at: row.get("last_exercise_at"),
+                updated_at: row.get("updated_at"),
+            })
+            .collect::<Vec<_>>(),
+        Err(_) => return unavailable(),
+    };
+    let alert_rules = match sqlx::query(ALERT_RULES_SQL)
+        .bind(&state.0.deployment_id.0)
+        .fetch_all(&mut *transaction)
+        .await
+    {
+        Ok(rows) => rows
+            .iter()
+            .map(|row| AlertRuleResponse {
+                alert_key: row.get("alert_key"),
+                capability_id: row.get("capability_id"),
+                severity: row.get("severity"),
+                burn_rate: row.get("burn_rate"),
+                long_window_minutes: row.get("long_window_minutes"),
+                short_window_minutes: row.get("short_window_minutes"),
+                threshold_description: row.get("threshold_description"),
+                owner: row.get("owner"),
+                runbook: row.get("runbook"),
+                suppression: row.get("suppression"),
+                escalation: row.get("escalation"),
+                enabled: row.get("enabled"),
+                last_tested_at: row.get("last_tested_at"),
+            })
+            .collect::<Vec<_>>(),
+        Err(_) => return unavailable(),
+    };
+    let readiness_checks = match sqlx::query(READINESS_CHECKS_SQL)
+        .bind(&state.0.deployment_id.0)
+        .fetch_all(&mut *transaction)
+        .await
+    {
+        Ok(rows) => rows
+            .iter()
+            .map(|row| ReadinessCheckResponse {
+                check_id: row.get("check_id"),
+                category: row.get("category"),
+                title: row.get("title"),
+                status: row.get("status"),
+                owner: row.get("owner"),
+                evidence_ref: row.get("evidence_ref"),
+                runbook: row.get("runbook"),
+                last_verified_at: row.get("last_verified_at"),
+                notes: row.get("notes"),
+            })
+            .collect::<Vec<_>>(),
+        Err(_) => return unavailable(),
+    };
+    if transaction.commit().await.is_err() {
+        return unavailable();
+    }
+    let response = OperationsHardeningResponse {
+        deployment_id: state.0.deployment_id.0.clone(),
+        generated_at: Utc::now(),
+        summary: hardening_summary(&capabilities, &alert_rules, &readiness_checks),
+        tier3_capabilities: capabilities,
+        alert_rules,
+        readiness_checks,
+    };
+    (StatusCode::OK, Json(ApiEnvelope { data: response })).into_response()
 }
 
 async fn post_refresh(
@@ -1011,6 +1242,7 @@ mod tests {
     fn all_route_requests() -> Vec<Request<Body>> {
         vec![
             get("/api/v1/operations/runtime"),
+            get("/api/v1/operations/hardening"),
             post(
                 "/api/v1/operations/refresh",
                 Some("key-refresh"),
@@ -1039,6 +1271,22 @@ mod tests {
         let response = operations_router(state())
             .layer(Extension(context))
             .oneshot(get("/api/v1/operations/runtime"))
+            .await
+            .expect("test response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            body_value(response).await,
+            error_body("FORBIDDEN", "Permission is required")
+        );
+    }
+
+    #[tokio::test]
+    async fn hardening_projection_requires_view_permission_before_database_access() {
+        let mut context = context();
+        context.permissions.clear();
+        let response = operations_router(state())
+            .layer(Extension(context))
+            .oneshot(get("/api/v1/operations/hardening"))
             .await
             .expect("test response");
         assert_eq!(response.status(), StatusCode::FORBIDDEN);

@@ -127,6 +127,11 @@
   color: var(--color-warning);
 }
 
+.operations-badge-error {
+  background-color: var(--color-error-light);
+  color: var(--color-error);
+}
+
 .operations-badge-muted {
   background-color: var(--color-bg-tertiary);
   color: var(--color-text-tertiary);
