@@ -1,6 +1,6 @@
 //! Local PostgreSQL coverage for Phase 9 operations-hardening storage.
 //!
-//! Requires PostgreSQL migrated through `032_operations_hardening.sql` with
+//! Requires PostgreSQL migrated through `033_operations_automation_categories.sql` with
 //! `NULLAPART_TEST_DATABASE_URL` pointing at it. Run explicitly with:
 //! `cargo test --test postgres_operations_hardening -- --ignored --test-threads=1`.
 
@@ -43,6 +43,7 @@ async fn ensure_request_role(pool: &PgPool) {
         "GRANT SELECT, INSERT, UPDATE, DELETE ON operations_tier3_capabilities TO nullapart_local_request",
         "GRANT SELECT, INSERT, UPDATE, DELETE ON operations_alert_rules TO nullapart_local_request",
         "GRANT SELECT, INSERT, UPDATE, DELETE ON operations_readiness_checks TO nullapart_local_request",
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON operations_automation_categories TO nullapart_local_request",
     ] {
         sqlx::query(grant)
             .execute(&mut *transaction)
@@ -155,6 +156,20 @@ async fn insert_hardening_rows(pool: &PgPool, deployment: &str, capability_id: &
     .execute(pool)
     .await
     .expect("readiness check must insert");
+    sqlx::query(
+        "INSERT INTO operations_automation_categories (\
+             deployment_id, category_id, display_name, destination, severity, owner, \
+             minimized_metadata, deduplication_key, aggregation_window_minutes, delivery_mode, \
+             blocks_mail_delivery, runbook, readiness_state\
+         ) VALUES ($1,$2,'Phase 9 automation','clickup','ticket','test-owner',\
+             'deployment and bounded evidence ids only','deployment:capability:rolling_1h',60,\
+             'outbox_sqs_worker',false,'docs/runbooks/PHASE9-OPERATIONS-HARDENING.md','defined')",
+    )
+    .bind(deployment)
+    .bind(format!("{capability_id}:automation"))
+    .execute(pool)
+    .await
+    .expect("automation category must insert");
 }
 
 async fn count_visible(transaction: &mut Transaction<'_, sqlx::Postgres>, table: &str) -> i64 {
@@ -166,7 +181,7 @@ async fn count_visible(transaction: &mut Transaction<'_, sqlx::Postgres>, table:
 }
 
 #[tokio::test]
-#[ignore = "requires migrated local PostgreSQL through 032_operations_hardening.sql"]
+#[ignore = "requires migrated local PostgreSQL through 033_operations_automation_categories.sql"]
 async fn operations_hardening_tables_fail_closed_and_isolate_by_deployment() {
     let pool = connect().await;
     ensure_request_role(&pool).await;
@@ -177,6 +192,7 @@ async fn operations_hardening_tables_fail_closed_and_isolate_by_deployment() {
         "operations_tier3_capabilities",
         "operations_alert_rules",
         "operations_readiness_checks",
+        "operations_automation_categories",
     ] {
         assert_eq!(count_visible(&mut unscoped, table).await, 0);
     }
@@ -187,6 +203,7 @@ async fn operations_hardening_tables_fail_closed_and_isolate_by_deployment() {
         "operations_tier3_capabilities",
         "operations_alert_rules",
         "operations_readiness_checks",
+        "operations_automation_categories",
     ] {
         assert_eq!(count_visible(&mut scoped_a, table).await, 1);
     }
@@ -210,5 +227,11 @@ async fn operations_hardening_tables_fail_closed_and_isolate_by_deployment() {
             .await
             .expect("scoped deployment B row must be visible");
     assert_eq!(capability_id, "control_backend");
+    let category_id: String =
+        sqlx::query_scalar("SELECT category_id FROM operations_automation_categories")
+            .fetch_one(&mut *scoped_b)
+            .await
+            .expect("scoped deployment B automation row must be visible");
+    assert_eq!(category_id, "control_backend:automation");
     scoped_b.rollback().await.expect("rollback");
 }

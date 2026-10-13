@@ -58,6 +58,7 @@ PHASE9_FILES=(
   frontend/src/pages/Operations.test.tsx
   frontend/src/pages/Operations.tsx
   migrations/032_operations_hardening.sql
+  migrations/033_operations_automation_categories.sql
   scripts/phase9_remote_verify.sh
 )
 SSHPASS="${SSHPASS}" sshpass -e rsync -avR \
@@ -68,7 +69,7 @@ SSHPASS="${SSHPASS}" sshpass -e rsync -avR \
 echo "Rebuilding the remote Mail Core and frontend images with the synced Phase 9 source..."
 remote "cd '${REMOTE_PATH}' && ${REMOTE_COMPOSE} build mailcore frontend"
 
-echo "Applying migration 032 on the remote PostgreSQL container..."
+echo "Applying Phase 9 migrations on the remote PostgreSQL container..."
 remote "cd '${REMOTE_PATH}' && \
   ${REMOTE_COMPOSE} up -d postgres && \
   pg_container=\$(${REMOTE_COMPOSE} ps -q postgres) && \
@@ -86,6 +87,13 @@ remote "cd '${REMOTE_PATH}' && \
     echo 'migration 032 already applied'; \
   else \
     docker exec -i \"\${pg_container}\" psql -U nullapart -d nullapart < migrations/032_operations_hardening.sql; \
+  fi && \
+  if docker exec \"\${pg_container}\" psql -U nullapart -d nullapart -Atc \"\
+      SELECT to_regclass('public.operations_automation_categories') IS NOT NULL\
+    \" | grep -q '^t$'; then \
+    echo 'migration 033 already applied'; \
+  else \
+    docker exec -i \"\${pg_container}\" psql -U nullapart -d nullapart < migrations/033_operations_automation_categories.sql; \
   fi"
 
 REMOTE_DB_PORT="$(
@@ -165,6 +173,10 @@ remote "cd '${REMOTE_PATH}' && \
     -H \"Authorization: Bearer \${NULLAPART_LOCAL_CONTROL_TOKEN}\" \
     -H \"X-Nullapart-Local-User: \${api_login}\" \
     \"\${api_url}/api/v1/operations/hardening\" | grep -q '\"alert_rules\"' && \
+  curl -fsS -b \"\${cookie_file}\" \
+    -H \"Authorization: Bearer \${NULLAPART_LOCAL_CONTROL_TOKEN}\" \
+    -H \"X-Nullapart-Local-User: \${api_login}\" \
+    \"\${api_url}/api/v1/operations/hardening\" | grep -q '\"automation_categories\"' && \
   frontend_authority=\$(${REMOTE_COMPOSE} port frontend 80 | tail -n 1) && \
   test -n \"\${frontend_authority}\" && \
   case \"\${frontend_authority}\" in \

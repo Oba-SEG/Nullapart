@@ -16,6 +16,7 @@ evidence, outbox/DLQ backlog or a production-readiness gate that is not ready.
 3. Check the Phase 9 hardening sections:
    - Tier-3 SLO capabilities;
    - burn-rate alert definitions;
+   - durable automation categories;
    - production-readiness evidence.
 4. Open the referenced evidence path for the failing row.
 5. Do not mark a readiness check as ready unless there is current evidence for
@@ -39,6 +40,22 @@ If a burn alert fires:
 4. Halt risky rollout work until the burn source is understood.
 5. Prefer rollback/kill-switch/backpressure before unsafe overload.
 6. Record the incident and update the evidence register after resolution.
+
+## Durable automation
+
+Phase 9 automation is driven from the durable outbox/SQS/worker path. n8n,
+ClickUp, customer notifications and reports must remain asynchronous and
+non-critical to mail delivery.
+
+Before marking an automation category ready:
+
+1. Confirm the category emits minimized metadata only.
+2. Confirm the deduplication key and aggregation window prevent task storms.
+3. Confirm workflow failure cannot block SMTP acceptance or required scanner
+   handling.
+4. Confirm retries are idempotent and auditable.
+5. Exercise the destination workflow in local/dev and attach production evidence
+   before production sign-off.
 
 ## Production-readiness evidence
 

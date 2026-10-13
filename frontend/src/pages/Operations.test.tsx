@@ -103,6 +103,8 @@ const baseHardening = {
     capabilities_tested: 0,
     alert_rules: 3,
     enabled_alert_rules: 0,
+    automation_categories: 1,
+    automation_categories_ready: 0,
     readiness_ready: 1,
     readiness_partial: 2,
     readiness_not_ready: 1,
@@ -163,6 +165,23 @@ const baseHardening = {
       escalation: "Primary on-call, then platform lead.",
       enabled: false,
       last_tested_at: null,
+    },
+  ],
+  automation_categories: [
+    {
+      category_id: "critical_threat_incident",
+      display_name: "Critical threat incident",
+      destination: "clickup",
+      severity: "page",
+      owner: "security-operations",
+      minimized_metadata: "deployment, customer scope, threat class and bounded evidence ids",
+      deduplication_key: "deployment:customer:threat_class:rolling_1h",
+      aggregation_window_minutes: 60,
+      delivery_mode: "outbox_sqs_worker",
+      blocks_mail_delivery: false,
+      runbook: "docs/runbooks/PHASE9-OPERATIONS-HARDENING.md",
+      readiness_state: "defined",
+      updated_at: "2026-01-06T10:00:00Z",
     },
   ],
   readiness_checks: [
@@ -323,6 +342,8 @@ describe("Operations", () => {
     expect(within(summary).getByText("2")).toBeTruthy();
     expect(within(summary).getByText("Enabled burn alerts")).toBeTruthy();
     expect(within(summary).getByText("0/3")).toBeTruthy();
+    expect(within(summary).getByText("Automation ready")).toBeTruthy();
+    expect(within(summary).getByText("0/1")).toBeTruthy();
     expect(within(summary).getByText("Readiness ready")).toBeTruthy();
     expect(within(summary).getByText("Not ready")).toBeTruthy();
     expect(summary).toHaveTextContent("Readiness ready1");
@@ -337,6 +358,15 @@ describe("Operations", () => {
     expect(within(alerts).getByText("inbound_smtp_acceptance:fast-burn")).toBeTruthy();
     expect(within(alerts).getByText("14.40x")).toBeTruthy();
     expect(within(alerts).getByText("not ready")).toBeTruthy();
+
+    const automation = await screen.findByRole("region", {
+      name: "Durable automation categories",
+    });
+    expect(within(automation).getByText("Critical threat incident")).toBeTruthy();
+    expect(within(automation).getByText("clickup")).toBeTruthy();
+    expect(
+      within(automation).getByText("deployment:customer:threat_class:rolling_1h"),
+    ).toBeTruthy();
 
     const readiness = await screen.findByRole("region", {
       name: "Production-readiness evidence",

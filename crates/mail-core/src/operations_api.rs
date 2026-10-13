@@ -92,6 +92,10 @@ const ALERT_RULES_SQL: &str =
 const READINESS_CHECKS_SQL: &str = "SELECT check_id, category, title, status, owner, \
      evidence_ref, runbook, last_verified_at, notes \
      FROM operations_readiness_checks WHERE deployment_id = $1 ORDER BY category, check_id";
+const AUTOMATION_CATEGORIES_SQL: &str = "SELECT category_id, display_name, destination, \
+     severity, owner, minimized_metadata, deduplication_key, aggregation_window_minutes, \
+     delivery_mode, blocks_mail_delivery, runbook, readiness_state, updated_at \
+     FROM operations_automation_categories WHERE deployment_id = $1 ORDER BY category_id";
 
 #[derive(Clone)]
 pub struct OperationsState(Arc<OperationsStateInner>);
@@ -198,6 +202,7 @@ struct OperationsHardeningResponse {
     summary: HardeningSummaryResponse,
     tier3_capabilities: Vec<Tier3CapabilityResponse>,
     alert_rules: Vec<AlertRuleResponse>,
+    automation_categories: Vec<AutomationCategoryResponse>,
     readiness_checks: Vec<ReadinessCheckResponse>,
 }
 
@@ -207,6 +212,8 @@ struct HardeningSummaryResponse {
     capabilities_tested: i64,
     alert_rules: i64,
     enabled_alert_rules: i64,
+    automation_categories: i64,
+    automation_categories_ready: i64,
     readiness_ready: i64,
     readiness_partial: i64,
     readiness_not_ready: i64,
@@ -249,6 +256,23 @@ struct AlertRuleResponse {
     escalation: String,
     enabled: bool,
     last_tested_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Serialize)]
+struct AutomationCategoryResponse {
+    category_id: String,
+    display_name: String,
+    destination: String,
+    severity: String,
+    owner: String,
+    minimized_metadata: String,
+    deduplication_key: String,
+    aggregation_window_minutes: i32,
+    delivery_mode: String,
+    blocks_mail_delivery: bool,
+    runbook: String,
+    readiness_state: String,
+    updated_at: DateTime<Utc>,
 }
 
 #[derive(Serialize)]
@@ -741,6 +765,7 @@ fn scanner_fleet(nodes: &[RuntimeNodeResponse]) -> ScannerFleetResponse {
 fn hardening_summary(
     capabilities: &[Tier3CapabilityResponse],
     alert_rules: &[AlertRuleResponse],
+    automation_categories: &[AutomationCategoryResponse],
     checks: &[ReadinessCheckResponse],
 ) -> HardeningSummaryResponse {
     let count_checks = |status: &str| -> i64 {
@@ -754,6 +779,11 @@ fn hardening_summary(
             .count() as i64,
         alert_rules: alert_rules.len() as i64,
         enabled_alert_rules: alert_rules.iter().filter(|rule| rule.enabled).count() as i64,
+        automation_categories: automation_categories.len() as i64,
+        automation_categories_ready: automation_categories
+            .iter()
+            .filter(|category| category.readiness_state == "ready")
+            .count() as i64,
         readiness_ready: count_checks("ready"),
         readiness_partial: count_checks("partial"),
         readiness_not_ready: count_checks("not_ready"),
@@ -989,15 +1019,46 @@ async fn get_hardening(
             .collect::<Vec<_>>(),
         Err(_) => return unavailable(),
     };
+    let automation_categories = match sqlx::query(AUTOMATION_CATEGORIES_SQL)
+        .bind(&state.0.deployment_id.0)
+        .fetch_all(&mut *transaction)
+        .await
+    {
+        Ok(rows) => rows
+            .iter()
+            .map(|row| AutomationCategoryResponse {
+                category_id: row.get("category_id"),
+                display_name: row.get("display_name"),
+                destination: row.get("destination"),
+                severity: row.get("severity"),
+                owner: row.get("owner"),
+                minimized_metadata: row.get("minimized_metadata"),
+                deduplication_key: row.get("deduplication_key"),
+                aggregation_window_minutes: row.get("aggregation_window_minutes"),
+                delivery_mode: row.get("delivery_mode"),
+                blocks_mail_delivery: row.get("blocks_mail_delivery"),
+                runbook: row.get("runbook"),
+                readiness_state: row.get("readiness_state"),
+                updated_at: row.get("updated_at"),
+            })
+            .collect::<Vec<_>>(),
+        Err(_) => return unavailable(),
+    };
     if transaction.commit().await.is_err() {
         return unavailable();
     }
     let response = OperationsHardeningResponse {
         deployment_id: state.0.deployment_id.0.clone(),
         generated_at: Utc::now(),
-        summary: hardening_summary(&capabilities, &alert_rules, &readiness_checks),
+        summary: hardening_summary(
+            &capabilities,
+            &alert_rules,
+            &automation_categories,
+            &readiness_checks,
+        ),
         tier3_capabilities: capabilities,
         alert_rules,
+        automation_categories,
         readiness_checks,
     };
     (StatusCode::OK, Json(ApiEnvelope { data: response })).into_response()

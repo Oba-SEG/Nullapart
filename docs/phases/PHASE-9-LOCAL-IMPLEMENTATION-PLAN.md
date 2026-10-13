@@ -14,8 +14,10 @@ restore tests and approvals are attached.
 
 - [x] Deployment-scoped operations-hardening schema:
   - migration `032_operations_hardening.sql`;
+  - migration `033_operations_automation_categories.sql`;
   - `operations_tier3_capabilities`;
   - `operations_alert_rules`;
+  - `operations_automation_categories`;
   - `operations_readiness_checks`;
   - PostgreSQL RLS enabled and forced for every Phase 9 table.
 - [x] Tier-3 capability register seeded for the initial production-critical
@@ -32,6 +34,16 @@ restore tests and approvals are attached.
   - fast page, 14.4x over 1h + 5m;
   - sustained page, 6x over 6h + 30m;
   - slow-burn ticket path.
+- [x] Durable automation category register:
+  - critical threat incident;
+  - customer outage;
+  - outbound outbreak;
+  - remediation failure;
+  - DMARC degradation;
+  - scanner/system failure;
+  - security-configuration incident;
+  - each row defines destination, owner, minimized metadata, deduplication key,
+    aggregation window, delivery mode and mail-delivery independence.
 - [x] Production-readiness evidence register:
   - security-program, source/CI, SLO, audit, zero-day, restore/DR, network and
     support-diagnostics checks;
@@ -42,7 +54,8 @@ restore tests and approvals are attached.
   - uses the existing `operations:view` permission and deployment-scoped RLS.
 - [x] UI:
   - `/operations` now shows Phase 9 hardening summary, Tier-3 SLO capability
-    register, burn-rate alert definitions and production-readiness evidence;
+    register, burn-rate alert definitions, durable automation categories and
+    production-readiness evidence;
   - no raw JSON UI and no production-ready claim without evidence.
 - [x] Runbook:
   - `docs/runbooks/PHASE9-OPERATIONS-HARDENING.md`.
@@ -73,7 +86,8 @@ Verified on 2026-10-13:
   - `SSHPASS=1234 scripts/phase9_remote_verify.sh` passed against
     `ob1@192.168.8.4:/home/ob1/Nullapart`.
   - The script rebuilt the remote Mail Core/frontend images, applied migration
-    `032_operations_hardening.sql`, ran
+    `032_operations_hardening.sql` and
+    `033_operations_automation_categories.sql`, ran
     `postgres_operations_hardening` against the tunneled remote DB, checked
     authenticated `/api/v1/operations/hardening` and confirmed the remote
     `/operations` SPA is served.
@@ -82,8 +96,10 @@ Verified on 2026-10-13:
     PostgreSQL rolled back the failed transaction.
   - A fresh remote temporary-database migration check applied
     `001_phase0_foundation.sql`, inserted one deployment, then applied
-    `032_operations_hardening.sql`; it produced 8 Tier-3 capability rows,
-    24 burn-rate alert rows and 9 readiness rows.
+    `032_operations_hardening.sql` and
+    `033_operations_automation_categories.sql`; it produced 8 Tier-3 capability
+    rows, 24 burn-rate alert rows, 9 readiness rows and 7 durable automation
+    category rows.
 
 ## Follow-up before production sign-off
 

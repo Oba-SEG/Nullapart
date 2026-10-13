@@ -79,6 +79,22 @@ interface AlertRule {
   last_tested_at: string | null;
 }
 
+interface AutomationCategory {
+  category_id: string;
+  display_name: string;
+  destination: "clickup" | "n8n" | "customer_notification" | "reporting";
+  severity: "ticket" | "page" | "notify";
+  owner: string;
+  minimized_metadata: string;
+  deduplication_key: string;
+  aggregation_window_minutes: number;
+  delivery_mode: "outbox_sqs_worker" | "manual_review";
+  blocks_mail_delivery: boolean;
+  runbook: string;
+  readiness_state: "defined" | "wired" | "tested" | "ready" | "not_ready";
+  updated_at: string;
+}
+
 interface ReadinessCheck {
   check_id: string;
   category: string;
@@ -99,6 +115,8 @@ interface OperationsHardening {
     capabilities_tested: number;
     alert_rules: number;
     enabled_alert_rules: number;
+    automation_categories: number;
+    automation_categories_ready: number;
     readiness_ready: number;
     readiness_partial: number;
     readiness_not_ready: number;
@@ -106,6 +124,7 @@ interface OperationsHardening {
   };
   tier3_capabilities: Tier3Capability[];
   alert_rules: AlertRule[];
+  automation_categories: AutomationCategory[];
   readiness_checks: ReadinessCheck[];
 }
 
@@ -377,6 +396,13 @@ export function Operations() {
                     {hardeningData.summary.enabled_alert_rules}/{hardeningData.summary.alert_rules}
                   </strong>
                 </div>
+                <div className="stat-row operations-metric-warning">
+                  <span>Automation ready</span>
+                  <strong>
+                    {hardeningData.summary.automation_categories_ready}/
+                    {hardeningData.summary.automation_categories}
+                  </strong>
+                </div>
                 <div className="stat-row">
                   <span>Readiness ready</span>
                   <strong>{hardeningData.summary.readiness_ready}</strong>
@@ -474,6 +500,49 @@ export function Operations() {
                           </td>
                           <td>{statusBadge(rule.enabled ? "ready" : "not_ready")}</td>
                           <td>{rule.escalation}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section className="card" aria-labelledby="operations-automation-heading">
+                <h2 id="operations-automation-heading">Durable automation categories</h2>
+                <p className="operations-hint">
+                  Phase 9 automation remains asynchronous and non-critical to mail delivery. These
+                  rows define minimized metadata, deduplication and aggregation before any
+                  n8n/ClickUp/customer-notification workflow is marked ready.
+                </p>
+                <div className="operations-table-wrap">
+                  <table className="operations-table">
+                    <caption className="sr-only">Durable automation category register</caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">Category</th>
+                        <th scope="col">Destination</th>
+                        <th scope="col">Owner</th>
+                        <th scope="col">Deduplication</th>
+                        <th scope="col">Aggregation</th>
+                        <th scope="col">State</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {hardeningData.automation_categories.map((category) => (
+                        <tr key={category.category_id}>
+                          <td>
+                            <span className="operations-node-id">{category.display_name}</span>
+                            <span className="operations-meta">
+                              Metadata: {category.minimized_metadata}
+                            </span>
+                          </td>
+                          <td>{category.destination.replaceAll("_", " ")}</td>
+                          <td>{category.owner}</td>
+                          <td className="operations-scope-id" title={category.deduplication_key}>
+                            {category.deduplication_key}
+                          </td>
+                          <td>{minutesLabel(category.aggregation_window_minutes)}</td>
+                          <td>{statusBadge(category.readiness_state)}</td>
                         </tr>
                       ))}
                     </tbody>
