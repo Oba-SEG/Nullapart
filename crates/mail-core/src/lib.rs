@@ -8,6 +8,7 @@ pub mod admin_rbac;
 pub mod artifact_recovery;
 pub mod artifact_store;
 pub mod auth;
+pub mod connectors_remediation_api;
 pub mod deep_ai;
 pub mod delivery;
 pub mod dmarc_aggregate;

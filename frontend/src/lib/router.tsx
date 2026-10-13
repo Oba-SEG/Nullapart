@@ -127,6 +127,16 @@ const deepAiRoute = createRoute({
   component: lazyRouteComponent(() => import("../pages/DeepAi"), "DeepAi"),
 });
 
+const connectorsRemediationRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/connectors-remediation",
+  beforeLoad: () => requirePermission("connectors:view"),
+  component: lazyRouteComponent(
+    () => import("../pages/ConnectorsRemediation"),
+    "ConnectorsRemediation",
+  ),
+});
+
 const operationsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/operations",
@@ -208,6 +218,7 @@ const routeTree = rootRoute.addChildren([
   domainSecurityRoute,
   outboundIntelligenceRoute,
   deepAiRoute,
+  connectorsRemediationRoute,
   operationsRoute,
   auditLogRoute,
   adminUsersRoute,

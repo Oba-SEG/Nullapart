@@ -14,6 +14,9 @@ use nullapart_mail_core::admin_rbac::{
 };
 use nullapart_mail_core::artifact_recovery::recover_persisted_artifacts;
 use nullapart_mail_core::artifact_store::{FilesystemArtifactRuntime, FilesystemArtifactStore};
+use nullapart_mail_core::connectors_remediation_api::{
+    connectors_remediation_router, ConnectorsRemediationState,
+};
 use nullapart_mail_core::deep_ai::{
     deep_ai_router, deep_ai_serving_router, DeepAiServingState, DeepAiState,
 };
@@ -353,6 +356,9 @@ async fn local_quarantine_api(
         )))
         .merge(outbound_intelligence_router(
             OutboundIntelligenceApiState::new(pool.clone(), deployment_id.clone()),
+        ))
+        .merge(connectors_remediation_router(
+            ConnectorsRemediationState::new(pool.clone(), deployment_id.clone()),
         ))
         .merge(admin_rbac_router(rbac_state.clone()))
         .merge(mail_trace_router(MailTraceState::new(

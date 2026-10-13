@@ -1,0 +1,150 @@
+.connectors-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.connectors-header {
+  align-items: flex-start;
+}
+
+.connectors-subtitle,
+.connectors-muted,
+.connector-card small {
+  color: var(--color-text-muted);
+}
+
+.connectors-state {
+  padding: 2rem;
+  border: 1px solid var(--color-border);
+  border-radius: 18px;
+  background: var(--color-surface);
+}
+
+.connectors-state.error,
+.connectors-error {
+  color: var(--color-danger);
+}
+
+.connectors-summary {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.connectors-summary div,
+.connectors-panel {
+  border: 1px solid var(--color-border);
+  border-radius: 18px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.connectors-summary div {
+  display: grid;
+  gap: 0.35rem;
+  padding: 1rem;
+}
+
+.connectors-summary svg {
+  color: var(--color-accent);
+}
+
+.connectors-summary span {
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+}
+
+.connectors-summary strong {
+  font-size: 1.6rem;
+}
+
+.connectors-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.connectors-panel {
+  padding: 1rem;
+}
+
+.connectors-panel h2 {
+  margin-top: 0;
+}
+
+.connectors-list,
+.connectors-form {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.connector-card {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.85rem;
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-surface-subtle);
+}
+
+.connector-card div {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.connector-card span {
+  color: var(--color-text-muted);
+}
+
+.capability-list {
+  flex-wrap: wrap;
+  justify-content: flex-start !important;
+}
+
+.capability-list span {
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+}
+
+.capability-list .enabled {
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 12%, transparent);
+}
+
+.capability-list .disabled {
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+}
+
+.connectors-form label {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--color-text-muted);
+  font-size: 0.86rem;
+}
+
+.connectors-form input,
+.connectors-form select,
+.connectors-form textarea {
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 0.7rem 0.8rem;
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.connectors-form textarea {
+  min-height: 5rem;
+  resize: vertical;
+}
+
+@media (max-width: 980px) {
+  .connectors-summary,
+  .connectors-grid {
+    grid-template-columns: 1fr;
+  }
+}

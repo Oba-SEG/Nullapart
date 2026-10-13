@@ -5,6 +5,7 @@ import {
   Bot,
   Building2,
   BrainCircuit,
+  Cable,
   LayoutDashboard,
   LogOut,
   Mail,
@@ -143,6 +144,16 @@ export function Layout() {
             <Link to="/deep-ai" className="nav-link" activeProps={{ className: "nav-link active" }}>
               <Bot size={17} aria-hidden="true" />
               <span>Deep AI</span>
+            </Link>
+          ) : null}
+          {can("connectors:view") ? (
+            <Link
+              to="/connectors-remediation"
+              className="nav-link"
+              activeProps={{ className: "nav-link active" }}
+            >
+              <Cable size={17} aria-hidden="true" />
+              <span>Connectors</span>
             </Link>
           ) : null}
           {can("audit:view") ? (
