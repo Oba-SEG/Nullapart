@@ -406,7 +406,9 @@ async fn idempotency_claims_replay_complete_and_mismatch() {
     let key = format!("test-{}", Uuid::new_v4());
     let operation = "admin:customer:update:test-customer";
 
-    let mut transaction = begin_scoped(&pool, None, None).await;
+    // idempotency_keys carries FORCE RLS (migration 034): a non-empty
+    // app.current_customer_id is required before any claim can insert.
+    let mut transaction = begin_scoped(&pool, None, Some("idempotency-test-customer")).await;
     let outcome = claim(&mut transaction, &key, operation)
         .await
         .expect("the first claim must run");
