@@ -902,7 +902,10 @@ fn valid_rules(rules: &[PolicyRule]) -> bool {
 }
 
 /// Decodes the canonical feature override value. The wire form is exact:
-/// `inherit`, `enabled`, `disabled` or `typed:<payload>`.
+/// `inherit`, `enabled`, `disabled` or `typed:<payload>`. A typed payload must
+/// be non-empty, within the overall length bound and free of control
+/// characters so a stored override can never smuggle line breaks or escape
+/// sequences into projections or logs.
 fn parse_feature_value(raw: &str) -> Option<FeatureValue> {
     if raw.len() > VALUE_MAX_LEN {
         return None;
@@ -913,7 +916,7 @@ fn parse_feature_value(raw: &str) -> Option<FeatureValue> {
         "disabled" => Some(FeatureValue::Disabled),
         _ => raw
             .strip_prefix(TYPED_PREFIX)
-            .filter(|payload| !payload.is_empty())
+            .filter(|payload| !payload.is_empty() && !has_control_characters(payload))
             .map(|payload| FeatureValue::Typed(payload.to_string())),
     }
 }
@@ -2492,10 +2495,20 @@ mod tests {
             let encoded = encode_feature_value(&value);
             assert_eq!(parse_feature_value(&encoded), Some(value));
         }
-        for invalid in ["", "on", "true", "typed:", "ENABLED", "inherit "] {
+        for invalid in [
+            "",
+            "on",
+            "true",
+            "typed:",
+            "ENABLED",
+            "inherit ",
+            "typed:line\nbreak",
+            "typed:carriage\rreturn",
+            "typed:nul\0byte",
+        ] {
             assert!(
                 parse_feature_value(invalid).is_none(),
-                "{invalid} must be rejected"
+                "{invalid:?} must be rejected"
             );
         }
         let too_long = format!("{TYPED_PREFIX}{}", "x".repeat(VALUE_MAX_LEN));

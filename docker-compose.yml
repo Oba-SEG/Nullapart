@@ -71,8 +71,6 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.rspamd
-    ports:
-      - "11332:11332"
 
   frontend:
     build:

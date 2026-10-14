@@ -161,6 +161,8 @@ pub const BUILTIN_ROLES: [BuiltinRole; 3] = [
             crate::policy_admin::POLICIES_MANAGE_PERMISSION,
             crate::model_registry::MODELS_VIEW_PERMISSION,
             crate::model_registry::MODELS_MANAGE_PERMISSION,
+            crate::connectors_remediation_api::CONNECTORS_VIEW_PERMISSION,
+            crate::connectors_remediation_api::CONNECTORS_MANAGE_PERMISSION,
             OPERATIONS_VIEW_PERMISSION,
             OPERATIONS_MANAGE_PERMISSION,
             TRACE_VIEW_PERMISSION,
@@ -188,6 +190,8 @@ pub const BUILTIN_ROLES: [BuiltinRole; 3] = [
             crate::policy_admin::POLICIES_VIEW_PERMISSION,
             crate::policy_admin::POLICIES_MANAGE_PERMISSION,
             crate::model_registry::MODELS_VIEW_PERMISSION,
+            crate::connectors_remediation_api::CONNECTORS_VIEW_PERMISSION,
+            crate::connectors_remediation_api::CONNECTORS_MANAGE_PERMISSION,
             OPERATIONS_VIEW_PERMISSION,
             OPERATIONS_MANAGE_PERMISSION,
             TRACE_VIEW_PERMISSION,
@@ -208,6 +212,7 @@ pub const BUILTIN_ROLES: [BuiltinRole; 3] = [
             crate::domain_security::DOMAIN_SECURITY_VIEW_PERMISSION,
             crate::deep_ai::DEEP_AI_VIEW_PERMISSION,
             crate::outbound_intelligence_api::OUTBOUND_INTELLIGENCE_VIEW_PERMISSION,
+            crate::connectors_remediation_api::CONNECTORS_VIEW_PERMISSION,
             crate::policy_admin::POLICIES_VIEW_PERMISSION,
             crate::policy_admin::POLICIES_MANAGE_PERMISSION,
             TRACE_VIEW_PERMISSION,
@@ -2633,22 +2638,29 @@ impl AdminRbacStore for PostgresAdminRbacStore {
         deployment_id: &str,
         customer_id: &str,
     ) -> Result<Option<CustomerEntryTarget>, AdminRbacError> {
-        sqlx::query(
+        // The customers table carries FORCE row-level security (migration
+        // 034), so the read runs in a deployment-scoped transaction rather
+        // than straight on the pool: an unscoped session would match zero
+        // rows and every entry target would silently resolve to "not found".
+        let mut transaction = self.begin_scoped(deployment_id).await?;
+        let row = sqlx::query(
             "SELECT display_name, internal_key, lifecycle \
              FROM customers WHERE deployment_id = $1 AND id = $2",
         )
         .bind(deployment_id)
         .bind(customer_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *transaction)
         .await
-        .map(|row| {
-            row.map(|row| CustomerEntryTarget {
-                display_name: row.get("display_name"),
-                internal_key: row.get("internal_key"),
-                lifecycle: row.get("lifecycle"),
-            })
-        })
-        .map_err(|_| AdminRbacError::PersistenceFailed)
+        .map_err(|_| AdminRbacError::PersistenceFailed)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| AdminRbacError::PersistenceFailed)?;
+        Ok(row.map(|row| CustomerEntryTarget {
+            display_name: row.get("display_name"),
+            internal_key: row.get("internal_key"),
+            lifecycle: row.get("lifecycle"),
+        }))
     }
 }
 
