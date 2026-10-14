@@ -5,22 +5,27 @@
 }
 
 .metric-strip {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(220px, 1.4fr) repeat(3, minmax(180px, 1fr));
   gap: var(--spacing-3);
   padding: var(--spacing-3);
 }
 
 .metric-stat {
   display: flex;
-  flex: 1 1 190px;
   flex-direction: column;
   gap: var(--spacing-2);
-  padding: var(--spacing-4);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  min-height: 136px;
+  padding: var(--spacing-5);
+  border: 1px solid rgba(250, 250, 250, 0.12);
+  border-radius: var(--radius-lg);
   background:
-    linear-gradient(180deg, rgba(250, 250, 250, 0.03), transparent 55%),
+    radial-gradient(
+      circle at 16% 0%,
+      rgba(168, 255, 0, 0.08),
+      transparent 12rem
+    ),
+    linear-gradient(180deg, rgba(250, 250, 250, 0.04), transparent 55%),
     var(--color-bg-command);
   box-shadow: var(--shadow-inset);
   min-width: 0;
@@ -32,13 +37,13 @@
 }
 
 .metric-stat:hover {
-  background-color: var(--color-bg-tertiary);
+  background-color: var(--color-bg-glass-strong);
   border-color: var(--color-border-strong);
-  box-shadow: var(--shadow-inset-md);
+  box-shadow: var(--shadow-panel-lime);
+  transform: translateY(-1px);
 }
 
 .metric-stat.primary {
-  flex-grow: 1.7;
   border-color: var(--color-border-lime);
   box-shadow:
     var(--shadow-inset),
@@ -51,7 +56,7 @@
 
 .metric-value {
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-xl);
+  font-size: clamp(1.5rem, 3vw, 2.25rem);
   font-weight: var(--font-weight-bold);
   letter-spacing: -0.02em;
   color: var(--color-text-primary);
@@ -78,6 +83,7 @@
 }
 
 .metric-cta {
+  margin-top: auto;
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-medium);
   color: var(--color-primary);
@@ -92,6 +98,108 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
   gap: var(--spacing-4);
+}
+
+.command-panel {
+  padding: var(--spacing-5);
+}
+
+.command-panel-head {
+  margin-bottom: var(--spacing-4);
+}
+
+.eyebrow {
+  display: inline-flex;
+  margin-bottom: var(--spacing-2);
+  color: var(--color-primary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.command-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--spacing-3);
+}
+
+.command-action {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--spacing-3);
+  min-height: 112px;
+  padding: var(--spacing-4);
+  overflow: hidden;
+  color: var(--color-text-primary);
+  background:
+    radial-gradient(circle at 0 0, rgba(168, 255, 0, 0.11), transparent 12rem),
+    linear-gradient(135deg, rgba(250, 250, 250, 0.045), rgba(0, 0, 0, 0.18)),
+    rgba(0, 13, 13, 0.58);
+  border: 1px solid rgba(250, 250, 250, 0.1);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-inset);
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+.command-action::before {
+  content: "";
+  position: absolute;
+  inset: auto -18% -48% 22%;
+  height: 76%;
+  background: radial-gradient(circle, rgba(0, 245, 212, 0.16), transparent 68%);
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.command-action:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-border-lime);
+  box-shadow: var(--shadow-panel-lime);
+  transform: translateY(-2px);
+}
+
+.command-action:hover::before {
+  opacity: 1;
+}
+
+.command-action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  color: var(--color-text-inverse);
+  background: linear-gradient(135deg, #d5ff4f, var(--lime) 58%, #77ca00);
+  border-radius: var(--radius-full);
+  box-shadow: var(--shadow-glow-lime);
+}
+
+.command-action-label,
+.command-action-detail {
+  display: block;
+}
+
+.command-action-label {
+  margin-bottom: var(--spacing-1);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: -0.01em;
+}
+
+.command-action-detail {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+}
+
+.command-action-arrow {
+  color: var(--color-primary);
+  opacity: 0.72;
 }
 
 .activity-list {
@@ -222,4 +330,26 @@
 
 .health-item .status-pill {
   margin-left: auto;
+}
+
+@media (max-width: 1180px) {
+  .metric-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .command-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .metric-strip,
+  .command-grid,
+  .dashboard-sections {
+    grid-template-columns: 1fr;
+  }
+
+  .command-action {
+    min-height: 96px;
+  }
 }

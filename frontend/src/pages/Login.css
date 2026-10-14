@@ -14,7 +14,10 @@
   position: absolute;
   inset: 0;
   background:
-    url("/brand/globe-background.png") right -80px center / 70% auto no-repeat,
+    url("/brand/generated/nullapart-globe-command-bg@2x.png") right -80px
+      center / 72% auto no-repeat,
+    url("/brand/generated/nullapart-wave-command-bg@2x.png") left top /
+      min(900px, 92vw) auto no-repeat,
     var(--brand-beam),
     radial-gradient(
       900px 500px at 50% -10%,

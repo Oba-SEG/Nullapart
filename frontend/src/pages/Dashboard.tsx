@@ -1,6 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { ArrowRight, RefreshCw } from "lucide-react";
+import {
+  ArrowRight,
+  BrainCircuit,
+  FileWarning,
+  RefreshCw,
+  ScrollText,
+  Server,
+  ShieldAlert,
+  SlidersHorizontal,
+} from "lucide-react";
 import { api } from "../api/client";
 import { StatusPill } from "../components/StatusPill";
 import type { StatusTone } from "../lib/status";
@@ -59,6 +68,13 @@ function outboxTone(unpublished: number, oldest: number | null): StatusTone {
   return "clean";
 }
 
+function dashboardOutboxDetail(unpublished: number, oldestAge: string | null): string {
+  if (unpublished === 0) return "Outbox is drained; inspect runtime controls";
+  return oldestAge
+    ? `${unpublished} unpublished · oldest ${oldestAge}`
+    : `${unpublished} unpublished event${unpublished === 1 ? "" : "s"}`;
+}
+
 function healthTone(healthy: boolean): StatusTone {
   return healthy ? "clean" : "threat";
 }
@@ -109,6 +125,54 @@ export function Dashboard() {
   const quarantined = quarantine.data?.length ?? null;
   const nodeStatus = scanner.data?.node.status ?? null;
   const oldestAge = outbox ? formatAge(outbox.oldest_unpublished_age_seconds) : null;
+  const commandActions = [
+    {
+      to: "/quarantine",
+      icon: ShieldAlert,
+      label: "Triage quarantine",
+      detail:
+        quarantined !== null
+          ? `${quarantined} message${quarantined === 1 ? "" : "s"} waiting for disposition`
+          : "Review held mail and release only with step-up approval",
+    },
+    {
+      to: "/operations",
+      icon: Server,
+      label: "Inspect runtime",
+      detail: outbox
+        ? dashboardOutboxDetail(outbox.unpublished_count, oldestAge)
+        : "Check nodes, queues, config revisions and refresh controls",
+    },
+    {
+      to: "/scanner-operations",
+      icon: BrainCircuit,
+      label: "Check scanner fabric",
+      detail: nodeStatus
+        ? `Primary node ${nodeStatus}`
+        : "Confirm classifier and scanner node health",
+    },
+    {
+      to: "/policies",
+      icon: SlidersHorizontal,
+      label: "Manage policy",
+      detail: "Tune tenant-safe mail controls without bypassing security floors",
+    },
+    {
+      to: "/audit-log",
+      icon: ScrollText,
+      label: "Review audit",
+      detail: "Trace administrative and security-sensitive actions",
+    },
+    {
+      to: "/operations",
+      icon: FileWarning,
+      label: "Clear dead letters",
+      detail:
+        deadLetters !== null
+          ? `${deadLetters} durable event${deadLetters === 1 ? "" : "s"} need review`
+          : "Inspect failed outbox/reinjection events",
+    },
+  ] as const;
 
   return (
     <div className="dashboard">
@@ -167,6 +231,37 @@ export function Dashboard() {
           </span>
           <span className="metric-cta">Open scanner operations</span>
         </Link>
+      </section>
+
+      <section className="card command-panel" aria-labelledby="command-panel-heading">
+        <div className="section-head command-panel-head">
+          <div>
+            <span className="eyebrow">Admin command map</span>
+            <h2 id="command-panel-heading" className="section-title">
+              What needs action now
+            </h2>
+          </div>
+          <Link to="/operations" className="section-link">
+            Runtime console <ArrowRight size={14} aria-hidden="true" />
+          </Link>
+        </div>
+        <div className="command-grid">
+          {commandActions.map((action) => {
+            const Icon = action.icon;
+            return (
+              <Link key={action.label} to={action.to} className="command-action">
+                <span className="command-action-icon">
+                  <Icon size={19} aria-hidden="true" />
+                </span>
+                <span>
+                  <span className="command-action-label">{action.label}</span>
+                  <span className="command-action-detail">{action.detail}</span>
+                </span>
+                <ArrowRight className="command-action-arrow" size={16} aria-hidden="true" />
+              </Link>
+            );
+          })}
+        </div>
       </section>
 
       <div className="dashboard-sections">

@@ -20,11 +20,11 @@
   /* Surfaces */
   --color-bg-primary: #050505;
   --color-bg-secondary: #000d0d; /* board: Surface, Panels, UI */
-  --color-bg-tertiary: #141414;
-  --color-bg-elevated: #1a1a1a;
-  --color-bg-command: #030808;
-  --color-bg-glass: rgba(0, 13, 13, 0.86);
-  --color-bg-glass-strong: rgba(5, 18, 16, 0.94);
+  --color-bg-tertiary: #101813;
+  --color-bg-elevated: #111914;
+  --color-bg-command: #020807;
+  --color-bg-glass: rgba(0, 13, 13, 0.78);
+  --color-bg-glass-strong: rgba(5, 18, 16, 0.9);
 
   /* Text */
   --color-text-primary: #fafafa;
@@ -79,11 +79,11 @@
    * deep shade bottom-right, paper tint top-left. Borders stay the
    * readable boundary so depth never carries meaning alone. */
   --shadow-sm:
-    2px 2px 5px rgba(0, 0, 0, 0.65), -2px -2px 4px rgba(250, 250, 250, 0.07);
+    0 8px 22px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(250, 250, 250, 0.07);
   --shadow-md:
-    4px 4px 10px rgba(0, 0, 0, 0.7), -3px -3px 8px rgba(250, 250, 250, 0.08);
+    0 18px 42px rgba(0, 0, 0, 0.44), inset 0 1px 0 rgba(250, 250, 250, 0.08);
   --shadow-lg:
-    8px 8px 20px rgba(0, 0, 0, 0.75), -5px -5px 14px rgba(250, 250, 250, 0.09);
+    0 28px 72px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(250, 250, 250, 0.09);
   --shadow-inset:
     inset 2px 2px 5px rgba(0, 0, 0, 0.7),
     inset -2px -2px 4px rgba(250, 250, 250, 0.06);
@@ -93,15 +93,15 @@
   --shadow-glow-lime: 0 0 16px rgba(168, 255, 0, 0.3);
   --shadow-glow-cyan: 0 0 20px rgba(0, 245, 212, 0.16);
   --shadow-panel:
-    0 18px 50px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(250, 250, 250, 0.06);
+    0 22px 60px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(250, 250, 250, 0.06);
   --shadow-panel-lime:
-    0 18px 60px rgba(0, 0, 0, 0.5), 0 0 28px rgba(168, 255, 0, 0.1),
+    0 24px 76px rgba(0, 0, 0, 0.54), 0 0 34px rgba(168, 255, 0, 0.12),
     inset 0 1px 0 rgba(250, 250, 250, 0.07);
 
   /* Typography */
   --font-family-sans:
-    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
+    "Satoshi", "Geist", "Aptos", "Manrope", "Segoe UI", -apple-system,
+    BlinkMacSystemFont, sans-serif;
   --font-family-mono:
     "SF Mono", Monaco, "Cascadia Code", "Roboto Mono", Consolas, monospace;
 
@@ -160,6 +160,8 @@
 
   /* Focus */
   --focus-ring: 0 0 0 3px rgba(168, 255, 0, 0.35);
+  --asset-globe-command: url("/brand/generated/nullapart-globe-command-bg.png");
+  --asset-wave-command: url("/brand/generated/nullapart-wave-command-bg.png");
   --brand-beam:
     linear-gradient(
       112deg,
@@ -190,6 +192,12 @@
     );
   --brand-network-size: 26px 26px;
   --brand-network-opacity: 0.18;
+  --command-panel-border: linear-gradient(
+    135deg,
+    rgba(168, 255, 0, 0.45),
+    rgba(0, 245, 212, 0.26) 45%,
+    rgba(250, 250, 250, 0.08)
+  );
 }
 
 [data-theme="light"] {
