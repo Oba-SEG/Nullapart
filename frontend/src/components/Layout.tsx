@@ -75,6 +75,9 @@ export function Layout() {
 
   return (
     <div className="layout">
+      <a className="skip-link" href="#main-content">
+        Skip to main content
+      </a>
       <aside className="sidebar">
         <Link to="/" className="sidebar-brand" aria-label="Nullapart home">
           <img src="/brand/horizontal-logo.png" alt="Nullapart" className="sidebar-logo" />
@@ -240,7 +243,7 @@ export function Layout() {
       <div className="content">
         <Toasts />
         <ImpersonationBanner session={current} />
-        <main className="main">
+        <main className="main" id="main-content" tabIndex={-1}>
           <Outlet />
         </main>
       </div>

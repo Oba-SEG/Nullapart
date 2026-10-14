@@ -280,6 +280,27 @@ Component wrappers around Radix/HTML primitives must preserve:
 
 Neumorphism never overrides accessibility.
 
+## Brand, visual system and email stationery
+
+**Last verified:** 2026-10-14.
+
+The design system is an accessible **midnight neumorphic command console**:
+soft raised/inset surfaces, explicit borders, visible focus, dense operational
+tables and a restrained acid-lime/cyan signal palette. The aesthetic is not a
+marketing dashboard and visual elevation never supplies meaning on its own.
+
+The definitive implementation inventory and asset rules are maintained in
+[`docs/engineering/BRAND-UI-ASSET-SYSTEM.md`](engineering/BRAND-UI-ASSET-SYSTEM.md).
+It records which visual files are generated, their dimensions, allowed uses,
+and the verified no-remote-image email-stationery policy.
+
+Service email stationery is a pure rendering foundation only. It has no
+dispatch path, recipient selection, link generation or feature flag. A future
+phase that sends notification email must separately define its data classes,
+recipient authorization, audit/outbox record, retry semantics, unsubscribe/
+notification preference behaviour and transport identity before it calls the
+renderer.
+
 ## Testing
 
 ### Unit/component

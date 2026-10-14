@@ -112,6 +112,26 @@ body::after {
   outline: none;
 }
 
+/* Keyboard users can bypass the persistent command sidebar. The target is
+ * focusable so assistive technology announces the destination after jumping. */
+.skip-link {
+  position: fixed;
+  top: var(--spacing-3);
+  left: var(--spacing-3);
+  z-index: calc(var(--z-toast) + 1);
+  padding: var(--spacing-3) var(--spacing-4);
+  color: var(--color-btn-primary-text);
+  background: var(--color-btn-primary-bg);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-panel-lime);
+  transform: translateY(-180%);
+  transition: transform var(--transition-fast);
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
 /* Links */
 a {
   color: var(--color-link);
@@ -434,6 +454,22 @@ th {
 
 tbody tr:hover td {
   background-color: rgba(168, 255, 0, 0.055);
+}
+
+tbody tr:focus-within td {
+  background-color: var(--color-selected-bg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn,
+  .card,
+  .metric-stat,
+  .command-action,
+  .sidebar-nav .nav-link,
+  .section-link svg,
+  .quarantine-back svg {
+    transition-duration: 1ms;
+  }
 }
 
 .page-header,
