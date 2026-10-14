@@ -40,6 +40,8 @@ application shell supplies a keyboard-visible skip link to `#main-content`.
 | `frontend/public/brand/generated/nullapart-globe-command-bg@2x.png` | 3344×1882 | High-density rendition | Current header/background source. |
 | `frontend/public/brand/generated/nullapart-wave-command-bg.png` | 1916×821 | Panel/sidebar ambient background | Decorative only; never conveys state. |
 | `frontend/public/brand/generated/nullapart-wave-command-bg@2x.png` | 3832×1642 | High-density rendition | Current panel/sidebar source. |
+| `crates/mail-core/assets/brand/nullapart-email-stationery-banner.png` | 1086×362 | Standard-density email artwork | CID-ready only; never remote-loaded from a recipient's mail client. |
+| `crates/mail-core/assets/brand/nullapart-email-stationery-banner@2x.png` | 2172×724 | High-density email artwork | Bundled by `notification_stationery::inline_assets()`. |
 
 The two visual compositions were generated as artwork, then retained with
 high-density renditions for the browser. CSS-built grids, focus rings, status
@@ -50,10 +52,11 @@ technology.
 ## Email stationery
 
 `crates/mail-core/src/notification_stationery.rs` provides a branded HTML
-renderer and matching plain-text alternative. It deliberately contains no
-remote images, tracking pixels, scripts, forms, caller-controlled markup or
-URLs. This works in image-blocking mail clients and avoids privacy/tracking
-behaviour in a security-product notification.
+renderer, matching plain-text alternative, and a 2172×724 CID-ready header
+artwork bundle. It deliberately contains no remote images, tracking pixels,
+scripts, forms, caller-controlled markup or URLs. This works in image-blocking
+mail clients and avoids privacy/tracking behaviour in a security-product
+notification.
 
 The renderer escapes every content value at the final HTML boundary. It is not
 a mail sender. No current Nullapart workflow dispatches it, and this document

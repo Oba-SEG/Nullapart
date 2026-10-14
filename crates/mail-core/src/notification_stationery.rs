@@ -19,6 +19,33 @@ pub struct ServiceNotice<'a> {
     pub reference: Option<&'a str>,
 }
 
+/// A bundled asset a future sender can attach with a content ID rather than
+/// making an email client fetch a remote image.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InlineStationeryAsset {
+    pub content_id: &'static str,
+    pub media_type: &'static str,
+    pub bytes: &'static [u8],
+}
+
+/// The content ID reserved for the optional stationery artwork.
+pub const EMAIL_STATIONERY_BANNER_CONTENT_ID: &str = "nullapart-stationery-banner";
+
+const EMAIL_STATIONERY_BANNER_PNG: &[u8] =
+    include_bytes!("../assets/brand/nullapart-email-stationery-banner@2x.png");
+
+/// Return the high-density artwork that a future mail composer may attach as
+/// a CID part. `render_html` intentionally does not reference it yet: this
+/// repository has no reviewed notification dispatch/attachment composer.
+#[must_use]
+pub fn inline_assets() -> [InlineStationeryAsset; 1] {
+    [InlineStationeryAsset {
+        content_id: EMAIL_STATIONERY_BANNER_CONTENT_ID,
+        media_type: "image/png",
+        bytes: EMAIL_STATIONERY_BANNER_PNG,
+    }]
+}
+
 /// Render an email-client-safe HTML document using Nullapart's stationery.
 ///
 /// The template intentionally has no remote images, tracking pixels, scripts,
@@ -115,7 +142,9 @@ fn escape_html_with_breaks(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_html, render_text, ServiceNotice};
+    use image::GenericImageView;
+
+    use super::{inline_assets, render_html, render_text, ServiceNotice};
 
     fn notice() -> ServiceNotice<'static> {
         ServiceNotice {
@@ -167,5 +196,16 @@ mod tests {
         assert!(text.starts_with("NULLAPART\nSecurity posture"));
         assert!(text.contains("Reference: dns-observation-014"));
         assert!(text.ends_with("Do not reply to this message."));
+    }
+
+    #[test]
+    fn includes_a_high_density_cid_ready_banner() {
+        let [banner] = inline_assets();
+        let decoded =
+            image::load_from_memory(banner.bytes).expect("bundled banner must be valid PNG");
+
+        assert_eq!(banner.content_id, "nullapart-stationery-banner");
+        assert_eq!(banner.media_type, "image/png");
+        assert_eq!(decoded.dimensions(), (2172, 724));
     }
 }
