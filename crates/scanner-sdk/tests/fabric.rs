@@ -1141,6 +1141,93 @@ async fn content_inapplicable_required_scanner_fails_safe() {
 }
 
 #[tokio::test]
+async fn wildcard_content_type_capability_matches_any_target() {
+    let scanner = Arc::new(
+        ScriptedTestScanner::new("test-wildcard", Script::Clean).with_content_types(&["*"]),
+    );
+    let mut fabric = fabric_with(4);
+    register(
+        &mut fabric,
+        Arc::clone(&scanner),
+        ExecutionClass::FastRequired,
+    );
+
+    let outcome = fabric.scan(&target(), default_content()).await;
+
+    assert_eq!(
+        scanner.invocations.load(Ordering::SeqCst),
+        1,
+        "a `*` capability must match the message/rfc822 target"
+    );
+    assert_eq!(outcome.status, ScannerStatus::Clean);
+    assert_eq!(outcome.coverage.required_applicable, 1);
+    assert_eq!(outcome.fail_safe_disposition, Disposition::Allow);
+}
+
+#[tokio::test]
+async fn prefix_wildcard_content_type_capability_matches_subtype() {
+    // `message/*` must match `message/rfc822` — the exact claim of the
+    // (refuted) seed that reported prefix matching as broken.
+    let scanner = Arc::new(
+        ScriptedTestScanner::new("test-message-prefix", Script::Clean)
+            .with_content_types(&["message/*"]),
+    );
+    let mut fabric = fabric_with(4);
+    register(
+        &mut fabric,
+        Arc::clone(&scanner),
+        ExecutionClass::FastRequired,
+    );
+
+    let outcome = fabric.scan(&target(), default_content()).await;
+
+    assert_eq!(
+        scanner.invocations.load(Ordering::SeqCst),
+        1,
+        "`message/*` must match the message/rfc822 target"
+    );
+    assert_eq!(outcome.status, ScannerStatus::Clean);
+    assert_eq!(outcome.coverage.required_applicable, 1);
+    assert_eq!(outcome.fail_safe_disposition, Disposition::Allow);
+}
+
+#[tokio::test]
+async fn integrity_preflight_failure_is_error_not_resource_limit() {
+    let scanner = Arc::new(ScriptedTestScanner::new(
+        "test-integrity-type",
+        Script::Clean,
+    ));
+    let mut fabric = fabric_with(4);
+    register(
+        &mut fabric,
+        Arc::clone(&scanner),
+        ExecutionClass::FastRequired,
+    );
+
+    // Content shorter than target.artifact_size_bytes triggers the
+    // integrity preflight. Its failure_type must be Error, not
+    // ResourceLimit (a size limit is not what failed here).
+    let short_content: Arc<dyn ScanContent> =
+        InMemoryTestContent::new(b"short".to_vec(), ContentType::new("message/rfc822"));
+    let outcome = fabric.scan(&target(), short_content).await;
+
+    assert_eq!(
+        scanner.invocations.load(Ordering::SeqCst),
+        0,
+        "no adapter may run after an integrity preflight failure"
+    );
+    assert_ne!(outcome.status, ScannerStatus::Clean);
+    assert!(outcome.inconclusive);
+    assert_eq!(outcome.fail_safe_disposition, Disposition::Hold);
+    assert_eq!(outcome.failures.len(), 1);
+    assert_eq!(outcome.failures[0].failure_type, FailureType::Error);
+    assert_eq!(
+        outcome.failures[0].message,
+        "artifact metadata/content integrity mismatch"
+    );
+}
+
+#[tokio::test]
 async fn oversized_artifact_yields_explicit_unscannable_evidence() {
     let mut fabric = fabric_with(4);
     fabric

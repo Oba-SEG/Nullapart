@@ -288,15 +288,26 @@ async fn local_quarantine_api(
         .map_err(|_| "NULLAPART_LOCAL_CONTROL_TOKEN is required")?;
     let customer_id = env::var("NULLAPART_LOCAL_CONTROL_CUSTOMER_ID")
         .map_err(|_| "NULLAPART_LOCAL_CONTROL_CUSTOMER_ID is required")?;
-    let customer = sqlx::query(
-        "SELECT internal_key, display_name FROM customers \
-         WHERE id = $1 AND deployment_id = $2 AND lifecycle = 'active'",
-    )
-    .bind(&customer_id)
-    .bind(&deployment_id.0)
-    .fetch_optional(pool)
-    .await?
-    .ok_or("configured local control customer is not active")?;
+    // customers carries FORCE RLS (migration 034); run the startup probe in a
+    // deployment-scoped transaction so the configured customer is visible.
+    let customer = {
+        let mut transaction = pool.begin().await?;
+        sqlx::query("SELECT set_config('app.current_deployment_id', $1, true)")
+            .bind(&deployment_id.0)
+            .execute(&mut *transaction)
+            .await?;
+        let row = sqlx::query(
+            "SELECT internal_key, display_name FROM customers \
+             WHERE id = $1 AND deployment_id = $2 AND lifecycle = 'active'",
+        )
+        .bind(&customer_id)
+        .bind(&deployment_id.0)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or("configured local control customer is not active")?;
+        transaction.commit().await?;
+        row
+    };
     let template = ControlPlaneTemplate {
         region: RegionId::new("local"),
         customer_id: nullapart_mail_contracts::CustomerId::new(&customer_id),

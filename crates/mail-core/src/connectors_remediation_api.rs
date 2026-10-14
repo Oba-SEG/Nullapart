@@ -5,6 +5,8 @@
 //! Microsoft/Google/IMAP provider mutations; provider credentials are represented
 //! only by regional encrypted-secret reference hashes and are never projected.
 
+use std::sync::{Arc, Mutex};
+
 use axum::{
     extract::{rejection::JsonRejection, Extension, State},
     http::{HeaderMap, StatusCode},
@@ -13,7 +15,10 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
-use nullapart_mail_contracts::transaction::DeploymentId;
+use nullapart_mail_contracts::{
+    rate_limit::{HighRiskLimits, TokenBucket},
+    transaction::DeploymentId,
+};
 use nullapart_policy::{CustomerLifecycle, TenantContext};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -37,6 +42,14 @@ const AUDIT_REMEDIATION_REQUESTED: &str = "connector_remediation_requested";
 pub struct ConnectorsRemediationState {
     pool: PgPool,
     deployment_id: DeploymentId,
+    /// One shared fail-closed budget for both high-risk mutations (connector
+    /// upsert and remediation request). Connector capability changes and
+    /// remediation requests are listed high-risk actions in
+    /// `docs/security/22-RATE-LIMITING-ABUSE-PROTECTION.md`, so they consume
+    /// the same dedicated low bucket as the other Control Plane high-risk
+    /// mutations (`operations_api`, `domain_security`). The bucket survives
+    /// handler clones because the limiter is behind an `Arc`.
+    mutation_limiter: Arc<Mutex<TokenBucket>>,
 }
 
 impl ConnectorsRemediationState {
@@ -44,8 +57,33 @@ impl ConnectorsRemediationState {
         Self {
             pool,
             deployment_id,
+            mutation_limiter: Arc::new(Mutex::new(TokenBucket::new(
+                &HighRiskLimits::permission_change(),
+            ))),
         }
     }
+}
+
+/// Fail-closed limit check: the shared bucket is consumed only while the guard
+/// is held, so a poisoned lock denies the mutation instead of bypassing the
+/// budget (same contract as `domain_security::try_consume`).
+fn try_consume_high_risk(limiter: &Mutex<TokenBucket>) -> bool {
+    limiter
+        .lock()
+        .map(|mut bucket| bucket.try_consume())
+        .unwrap_or(false)
+}
+
+fn rate_limited() -> Response {
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        [(axum::http::header::RETRY_AFTER, "60")],
+        Json(ApiErrorBody {
+            code: "RATE_LIMITED",
+            message: "Too many connector changes",
+        }),
+    )
+        .into_response()
 }
 
 #[derive(Debug, Serialize)]
@@ -365,6 +403,7 @@ struct ValidatedRemediation {
     reason: String,
 }
 
+#[derive(Debug)]
 enum IdempotencyRejection {
     Missing,
     Invalid,
@@ -529,6 +568,9 @@ async fn post_connector(
             "STEP_UP_REQUIRED",
             "Step-up authentication is required",
         );
+    }
+    if !try_consume_high_risk(&state.mutation_limiter) {
+        return rate_limited();
     }
     let key = match require_idempotency_key(&headers) {
         Ok(key) => key,
@@ -696,6 +738,9 @@ async fn post_remediation(
             "Step-up authentication is required",
         );
     }
+    if !try_consume_high_risk(&state.mutation_limiter) {
+        return rate_limited();
+    }
     let key = match require_idempotency_key(&headers) {
         Ok(key) => key,
         Err(rejection) => return idempotency_rejection_response(rejection),
@@ -745,7 +790,7 @@ async fn post_remediation(
         Ok(provider) => provider,
         Err(response) => return response,
     };
-    if !delivered_message_exists(
+    match delivered_message_exists(
         &mut transaction,
         &state.deployment_id.0,
         &context.customer_id.0,
@@ -753,7 +798,12 @@ async fn post_remediation(
     )
     .await
     {
-        return invalid_request();
+        Ok(true) => {},
+        // A delivered message that is not in this tenant's history is a bad
+        // request; a database failure stays an outage instead of being
+        // rewritten into "invalid request".
+        Ok(false) => return invalid_request(),
+        Err(_) => return unavailable(),
     }
 
     let mailbox_search_id = Uuid::new_v4();
@@ -1216,7 +1266,7 @@ async fn delivered_message_exists(
     deployment_id: &str,
     customer_id: &str,
     tenant_message_id: Uuid,
-) -> bool {
+) -> Result<bool, ()> {
     sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS ( \
              SELECT 1 \
@@ -1231,7 +1281,7 @@ async fn delivered_message_exists(
     .bind(deployment_id)
     .fetch_one(&mut **transaction)
     .await
-    .unwrap_or(false)
+    .map_err(|_| ())
 }
 
 struct AuditWrite<'a> {
@@ -1284,8 +1334,12 @@ fn validate_connector(request: UpsertConnectorRequest) -> Result<ValidatedConnec
     let display_name = request.display_name.trim().to_string();
     let external_tenant_id_hash = request.external_tenant_id_hash.trim().to_string();
     let credential_reference_hash = request.credential_reference_hash.trim().to_string();
-    if display_name.len() < 3
-        || display_name.len() > 160
+    // Lengths are counted in characters, not bytes, so the application check
+    // matches the `char_length` CHECK constraints in migration 031 and a
+    // multi-byte value is rejected as 400 instead of surfacing as a database
+    // error (503) after the claim.
+    let display_name_chars = display_name.chars().count();
+    if !(3..=160).contains(&display_name_chars)
         || !safe_hash(&external_tenant_id_hash)
         || !safe_hash(&credential_reference_hash)
         || request.capabilities.is_empty()
@@ -1310,13 +1364,13 @@ fn validate_connector(request: UpsertConnectorRequest) -> Result<ValidatedConnec
         }
         seen.push(capability.capability);
         let reason = capability.reason.trim().to_string();
+        let reason_chars = reason.chars().count();
         let scopes = capability
             .granted_scopes
             .into_iter()
             .map(|scope| scope.trim().to_string())
             .collect::<Vec<_>>();
-        if reason.len() < 12
-            || reason.len() > 512
+        if !(12..=512).contains(&reason_chars)
             || scopes.len() > 8
             || (capability.enabled && scopes.is_empty())
             || scopes.iter().any(|scope| {
@@ -1353,12 +1407,12 @@ fn validate_remediation(request: RemediationRequest) -> Result<ValidatedRemediat
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     let reason = request.reason.trim().to_string();
+    let reason_chars = reason.chars().count();
     if !safe_hash(&mailbox_address_hash)
         || provider_message_id_hash
             .as_ref()
             .is_some_and(|value| !safe_hash(value))
-        || reason.len() < 12
-        || reason.len() > 512
+        || !(12..=512).contains(&reason_chars)
     {
         return Err(());
     }
@@ -1452,7 +1506,10 @@ fn require_idempotency_key(headers: &HeaderMap) -> Result<String, IdempotencyRej
     let Ok(value) = raw.to_str() else {
         return Err(IdempotencyRejection::Invalid);
     };
-    if value.is_empty() || value.len() > 128 {
+    // The remediation ledger persists this key under a
+    // `char_length BETWEEN 8 AND 128` CHECK (migration 031), so a shorter key
+    // is rejected here as 400 instead of failing the insert as 503.
+    if value.len() < 8 || value.len() > 128 {
         return Err(IdempotencyRejection::Invalid);
     }
     Ok(value.to_string())
@@ -1503,8 +1560,10 @@ fn api_error(status: StatusCode, code: &'static str, message: &'static str) -> R
 
 #[cfg(test)]
 mod tests {
-    use axum::body::Body;
-    use axum::http::{Request, StatusCode};
+    use axum::body::{to_bytes, Body};
+    use axum::http::{HeaderValue, Request, StatusCode};
+    use nullapart_mail_contracts::{ActorId, CustomerId};
+    use nullapart_policy::{AuthenticationAssurance, ContextActor, RegionId};
     use tower::ServiceExt;
 
     use super::*;
@@ -1515,6 +1574,43 @@ mod tests {
                 .expect("lazy pool"),
             DeploymentId::new("LOCAL-TEST"),
         )
+    }
+
+    fn context(assurance: AuthenticationAssurance, permissions: Vec<String>) -> TenantContext {
+        TenantContext {
+            deployment_id: DeploymentId::new("LOCAL-TEST"),
+            region: RegionId::new("local"),
+            actor: ContextActor {
+                actor_id: ActorId::new(),
+                login: "operator@example.test".to_string(),
+                roles: vec!["operator".to_string()],
+                authentication_assurance: assurance,
+            },
+            impersonation: None,
+            customer_id: CustomerId::new("CZA-1"),
+            customer_internal_key: 1,
+            customer_display_name: "Customer test".to_string(),
+            customer_lifecycle: CustomerLifecycle::Active,
+            permissions,
+            config_revision: 1,
+            trace_id: "connectors-remediation-test".to_string(),
+            correlation_id: "connectors-remediation-test".to_string(),
+            session_id: "connectors-remediation-test".to_string(),
+            authenticated_at: Utc::now(),
+        }
+    }
+
+    fn manage_context(assurance: AuthenticationAssurance) -> TenantContext {
+        context(assurance, vec![CONNECTORS_MANAGE_PERMISSION.to_string()])
+    }
+
+    fn mutation_request(uri: &str) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header(IDEMPOTENCY_HEADER, "phase8-rate-limit-key")
+            .body(Body::empty())
+            .expect("request")
     }
 
     #[tokio::test]
@@ -1608,5 +1704,155 @@ mod tests {
             reason: "short".to_string(),
         })
         .is_err());
+    }
+
+    #[test]
+    fn validation_rejects_values_that_would_break_db_char_length_checks() {
+        // Two characters / four bytes: the byte-length check used to pass while
+        // migration 031's `char_length` CHECK rejected the insert as a 503.
+        let connector = UpsertConnectorRequest {
+            provider: ConnectorProvider::Microsoft365,
+            display_name: "éé".to_string(),
+            external_tenant_id_hash: "tenant_hash_123456".to_string(),
+            credential_reference_hash: "credential_hash_123456".to_string(),
+            status: ConnectorStatus::Active,
+            auth_state: AuthState::Healthy,
+            token_expires_at: None,
+            capabilities: vec![CapabilityRequest {
+                capability: ConnectorCapability::DirectorySync,
+                enabled: true,
+                granted_scopes: vec!["User.Read.All".to_string()],
+                reason: "Directory sync should never request mailbox write scope.".to_string(),
+            }],
+        };
+        assert!(validate_connector(connector).is_err());
+
+        // Eight characters / twenty-four bytes: shorter than the 12-character
+        // remediation reason floor.
+        assert!(validate_remediation(RemediationRequest {
+            connector_id: Uuid::new_v4(),
+            tenant_message_id: Uuid::new_v4(),
+            mailbox_address_hash: "mailbox_hash_123456".to_string(),
+            provider_message_id_hash: None,
+            purpose: SearchPurpose::PostDeliveryThreat,
+            action_type: RemediationActionType::MoveToQuarantine,
+            reason: "安全原因说明文本".to_string(),
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn idempotency_key_must_fit_the_remediation_ledger_check() {
+        let mut headers = HeaderMap::new();
+        headers.insert(IDEMPOTENCY_HEADER, HeaderValue::from_static("short"));
+        assert!(matches!(
+            require_idempotency_key(&headers),
+            Err(IdempotencyRejection::Invalid)
+        ));
+
+        headers.insert(
+            IDEMPOTENCY_HEADER,
+            HeaderValue::from_static("phase8-key-0001"),
+        );
+        assert_eq!(
+            require_idempotency_key(&headers).expect("valid key"),
+            "phase8-key-0001"
+        );
+    }
+
+    #[tokio::test]
+    async fn mutations_are_unauthenticated_before_any_other_gate() {
+        let app = connectors_remediation_router(state());
+        for uri in [CONNECTOR_UPSERT_PATH, REMEDIATION_PATH] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{uri}");
+        }
+    }
+
+    #[tokio::test]
+    async fn connector_mutation_requires_step_up_before_budget_or_idempotency() {
+        let app = connectors_remediation_router(state())
+            .layer(Extension(manage_context(AuthenticationAssurance::Standard)));
+        let response = app
+            .oneshot(mutation_request(CONNECTOR_UPSERT_PATH))
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = to_bytes(response.into_body(), 4_096).await.expect("body");
+        assert!(
+            String::from_utf8_lossy(&body).contains("STEP_UP_REQUIRED"),
+            "step-up failure must surface the dedicated code the UI re-auth prompt keys on"
+        );
+    }
+
+    #[tokio::test]
+    async fn connector_mutations_share_one_fail_closed_budget() {
+        let app = connectors_remediation_router(state())
+            .layer(Extension(manage_context(AuthenticationAssurance::StepUp)));
+        let budget = HighRiskLimits::permission_change().max_tokens;
+        let mut denied: Option<Response> = None;
+        for _ in 0..budget + 5 {
+            let response = app
+                .clone()
+                .oneshot(mutation_request(CONNECTOR_UPSERT_PATH))
+                .await
+                .expect("response");
+            if response.status() == StatusCode::TOO_MANY_REQUESTS {
+                denied = Some(response);
+                break;
+            }
+        }
+        let denied = denied.expect("the shared high-risk budget must deny with 429");
+        assert_eq!(
+            denied
+                .headers()
+                .get(axum::http::header::RETRY_AFTER)
+                .map(|value| value.to_str().expect("retry-after")),
+            Some("60"),
+            "429 responses must carry Retry-After"
+        );
+        let remediation = app
+            .clone()
+            .oneshot(mutation_request(REMEDIATION_PATH))
+            .await
+            .expect("response");
+        assert_eq!(
+            remediation.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "remediation requests must consume the same exhausted budget"
+        );
+    }
+
+    #[tokio::test]
+    async fn mutation_budget_exhausts_then_fails_closed() {
+        let state = state();
+        let budget = HighRiskLimits::permission_change().max_tokens;
+        for _ in 0..budget {
+            assert!(try_consume_high_risk(&state.mutation_limiter));
+        }
+        assert!(!try_consume_high_risk(&state.mutation_limiter));
+    }
+
+    #[test]
+    fn mutation_budget_fails_closed_when_the_lock_is_poisoned() {
+        let limiter = Mutex::new(TokenBucket::new(&HighRiskLimits::permission_change()));
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = limiter.lock().expect("lock");
+            panic!("poison the limiter lock");
+        }));
+        assert!(
+            !try_consume_high_risk(&limiter),
+            "a poisoned limiter lock must fail closed instead of bypassing the budget"
+        );
     }
 }

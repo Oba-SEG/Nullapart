@@ -176,6 +176,88 @@ export function createApiClient(config: ApiClientConfig) {
     }
   }
 
+  /**
+   * Fetches a non-JSON contract (currently CSV export) through the same
+   * cookie/CSRF/correlation boundary as `request`, returning the raw body
+   * as a Blob. Error responses still surface the typed `ApiError`, and a
+   * 401 still triggers the session-expiry redirect — so no caller ever
+   * needs a raw `fetch` for an authenticated download.
+   */
+  async function download(
+    method: string,
+    path: string,
+    body?: unknown,
+    options?: { signal?: AbortSignal },
+  ): Promise<Blob> {
+    const correlationId = generateCorrelationId();
+    const csrfToken = getCsrfToken();
+
+    const headers: Record<string, string> = {
+      Accept: "text/csv, application/octet-stream",
+      "X-Correlation-ID": correlationId,
+    };
+    if (body !== undefined) {
+      headers["Content-Type"] = "application/json";
+    }
+    if (csrfToken) {
+      headers["X-CSRF-Token"] = csrfToken;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+    const externalSignal = options?.signal;
+    const abortFromExternalSignal = () => controller.abort();
+    if (externalSignal?.aborted) {
+      controller.abort();
+    } else {
+      externalSignal?.addEventListener("abort", abortFromExternalSignal, { once: true });
+    }
+
+    try {
+      const response = await fetch(`${baseUrl}${path}`, {
+        method,
+        headers,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+        credentials: "same-origin",
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const json: unknown = await response.json().catch(() => null);
+        const errorBody = (json ?? {}) as Partial<ApiErrorEnvelope>;
+        const code = errorBody.code ?? errorBody.error ?? `HTTP_${response.status}`;
+        if (
+          response.status === 401 &&
+          (code === "UNAUTHENTICATED" || code === "unauthorized" || code === "HTTP_401")
+        ) {
+          redirectToLogin();
+        }
+        throw {
+          code,
+          message: errorBody.message ?? response.statusText,
+          traceId: errorBody.trace_id ?? correlationId,
+          apiVersion: errorBody.api_version,
+          retryable: response.status === 429 || response.status >= 500,
+        } satisfies ApiError;
+      }
+
+      return await response.blob();
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw {
+          code: "TIMEOUT",
+          message: "Request timed out",
+          traceId: correlationId,
+          retryable: true,
+        } satisfies ApiError;
+      }
+      throw error;
+    } finally {
+      externalSignal?.removeEventListener("abort", abortFromExternalSignal);
+      window.clearTimeout(timeoutId);
+    }
+  }
+
   return {
     get<T>(path: string, signal?: AbortSignal) {
       return request<T>("GET", path, undefined, { signal });
@@ -207,6 +289,9 @@ export function createApiClient(config: ApiClientConfig) {
     },
     delete<T>(path: string, options?: { signal?: AbortSignal; idempotencyKey?: string }) {
       return request<T>("DELETE", path, undefined, options);
+    },
+    download(method: string, path: string, body?: unknown, options?: { signal?: AbortSignal }) {
+      return download(method, path, body, options);
     },
   };
 }

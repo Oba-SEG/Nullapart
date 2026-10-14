@@ -8,7 +8,18 @@
 //!   address match the query that was just sent, so an off-path datagram
 //!   cannot stand in for resolver evidence;
 //! - every failure path returns a static error message: resolver addresses,
-//!   response bytes and I/O causes never leave this module.
+//!   response bytes and I/O causes never leave this module;
+//! - a reply that arrives but fails validation is returned as an error
+//!   without retrying, so injected garbage cannot amplify traffic toward
+//!   the resolver; only a silent timeout is retried, once, with a fresh
+//!   transaction id, to absorb ordinary UDP datagram loss.
+//!
+//! Trust posture (documented, not implemented here): queries use
+//! unauthenticated UDP with no DNSSEC validation. An on-path attacker or a
+//! compromised resolver can forge verification evidence. Production
+//! deployments must set `NULLAPART_DNS_RESOLVER` to a trusted resolver
+//! (for example the VPC resolver on AWS); DoT/DoH and DNSSEC remain an
+//! owner decision and are deliberately not implemented in this module.
 
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Duration;
@@ -24,6 +35,9 @@ const MAX_ANSWERS: u16 = 8;
 const MAX_NAME_LEN: usize = 253;
 const MAX_LABEL_LEN: usize = 63;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+/// One bounded retry absorbs ordinary UDP datagram loss. A timeout is the
+/// only retried outcome; validation failures fail closed without retry.
+const MAX_ATTEMPTS: u32 = 2;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DnsError {
@@ -71,67 +85,51 @@ impl DnsTxtResolver {
     }
 
     pub async fn lookup(&self, name: &str) -> Result<Vec<String>, DnsError> {
-        let query = build_query(name, DNS_TYPE_TXT)?;
-        let bind_address = if self.server.is_ipv4() {
-            "0.0.0.0:0"
-        } else {
-            "[::]:0"
-        };
-        let socket = tokio::net::UdpSocket::bind(bind_address).await?;
-        socket.send_to(&query, self.server).await?;
-
-        let mut buffer = [0u8; MAX_RESPONSE_LEN];
-        let deadline = tokio::time::Instant::now() + self.timeout;
-        loop {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                return Err(DnsError::Timeout);
-            }
-            let received =
-                match tokio::time::timeout(remaining, socket.recv_from(&mut buffer)).await {
-                    Ok(Ok((received, from))) => {
-                        if from != self.server {
-                            continue;
-                        }
-                        received
-                    },
-                    Ok(Err(error)) => return Err(DnsError::Io(error)),
-                    Err(_) => return Err(DnsError::Timeout),
-                };
-            return parse_txt_response(&query[..2], &buffer[..received]);
-        }
+        let (query, packet) = self.exchange(name, DNS_TYPE_TXT).await?;
+        parse_txt_response(&query[..2], &packet)
     }
 
     pub async fn lookup_mx(&self, name: &str) -> Result<Vec<String>, DnsError> {
-        let query = build_query(name, DNS_TYPE_MX)?;
+        let (query, packet) = self.exchange(name, DNS_TYPE_MX).await?;
+        parse_mx_response(&query[..2], &packet)
+    }
+
+    /// Sends one question and returns the first datagram from the configured
+    /// resolver together with the query that elicited it. Only a silent
+    /// timeout is retried (with a fresh transaction id); a received datagram
+    /// is returned immediately so validation failures stay fail-closed and
+    /// never become a retry amplifier.
+    async fn exchange(&self, name: &str, record_type: u16) -> Result<(Vec<u8>, Vec<u8>), DnsError> {
         let bind_address = if self.server.is_ipv4() {
             "0.0.0.0:0"
         } else {
             "[::]:0"
         };
-        let socket = tokio::net::UdpSocket::bind(bind_address).await?;
-        socket.send_to(&query, self.server).await?;
+        for _ in 0..MAX_ATTEMPTS {
+            let query = build_query(name, record_type)?;
+            let socket = tokio::net::UdpSocket::bind(bind_address).await?;
+            socket.send_to(&query, self.server).await?;
 
-        let mut buffer = [0u8; MAX_RESPONSE_LEN];
-        let deadline = tokio::time::Instant::now() + self.timeout;
-        loop {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                return Err(DnsError::Timeout);
-            }
-            let received =
+            let mut buffer = [0u8; MAX_RESPONSE_LEN];
+            let deadline = tokio::time::Instant::now() + self.timeout;
+            loop {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
                 match tokio::time::timeout(remaining, socket.recv_from(&mut buffer)).await {
                     Ok(Ok((received, from))) => {
                         if from != self.server {
                             continue;
                         }
-                        received
+                        return Ok((query, buffer[..received].to_vec()));
                     },
                     Ok(Err(error)) => return Err(DnsError::Io(error)),
-                    Err(_) => return Err(DnsError::Timeout),
-                };
-            return parse_mx_response(&query[..2], &buffer[..received]);
+                    Err(_) => break,
+                }
+            }
         }
+        Err(DnsError::Timeout)
     }
 
     fn parse_server(raw: &str) -> Option<SocketAddr> {

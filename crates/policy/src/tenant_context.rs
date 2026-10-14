@@ -97,13 +97,59 @@ pub enum CustomerLifecycle {
 }
 
 impl TenantContext {
-    /// The effective actor — impersonated subject if impersonating, else real actor.
+    /// The effective (accountable) actor — the real authenticated actor,
+    /// even while impersonating. Impersonation never masks the responsible
+    /// principal for audit/authorization purposes; the impersonated subject
+    /// is available via `impersonation.impersonated_subject` /
+    /// `impersonation.impersonated_customer`.
     pub fn effective_actor(&self) -> &ContextActor {
         if let Some(imp) = &self.impersonation {
             &imp.real_actor
         } else {
             &self.actor
         }
+    }
+
+    /// Structural sanity check for a context resolved at the boundary.
+    ///
+    /// This cannot replace construction-time authority (the fields remain
+    /// public for compatibility with existing literal constructions), but it
+    /// gives authorization code a single server-side invariant check: no
+    /// empty identity fields, and impersonation must reference the same real
+    /// actor as the top-level context.
+    pub fn validate(&self) -> Result<(), TenantContextValidationError> {
+        fn require_non_empty(
+            field: &'static str,
+            value: &str,
+        ) -> Result<(), TenantContextValidationError> {
+            if value.trim().is_empty() {
+                Err(TenantContextValidationError::EmptyField(field))
+            } else {
+                Ok(())
+            }
+        }
+
+        require_non_empty("deployment_id", &self.deployment_id.0)?;
+        require_non_empty("region", &self.region.0)?;
+        require_non_empty("actor.login", &self.actor.login)?;
+        require_non_empty("customer_id", &self.customer_id.0)?;
+        require_non_empty("trace_id", &self.trace_id)?;
+        require_non_empty("session_id", &self.session_id)?;
+
+        if let Some(imp) = &self.impersonation {
+            if imp.real_actor.actor_id != self.actor.actor_id {
+                return Err(TenantContextValidationError::ImpersonationActorMismatch);
+            }
+            require_non_empty("impersonation.real_actor.login", &imp.real_actor.login)?;
+            require_non_empty(
+                "impersonation.impersonated_customer",
+                &imp.impersonated_customer.0,
+            )?;
+            require_non_empty("impersonation.reason", &imp.reason)?;
+            require_non_empty("impersonation.session_id", &imp.session_id)?;
+        }
+
+        Ok(())
     }
 
     /// Whether this context has step-up authentication assurance.
@@ -143,6 +189,16 @@ pub enum TenantContextError {
 
     #[error("deployment mismatch: expected {expected}, got {actual}")]
     DeploymentMismatch { expected: String, actual: String },
+}
+
+/// Structural validation failure for a [`TenantContext`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum TenantContextValidationError {
+    #[error("tenant context field must be non-empty: {0}")]
+    EmptyField(&'static str),
+
+    #[error("impersonation real actor does not match context actor")]
+    ImpersonationActorMismatch,
 }
 
 /// Validation result for a tenant selection operation.
@@ -227,5 +283,93 @@ mod tests {
         let tc = ctx.trace_context();
         assert!(tc.contains("CZA-1"));
         assert!(tc.contains("cust-001"));
+    }
+
+    #[test]
+    fn validate_accepts_well_formed_context() {
+        assert!(test_context().validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_empty_identity_fields() {
+        let mut ctx = test_context();
+        ctx.deployment_id = DeploymentId("".to_string());
+        assert!(matches!(
+            ctx.validate(),
+            Err(TenantContextValidationError::EmptyField("deployment_id"))
+        ));
+
+        let mut ctx = test_context();
+        ctx.actor.login = "   ".to_string();
+        assert!(matches!(
+            ctx.validate(),
+            Err(TenantContextValidationError::EmptyField("actor.login"))
+        ));
+
+        let mut ctx = test_context();
+        ctx.trace_id = "".to_string();
+        assert!(matches!(
+            ctx.validate(),
+            Err(TenantContextValidationError::EmptyField("trace_id"))
+        ));
+
+        let mut ctx = test_context();
+        ctx.session_id = "".to_string();
+        assert!(matches!(
+            ctx.validate(),
+            Err(TenantContextValidationError::EmptyField("session_id"))
+        ));
+    }
+
+    #[test]
+    fn validate_accepts_consistent_impersonation() {
+        let mut ctx = test_context();
+        ctx.impersonation = Some(ImpersonationContext {
+            real_actor: ctx.actor.clone(),
+            impersonated_subject: Some("support-user".to_string()),
+            impersonated_customer: CustomerId("cust-002".to_string()),
+            started_at: Utc::now(),
+            reason: "debugging".to_string(),
+            session_id: "imp-session".to_string(),
+        });
+        assert!(ctx.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_impersonation_actor_mismatch() {
+        let mut ctx = test_context();
+        let mut real_actor = ctx.actor.clone();
+        real_actor.actor_id = ActorId(Uuid::new_v4());
+        ctx.impersonation = Some(ImpersonationContext {
+            real_actor,
+            impersonated_subject: Some("support-user".to_string()),
+            impersonated_customer: CustomerId("cust-002".to_string()),
+            started_at: Utc::now(),
+            reason: "debugging".to_string(),
+            session_id: "imp-session".to_string(),
+        });
+        assert_eq!(
+            ctx.validate(),
+            Err(TenantContextValidationError::ImpersonationActorMismatch)
+        );
+    }
+
+    #[test]
+    fn validate_rejects_empty_impersonation_reason() {
+        let mut ctx = test_context();
+        ctx.impersonation = Some(ImpersonationContext {
+            real_actor: ctx.actor.clone(),
+            impersonated_subject: None,
+            impersonated_customer: CustomerId("cust-002".to_string()),
+            started_at: Utc::now(),
+            reason: "  ".to_string(),
+            session_id: "imp-session".to_string(),
+        });
+        assert!(matches!(
+            ctx.validate(),
+            Err(TenantContextValidationError::EmptyField(
+                "impersonation.reason"
+            ))
+        ));
     }
 }

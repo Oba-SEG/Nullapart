@@ -251,24 +251,37 @@ impl From<NullapartError> for ApiError {
             },
             NullapartError::MessageDeferred(_) => (ErrorCode::MessageDeferred, err.to_string()),
             NullapartError::MessageHeld(_) => (ErrorCode::MessageDeferred, err.to_string()),
-            NullapartError::ProcessingError(_) => (ErrorCode::InternalError, err.to_string()),
+            NullapartError::ProcessingError(_) => (
+                ErrorCode::InternalError,
+                "internal processing error".to_string(),
+            ),
             NullapartError::ScannerError(_) => (ErrorCode::ScannerError, err.to_string()),
             NullapartError::ScannerUnavailable(_) => {
                 (ErrorCode::ScannerUnavailable, err.to_string())
             },
             NullapartError::ScannerTimeout(_) => (ErrorCode::ScannerTimeout, err.to_string()),
             NullapartError::PolicyEvaluationError(_) => (ErrorCode::PolicyError, err.to_string()),
-            NullapartError::StorageError(_) => (ErrorCode::StorageError, err.to_string()),
+            NullapartError::StorageError(_) => {
+                (ErrorCode::StorageError, "storage backend error".to_string())
+            },
             NullapartError::DeliveryError(_) => (ErrorCode::DeliveryError, err.to_string()),
             NullapartError::DownstreamError(_) => (ErrorCode::DeliveryError, err.to_string()),
             NullapartError::ServiceUnavailable(_) => {
                 (ErrorCode::ServiceUnavailable, err.to_string())
             },
-            NullapartError::DatabaseError(_) => (ErrorCode::DatabaseError, err.to_string()),
-            NullapartError::CacheError(_) => (ErrorCode::CacheError, err.to_string()),
-            NullapartError::ConfigError(_) => (ErrorCode::InternalError, err.to_string()),
+            NullapartError::DatabaseError(_) => {
+                (ErrorCode::DatabaseError, "database error".to_string())
+            },
+            NullapartError::CacheError(_) => {
+                (ErrorCode::CacheError, "cache backend error".to_string())
+            },
+            NullapartError::ConfigError(_) => {
+                (ErrorCode::InternalError, "configuration error".to_string())
+            },
             NullapartError::RateLimited(_) => (ErrorCode::RateLimited, err.to_string()),
-            NullapartError::InternalError(_) => (ErrorCode::InternalError, err.to_string()),
+            NullapartError::InternalError(_) => {
+                (ErrorCode::InternalError, "internal error".to_string())
+            },
             NullapartError::NotImplemented(_) => (ErrorCode::NotImplemented, err.to_string()),
         };
 
@@ -337,5 +350,81 @@ impl SmtpResponse {
             message: message.to_string(),
             action: SmtpAction::Reject,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn internal_errors_never_leak_details_to_api_response() {
+        let leaks = [
+            "postgres://user:secret@db.internal/nullapart",
+            "connection refused 10.0.3.7:5432",
+            "/etc/nullapart/secrets.yaml: missing key",
+        ];
+
+        let internal_errors = [
+            NullapartError::DatabaseError(leaks[0].to_string()),
+            NullapartError::CacheError(leaks[0].to_string()),
+            NullapartError::StorageError(leaks[0].to_string()),
+            NullapartError::ConfigError(leaks[1].to_string()),
+            NullapartError::ProcessingError(leaks[1].to_string()),
+            NullapartError::InternalError(leaks[2].to_string()),
+        ];
+
+        for err in internal_errors {
+            let api: ApiError = err.into();
+            for leak in leaks {
+                assert!(
+                    !api.message.contains(leak),
+                    "ApiError message must not leak internal detail: {:?}",
+                    api.message
+                );
+            }
+            assert!(!api.message.contains("secret"));
+            assert!(!api.message.contains("internal/"));
+            assert!(!api.message.contains("10.0.3.7"));
+        }
+    }
+
+    #[test]
+    fn internal_error_codes_are_preserved_with_safe_messages() {
+        let api: ApiError = NullapartError::DatabaseError("pg://x".to_string()).into();
+        assert_eq!(api.code, ErrorCode::DatabaseError);
+        assert_eq!(api.message, "database error");
+
+        let api: ApiError = NullapartError::CacheError("redis://x".to_string()).into();
+        assert_eq!(api.code, ErrorCode::CacheError);
+        assert_eq!(api.message, "cache backend error");
+
+        let api: ApiError = NullapartError::StorageError("s3://x".to_string()).into();
+        assert_eq!(api.code, ErrorCode::StorageError);
+        assert_eq!(api.message, "storage backend error");
+
+        let api: ApiError = NullapartError::ConfigError("bad yaml".to_string()).into();
+        assert_eq!(api.code, ErrorCode::InternalError);
+        assert_eq!(api.message, "configuration error");
+
+        let api: ApiError = NullapartError::ProcessingError("boom".to_string()).into();
+        assert_eq!(api.code, ErrorCode::InternalError);
+        assert_eq!(api.message, "internal processing error");
+
+        let api: ApiError = NullapartError::InternalError("panic".to_string()).into();
+        assert_eq!(api.code, ErrorCode::InternalError);
+        assert_eq!(api.message, "internal error");
+    }
+
+    #[test]
+    fn user_facing_errors_keep_their_messages() {
+        let api: ApiError = NullapartError::TransactionNotFound("tx-123".to_string()).into();
+        assert_eq!(api.code, ErrorCode::NotFound);
+        assert!(api.message.contains("tx-123"));
+
+        let api: ApiError =
+            NullapartError::ValidationError("field 'subject' required".to_string()).into();
+        assert_eq!(api.code, ErrorCode::ValidationError);
+        assert!(api.message.contains("subject"));
     }
 }

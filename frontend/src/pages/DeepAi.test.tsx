@@ -156,6 +156,18 @@ function ok(body: unknown) {
   };
 }
 
+function stepUpDenied() {
+  return {
+    ok: false,
+    status: 403,
+    statusText: "Forbidden",
+    json: async () => ({
+      code: "STEP_UP_REQUIRED",
+      message: "Step-up authentication is required",
+    }),
+  };
+}
+
 function stubFetch() {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -168,6 +180,25 @@ function stubFetch() {
     }
     if (method === "POST" && url.endsWith("/deep-ai/rollback")) {
       return ok({ data: { changed: true } });
+    }
+    if (url.includes("/deep-ai")) {
+      return ok({ data: snapshot });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+function stubFetchStepUpDenied(deniedPath: "/deep-ai/artifact-grants" | "/deep-ai/rollback") {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    if (url.includes("/auth/session")) {
+      return ok({ data: managerSession });
+    }
+    if (method === "POST" && url.endsWith(deniedPath)) {
+      return stepUpDenied();
     }
     if (url.includes("/deep-ai")) {
       return ok({ data: snapshot });
@@ -255,5 +286,34 @@ describe("DeepAi", () => {
         (rollbackCall?.[1]?.headers as Record<string, string>)["X-Idempotency-Key"],
       ).toBeTruthy();
     });
+  });
+
+  it("offers step-up re-authentication when grant creation requires step-up", async () => {
+    stubFetchStepUpDenied("/deep-ai/artifact-grants");
+    const user = userEvent.setup();
+    renderAt("/deep-ai");
+    await screen.findByRole("heading", { name: "Regional Deep AI" });
+
+    await user.type(screen.getByLabelText("Artifact ID"), "22222222-2222-2222-2222-222222222222");
+    await user.click(screen.getByRole("button", { name: "Create scoped grant" }));
+
+    expect(await screen.findByRole("button", { name: "Re-authenticate" })).toBeTruthy();
+    expect(screen.getByText("Re-authentication is required for this action.")).toBeTruthy();
+  });
+
+  it("offers step-up re-authentication when rollback requires step-up", async () => {
+    stubFetchStepUpDenied("/deep-ai/rollback");
+    const user = userEvent.setup();
+    renderAt("/deep-ai");
+    await screen.findByRole("heading", { name: "Regional Deep AI" });
+
+    await user.type(screen.getByLabelText("Skill ID"), "security.message.deep_analysis");
+    await user.type(screen.getByLabelText("Current skill version"), "v2");
+    await user.type(screen.getByLabelText("Rollback skill version"), "v1");
+    await user.type(screen.getByLabelText("Rollback reason"), "Failed evaluation gate");
+    await user.click(screen.getByRole("button", { name: "Record rollback" }));
+
+    expect(await screen.findByRole("button", { name: "Re-authenticate" })).toBeTruthy();
+    expect(screen.getByText("Re-authentication is required for this action.")).toBeTruthy();
   });
 });

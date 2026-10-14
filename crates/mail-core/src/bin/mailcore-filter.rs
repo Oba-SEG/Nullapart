@@ -23,10 +23,18 @@ const EX_TEMPFAIL: i32 = 75;
 const HANDOFF_PATH: &str = "/internal/handoff";
 
 /// Shared HTTP client with connection pooling across invocations.
+///
+/// The handoff request is bounded so a stalled Mail Core endpoint cannot pin
+/// the pipe process indefinitely: Postfix kills the pipe command after
+/// `mailcore_time_limit` (300s, set in master.cf), while the 240s client
+/// timeout fires first and lets the filter exit EX_TEMPFAIL cleanly, leaving
+/// retry ownership with the Postfix queue (minimal_backoff_time).
 static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
         .pool_max_idle_per_host(4)
         .pool_idle_timeout(std::time::Duration::from_secs(30))
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(240))
         .build()
         .expect("failed to create HTTP client")
 });

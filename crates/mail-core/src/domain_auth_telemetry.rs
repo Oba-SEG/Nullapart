@@ -4,6 +4,15 @@
 //! domain-security read rows. It deliberately stores only normalized domains,
 //! source IP, authentication result labels and disposition; it does not store
 //! raw MIME, raw headers, Authentication-Results text or DNS payloads.
+//!
+//! Trust boundary: authentication evidence comes only from the Milter/Rspamd
+//! observation channel on our own content path. Internet-supplied
+//! `Authentication-Results`/`ARC-Authentication-Results` headers are
+//! attacker-controlled for inbound mail (Phase 1: "Never trust
+//! Internet-supplied `Authentication-Results`"), so they are never parsed
+//! into the stored evidence columns. When the Milter observation does not
+//! carry a value (for example the DKIM signing domain), the column stays NULL
+//! instead of being backfilled from message headers.
 
 use std::net::IpAddr;
 
@@ -28,17 +37,6 @@ struct EffectiveAuthResults {
     dkim_aligned: Option<String>,
     dkim_domain: Option<String>,
     dkim_selector: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct ParsedAuthResults {
-    spf: Option<String>,
-    spf_mail_from_domain: Option<String>,
-    dkim: Option<String>,
-    dkim_domain: Option<String>,
-    dkim_selector: Option<String>,
-    dmarc: Option<String>,
-    arc: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,7 +78,7 @@ pub async fn project_handoff_auth_telemetry(
     let source_domain = envelope_from_domain
         .clone()
         .or_else(|| Some(header_from_domain.clone()));
-    let auth_results = effective_auth_results(input.request, input.raw_mime, &header_from_domain);
+    let auth_results = effective_auth_results(input.request, &header_from_domain);
 
     let mut transaction = pool
         .begin()
@@ -202,201 +200,35 @@ fn normalize_auth_result(value: Option<&str>) -> Option<String> {
     Some(value.chars().take(MAX_AUTH_RESULT_LEN).collect())
 }
 
+/// Build the stored authentication evidence for one handoff.
+///
+/// Only the Milter observation channel is trusted: it is produced by our own
+/// Rspamd/Milter path. Message headers are never consulted, so a forged
+/// Internet-supplied `Authentication-Results` cannot become evidence, an
+/// alignment result or a DMARC alignment metric. SPF alignment is derived from
+/// the Milter SPF result plus the envelope sender domain, which is the domain
+/// that Milter SPF validated. DKIM alignment, the DKIM signing domain and the
+/// selector stay NULL because the Milter observation contract does not carry
+/// the DKIM `d=`/`s=` values and headers are not trusted to supply them.
 fn effective_auth_results(
     request: &AfterQueueHandoffRequest,
-    raw_mime: &[u8],
     header_from_domain: &str,
 ) -> EffectiveAuthResults {
-    let mut results = EffectiveAuthResults {
-        spf: normalize_auth_result(request.milter_observations.spf_result.as_deref()),
-        dkim: normalize_auth_result(request.milter_observations.dkim_result.as_deref()),
-        dmarc: normalize_auth_result(request.milter_observations.dmarc_result.as_deref()),
-        ..EffectiveAuthResults::default()
-    };
+    let spf = normalize_auth_result(request.milter_observations.spf_result.as_deref());
+    let dkim = normalize_auth_result(request.milter_observations.dkim_result.as_deref());
+    let dmarc = normalize_auth_result(request.milter_observations.dmarc_result.as_deref());
     let envelope_from_domain = email_domain(request.envelope_sender.address());
-
-    let Some(parsed) = mailparse::parse_mail(raw_mime).ok() else {
-        results.spf_aligned = alignment_from_domains(
-            results.spf.as_deref(),
+    EffectiveAuthResults {
+        spf_aligned: alignment_from_domains(
+            spf.as_deref(),
             envelope_from_domain.as_deref(),
             header_from_domain,
-        );
-        return results;
-    };
-    for header in parsed.headers.iter().filter(|header| {
-        header
-            .get_key_ref()
-            .eq_ignore_ascii_case("authentication-results")
-    }) {
-        let value = header.get_value();
-        let parsed_header = parse_authentication_results(&value);
-        if results.spf.is_none() {
-            results.spf = parsed_header.spf.clone();
-        }
-        if results.dkim.is_none() {
-            results.dkim = parsed_header.dkim.clone();
-        }
-        if results.dmarc.is_none() {
-            results.dmarc = parsed_header.dmarc.clone();
-        }
-        if results.arc.is_none() {
-            results.arc = parsed_header.arc.clone();
-        }
-        if results.dkim_domain.is_none() {
-            results.dkim_domain = parsed_header.dkim_domain.clone();
-        }
-        if results.dkim_selector.is_none() {
-            results.dkim_selector = parsed_header.dkim_selector.clone();
-        }
-        if results.spf_aligned.is_none() {
-            results.spf_aligned = alignment_from_domains(
-                results.spf.as_deref(),
-                parsed_header
-                    .spf_mail_from_domain
-                    .as_deref()
-                    .or(envelope_from_domain.as_deref()),
-                header_from_domain,
-            );
-        }
-        if results.dkim_aligned.is_none() {
-            results.dkim_aligned = alignment_from_domains(
-                results.dkim.as_deref(),
-                parsed_header.dkim_domain.as_deref(),
-                header_from_domain,
-            );
-        }
-        if results.spf.is_some()
-            && results.dkim.is_some()
-            && results.dmarc.is_some()
-            && results.arc.is_some()
-            && results.spf_aligned.is_some()
-            && results.dkim_aligned.is_some()
-            && results.dkim_domain.is_some()
-        {
-            break;
-        }
+        ),
+        spf,
+        dkim,
+        dmarc,
+        ..EffectiveAuthResults::default()
     }
-    if results.spf_aligned.is_none() {
-        results.spf_aligned = alignment_from_domains(
-            results.spf.as_deref(),
-            envelope_from_domain.as_deref(),
-            header_from_domain,
-        );
-    }
-    results
-}
-
-fn auth_method_result(header_value: &str, method: &str) -> Option<String> {
-    let header_value = header_value.to_ascii_lowercase();
-    for segment in header_value.split(';') {
-        let segment = segment.trim_start();
-        let Some(rest) = segment.strip_prefix(method) else {
-            continue;
-        };
-        let rest = rest.trim_start();
-        let rest = rest.strip_prefix('=').or_else(|| rest.strip_prefix(' '))?;
-        let result = rest
-            .trim_start()
-            .chars()
-            .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
-            .collect::<String>();
-        if !result.is_empty() {
-            return normalize_auth_result(Some(&result));
-        }
-    }
-    None
-}
-
-fn parse_authentication_results(header_value: &str) -> ParsedAuthResults {
-    let header_value = header_value.to_ascii_lowercase();
-    let mut parsed = ParsedAuthResults::default();
-    for segment in header_value.split(';') {
-        let segment = segment.trim();
-        if segment.starts_with("spf") {
-            parsed.spf = parsed.spf.or_else(|| auth_method_result(segment, "spf"));
-            parsed.spf_mail_from_domain = parsed
-                .spf_mail_from_domain
-                .or_else(|| param_domain(segment, "smtp.mailfrom"))
-                .or_else(|| param_domain(segment, "mailfrom"));
-        } else if segment.starts_with("dkim") {
-            parsed.dkim = parsed.dkim.or_else(|| auth_method_result(segment, "dkim"));
-            parsed.dkim_domain = parsed
-                .dkim_domain
-                .or_else(|| param_domain(segment, "header.d"));
-            parsed.dkim_selector = parsed
-                .dkim_selector
-                .or_else(|| param_identifier(segment, "header.s", 128));
-        } else if segment.starts_with("dmarc") {
-            parsed.dmarc = parsed
-                .dmarc
-                .or_else(|| auth_method_result(segment, "dmarc"));
-        } else if segment.starts_with("arc") {
-            parsed.arc = parsed.arc.or_else(|| auth_method_result(segment, "arc"));
-        }
-    }
-    parsed
-}
-
-fn param_domain(segment: &str, key: &str) -> Option<String> {
-    let value = param_value(segment, key)?;
-    let domain = value
-        .trim_matches(|ch: char| {
-            ch == '<'
-                || ch == '>'
-                || ch == '"'
-                || ch == '\''
-                || ch == '('
-                || ch == ')'
-                || ch == ';'
-                || ch == ','
-                || ch.is_ascii_whitespace()
-        })
-        .rsplit_once('@')
-        .map(|(_, domain)| domain)
-        .unwrap_or(value)
-        .chars()
-        .take_while(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'))
-        .collect::<String>()
-        .trim_matches('.')
-        .to_ascii_lowercase();
-    if domain.is_empty() || !domain.contains('.') || domain.len() > 253 {
-        return None;
-    }
-    Some(domain)
-}
-
-fn param_identifier(segment: &str, key: &str, max_len: usize) -> Option<String> {
-    let value = param_value(segment, key)?;
-    let identifier = value
-        .trim_matches(|ch: char| {
-            ch == '<'
-                || ch == '>'
-                || ch == '"'
-                || ch == '\''
-                || ch == '('
-                || ch == ')'
-                || ch == ';'
-                || ch == ','
-                || ch.is_ascii_whitespace()
-        })
-        .chars()
-        .take_while(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'))
-        .take(max_len)
-        .collect::<String>()
-        .to_ascii_lowercase();
-    if identifier.is_empty() {
-        return None;
-    }
-    Some(identifier)
-}
-
-fn param_value<'a>(segment: &'a str, key: &str) -> Option<&'a str> {
-    let needle = format!("{key}=");
-    segment.split_ascii_whitespace().find_map(|token| {
-        token
-            .strip_prefix(&needle)
-            .map(|value| value.trim_end_matches(';'))
-    })
 }
 
 fn alignment_from_domains(
@@ -491,9 +323,59 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_to_authentication_results_header_without_storing_header_text() {
-        let mime = b"Authentication-Results: mx.phase2.test; spf=pass smtp.mailfrom=phase2.test; dkim=fail header.d=other.test; dmarc=pass header.from=phase2.test\r\nFrom: Sender <sender@phase2.test>\r\n\r\nbody";
-        let request = AfterQueueHandoffRequest {
+    fn forged_authentication_results_headers_never_become_evidence() {
+        let mime = b"Authentication-Results: mx.phase2.test; spf=pass smtp.mailfrom=phase2.test; dkim=pass header.d=mail.phase2.test header.s=s1; dmarc=pass header.from=phase2.test; arc=pass\r\nARC-Authentication-Results: mx.phase2.test; i=1; dmarc=pass\r\nFrom: Sender <sender@phase2.test>\r\nSubject: hi\r\n\r\nbody";
+        let request = handoff_request(None, None, None);
+
+        // The only message header the projection reads is `From:`, used as the
+        // alignment identifier; the hostile auth headers above are never parsed.
+        let header_from = header_from_domain(mime).expect("from header must parse");
+        assert_eq!(
+            effective_auth_results(&request, &header_from),
+            EffectiveAuthResults::default(),
+            "Internet-supplied Authentication-Results/ARC headers must not become evidence"
+        );
+    }
+
+    #[test]
+    fn milter_results_drive_evidence_and_spf_alignment_uses_the_envelope_domain() {
+        let request = handoff_request(Some("pass"), Some("pass"), Some("pass"));
+
+        assert_eq!(
+            effective_auth_results(&request, "phase2.test"),
+            EffectiveAuthResults {
+                spf: Some("pass".to_string()),
+                dkim: Some("pass".to_string()),
+                dmarc: Some("pass".to_string()),
+                spf_aligned: Some("pass".to_string()),
+                // The Milter contract carries no DKIM `d=`/`s=` observation, so
+                // alignment and selector stay unknown instead of header-derived.
+                dkim_aligned: None,
+                dkim_domain: None,
+                dkim_selector: None,
+                arc: None,
+            }
+        );
+    }
+
+    #[test]
+    fn milter_failures_record_fail_alignment_without_a_signing_domain() {
+        let request = handoff_request(Some("fail"), Some("fail"), Some("fail"));
+
+        let results = effective_auth_results(&request, "phase2.test");
+        assert_eq!(results.spf, Some("fail".to_string()));
+        assert_eq!(results.dkim, Some("fail".to_string()));
+        assert_eq!(results.dmarc, Some("fail".to_string()));
+        assert_eq!(results.spf_aligned, Some("fail".to_string()));
+        assert_eq!(results.dkim_aligned, None);
+    }
+
+    fn handoff_request(
+        spf_result: Option<&str>,
+        dkim_result: Option<&str>,
+        dmarc_result: Option<&str>,
+    ) -> AfterQueueHandoffRequest {
+        AfterQueueHandoffRequest {
             postfix_queue_id: "AUTH-RESULTS".to_string(),
             envelope_sender: nullapart_mail_contracts::transaction::EnvelopeSender::new(
                 "sender@phase2.test",
@@ -514,9 +396,9 @@ mod tests {
                 score: 0.0,
                 actions: Vec::new(),
                 is_spam: false,
-                dkim_result: None,
-                spf_result: None,
-                dmarc_result: None,
+                dkim_result: dkim_result.map(ToString::to_string),
+                spf_result: spf_result.map(ToString::to_string),
+                dmarc_result: dmarc_result.map(ToString::to_string),
                 symbols: Vec::new(),
                 latency_ms: 0,
             },
@@ -524,52 +406,6 @@ mod tests {
             content_hash: String::new(),
             trace_id: None,
             handoff_at: Utc::now(),
-        };
-
-        assert_eq!(
-            effective_auth_results(&request, mime, "phase2.test"),
-            EffectiveAuthResults {
-                spf: Some("pass".to_string()),
-                dkim: Some("fail".to_string()),
-                dmarc: Some("pass".to_string()),
-                spf_aligned: Some("pass".to_string()),
-                dkim_aligned: Some("fail".to_string()),
-                dkim_domain: Some("other.test".to_string()),
-                ..EffectiveAuthResults::default()
-            }
-        );
-    }
-
-    #[test]
-    fn parses_dkim_selector_arc_and_alignment_without_raw_header_storage() {
-        let header = "mx.phase2.test; spf=pass smtp.mailfrom=bounces.phase2.test; \
-             dkim=pass header.d=mail.phase2.test header.s=Selector1; \
-             dmarc=pass header.from=phase2.test; arc=pass";
-        let parsed = parse_authentication_results(header);
-        assert_eq!(parsed.spf, Some("pass".to_string()));
-        assert_eq!(
-            parsed.spf_mail_from_domain,
-            Some("bounces.phase2.test".to_string())
-        );
-        assert_eq!(parsed.dkim, Some("pass".to_string()));
-        assert_eq!(parsed.dkim_domain, Some("mail.phase2.test".to_string()));
-        assert_eq!(parsed.dkim_selector, Some("selector1".to_string()));
-        assert_eq!(parsed.arc, Some("pass".to_string()));
-        assert_eq!(
-            alignment_from_domains(
-                parsed.spf.as_deref(),
-                parsed.spf_mail_from_domain.as_deref(),
-                "phase2.test"
-            ),
-            Some("pass".to_string())
-        );
-        assert_eq!(
-            alignment_from_domains(
-                parsed.dkim.as_deref(),
-                parsed.dkim_domain.as_deref(),
-                "phase2.test"
-            ),
-            Some("pass".to_string())
-        );
+        }
     }
 }

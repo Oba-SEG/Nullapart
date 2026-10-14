@@ -5,6 +5,8 @@
 //! budgets. It never exposes message bodies, raw MIME, full recipient lists or
 //! content samples.
 
+use std::sync::Arc;
+
 use axum::{
     extract::{rejection::JsonRejection, Extension, State},
     http::{HeaderMap, StatusCode},
@@ -13,7 +15,10 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
-use nullapart_mail_contracts::transaction::DeploymentId;
+use nullapart_mail_contracts::{
+    rate_limit::{HighRiskLimits, TokenBucket},
+    transaction::DeploymentId,
+};
 use nullapart_policy::{CustomerLifecycle, TenantContext};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -33,17 +38,26 @@ const AUDIT_APPROVED_SENDER_UPSERTED: &str = "outbound_bulk_sender_upserted";
 const AUDIT_RESOURCE_APPROVED_SENDER: &str = "approved_bulk_sender";
 
 #[derive(Clone)]
-pub struct OutboundIntelligenceApiState {
+pub struct OutboundIntelligenceApiState(Arc<OutboundIntelligenceApiStateInner>);
+
+struct OutboundIntelligenceApiStateInner {
     pool: PgPool,
     deployment_id: DeploymentId,
+    /// Fail-closed shared budget for approved-sender mutations. Approving a
+    /// bulk sender raises a tenant's outbound authority, so it is treated as a
+    /// high-risk change like the other Control Plane mutation modules.
+    high_risk_limiter: std::sync::Mutex<TokenBucket>,
 }
 
 impl OutboundIntelligenceApiState {
     pub fn new(pool: PgPool, deployment_id: DeploymentId) -> Self {
-        Self {
+        Self(Arc::new(OutboundIntelligenceApiStateInner {
             pool,
             deployment_id,
-        }
+            high_risk_limiter: std::sync::Mutex::new(TokenBucket::new(
+                &HighRiskLimits::permission_change(),
+            )),
+        }))
     }
 }
 
@@ -249,13 +263,13 @@ async fn get_outbound_intelligence(
         return api_error(StatusCode::FORBIDDEN, "FORBIDDEN", "Permission is required");
     }
 
-    let mut transaction = match state.pool.begin().await {
+    let mut transaction = match state.0.pool.begin().await {
         Ok(transaction) => transaction,
         Err(_) => return unavailable(),
     };
     if set_scope(
         &mut transaction,
-        &state.deployment_id.0,
+        &state.0.deployment_id.0,
         &context.customer_id.0,
     )
     .await
@@ -266,7 +280,7 @@ async fn get_outbound_intelligence(
 
     let summary = match load_summary(
         &mut transaction,
-        &state.deployment_id.0,
+        &state.0.deployment_id.0,
         &context.customer_id.0,
     )
     .await
@@ -276,7 +290,7 @@ async fn get_outbound_intelligence(
     };
     let approved_senders = match load_approved_senders(
         &mut transaction,
-        &state.deployment_id.0,
+        &state.0.deployment_id.0,
         &context.customer_id.0,
     )
     .await
@@ -286,7 +300,7 @@ async fn get_outbound_intelligence(
     };
     let sender_behaviour = match load_sender_behaviour(
         &mut transaction,
-        &state.deployment_id.0,
+        &state.0.deployment_id.0,
         &context.customer_id.0,
     )
     .await
@@ -296,7 +310,7 @@ async fn get_outbound_intelligence(
     };
     let campaigns = match load_campaigns(
         &mut transaction,
-        &state.deployment_id.0,
+        &state.0.deployment_id.0,
         &context.customer_id.0,
     )
     .await
@@ -306,7 +320,7 @@ async fn get_outbound_intelligence(
     };
     let security_events = match load_security_events(
         &mut transaction,
-        &state.deployment_id.0,
+        &state.0.deployment_id.0,
         &context.customer_id.0,
     )
     .await
@@ -316,7 +330,7 @@ async fn get_outbound_intelligence(
     };
     let policy_history = match load_policy_history(
         &mut transaction,
-        &state.deployment_id.0,
+        &state.0.deployment_id.0,
         &context.customer_id.0,
     )
     .await
@@ -333,7 +347,7 @@ async fn get_outbound_intelligence(
         StatusCode::OK,
         Json(ApiEnvelope {
             data: OutboundIntelligenceResponse {
-                deployment_id: state.deployment_id.0,
+                deployment_id: state.0.deployment_id.0.clone(),
                 generated_at: Utc::now(),
                 summary,
                 approved_senders,
@@ -363,17 +377,13 @@ async fn post_approved_sender(
     if !authorized(&state, &context, OUTBOUND_INTELLIGENCE_MANAGE_PERMISSION) {
         return api_error(StatusCode::FORBIDDEN, "FORBIDDEN", "Permission is required");
     }
-    if !context.has_step_up() {
-        return api_error(
-            StatusCode::FORBIDDEN,
-            "STEP_UP_REQUIRED",
-            "Step-up authentication is required",
-        );
-    }
     let key = match require_idempotency_key(&headers) {
         Ok(key) => key,
         Err(rejection) => return idempotency_rejection_response(rejection),
     };
+    if let Err(response) = require_high_risk(&state, &context).await {
+        return response;
+    }
     let Json(body) = match payload {
         Ok(payload) => payload,
         Err(_) => return invalid_request(),
@@ -383,13 +393,13 @@ async fn post_approved_sender(
         Err(()) => return invalid_request(),
     };
 
-    let mut transaction = match state.pool.begin().await {
+    let mut transaction = match state.0.pool.begin().await {
         Ok(transaction) => transaction,
         Err(_) => return unavailable(),
     };
     if set_scope(
         &mut transaction,
-        &state.deployment_id.0,
+        &state.0.deployment_id.0,
         &context.customer_id.0,
     )
     .await
@@ -418,7 +428,7 @@ async fn post_approved_sender(
          WHERE deployment_id = $1 AND customer_id = $2 AND sender_address = $3 \
            AND source_kind = $4 AND source_id = $5",
     )
-    .bind(&state.deployment_id.0)
+    .bind(&state.0.deployment_id.0)
     .bind(&context.customer_id.0)
     .bind(&request.sender_address)
     .bind(request.source_kind.as_str())
@@ -462,7 +472,7 @@ async fn post_approved_sender(
              updated_at = now() \
          RETURNING id, updated_at",
     )
-    .bind(&state.deployment_id.0)
+    .bind(&state.0.deployment_id.0)
     .bind(&context.customer_id.0)
     .bind(&request.sender_address)
     .bind(&request.sending_domain)
@@ -485,7 +495,7 @@ async fn post_approved_sender(
     };
     if write_approved_sender_audit(
         &mut transaction,
-        &state.deployment_id.0,
+        &state.0.deployment_id.0,
         &context,
         &headers,
         &request,
@@ -830,7 +840,7 @@ fn authorized(
     permission: &str,
 ) -> bool {
     context.customer_lifecycle == CustomerLifecycle::Active
-        && context.deployment_id == state.deployment_id
+        && context.deployment_id == state.0.deployment_id
         && has_permission(context, permission)
 }
 
@@ -883,7 +893,12 @@ fn validate_approved_sender(
     {
         return Err(());
     }
-    if source_ip.as_ref().is_some_and(|value| value.is_empty()) {
+    // A malformed address must fail as an invalid request here; otherwise the
+    // `$7::inet` cast fails at write time and the caller sees 503 UNAVAILABLE.
+    if source_ip
+        .as_ref()
+        .is_some_and(|value| value.parse::<std::net::IpAddr>().is_err())
+    {
         return Err(());
     }
     if request
@@ -946,6 +961,44 @@ fn invalid_request() -> Response {
         "INVALID_REQUEST",
         "Request is invalid",
     )
+}
+
+/// Fresh step-up, then the shared fail-closed high-risk budget. Permission
+/// checks come first, and neither gate ever writes. A poisoned limiter lock
+/// is treated as exhausted (deny), never as a bypass.
+async fn require_high_risk(
+    state: &OutboundIntelligenceApiState,
+    context: &TenantContext,
+) -> Result<(), Response> {
+    if !context.has_step_up() {
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            "STEP_UP_REQUIRED",
+            "Step-up authentication is required",
+        ));
+    }
+    let allowed = state
+        .0
+        .high_risk_limiter
+        .lock()
+        .map(|mut bucket| bucket.try_consume())
+        .unwrap_or(false);
+    if !allowed {
+        return Err(rate_limited());
+    }
+    Ok(())
+}
+
+fn rate_limited() -> Response {
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        [(axum::http::header::RETRY_AFTER, "60")],
+        Json(ApiErrorBody {
+            code: "RATE_LIMITED",
+            message: "Too many high-risk changes",
+        }),
+    )
+        .into_response()
 }
 
 fn conflict(message: &'static str) -> Response {
@@ -1063,5 +1116,103 @@ mod tests {
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    fn approval_body(source_ip: &str) -> String {
+        format!(
+            r#"{{
+                "sender_address":"bulk@example.test",
+                "sending_domain":"example.test",
+                "source_kind":"smtp_mta",
+                "source_id":"mx-1",
+                "source_ip":"{source_ip}",
+                "max_messages_per_minute":10,
+                "max_messages_per_hour":100,
+                "max_recipients_per_message":50,
+                "max_unique_recipients_per_hour":1000,
+                "reason":"approved campaign"
+            }}"#
+        )
+    }
+
+    fn approval_request(idempotency_key: &str, body: String) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/outbound-intelligence/approved-senders")
+            .header("content-type", "application/json")
+            .header("x-idempotency-key", idempotency_key)
+            .body(Body::from(body))
+            .expect("request")
+    }
+
+    #[tokio::test]
+    async fn approved_sender_mutation_rejects_malformed_source_ip_before_database_access() {
+        let response = outbound_intelligence_router(state())
+            .layer(Extension(context(vec![
+                OUTBOUND_INTELLIGENCE_MANAGE_PERMISSION.to_string(),
+            ])))
+            .oneshot(approval_request(
+                "malformed-ip-key",
+                approval_body("not-an-ip-address"),
+            ))
+            .await
+            .expect("response");
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "a malformed source_ip must be a 4xx validation error, not a 503 from the inet cast"
+        );
+    }
+
+    #[tokio::test]
+    async fn approved_sender_mutation_requires_step_up_before_rate_limit_budget() {
+        let mut denied_context = context(vec![OUTBOUND_INTELLIGENCE_MANAGE_PERMISSION.to_string()]);
+        denied_context.actor.authentication_assurance = AuthenticationAssurance::Standard;
+        let response = outbound_intelligence_router(state())
+            .layer(Extension(denied_context))
+            .oneshot(approval_request("step-up-key", approval_body("192.0.2.10")))
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn approved_sender_mutation_is_rate_limited_after_shared_high_risk_budget() {
+        let router = outbound_intelligence_router(state()).layer(Extension(context(vec![
+            OUTBOUND_INTELLIGENCE_MANAGE_PERMISSION.to_string(),
+        ])));
+        // `HighRiskLimits::permission_change()` allows five tokens. The budget
+        // is spent by the gate itself, so the payloads below are malformed on
+        // purpose: validation rejects them with 400 before any database access,
+        // which keeps the drain deterministic (no lazy-pool latency) while each
+        // request still consumes exactly one token.
+        for attempt in 0..5 {
+            let response = router
+                .clone()
+                .oneshot(approval_request(
+                    &format!("rate-limit-key-{attempt}"),
+                    approval_body("not-an-ip-address"),
+                ))
+                .await
+                .expect("response");
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "attempt {attempt} must be rejected by validation after consuming a token"
+            );
+        }
+        let response = router
+            .clone()
+            .oneshot(approval_request(
+                "rate-limit-key-exhausted",
+                approval_body("not-an-ip-address"),
+            ))
+            .await
+            .expect("response");
+        assert_eq!(
+            response.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "the sixth mutation attempt must be denied once the shared high-risk budget is empty"
+        );
     }
 }

@@ -28,6 +28,7 @@ import { hasPermission, loadSession } from "../auth/session";
 import { StepUpPrompt } from "../components/StepUpPrompt";
 import { StatusPill } from "../components/StatusPill";
 import { Button } from "../components/primitives/Button";
+import { Dialog } from "../components/primitives/Dialog";
 import { Input } from "../components/primitives/Input";
 import { Select } from "../components/primitives/Select";
 import { randomUuid } from "../lib/ids";
@@ -44,16 +45,95 @@ interface RegisterDraft {
   artifact_uri: string;
   artifact_sha256: string;
   deployment_regions: string;
-  metrics: string;
+  metrics: MetricFields;
 }
 
 interface ShadowDraft {
   candidate: string;
   evaluation_set_id: string;
   input_schema_version: string;
-  metrics: string;
-  comparison: string;
+  metrics: ShadowMetricFields;
+  comparison: ShadowComparisonFields;
   result: ShadowEvaluation["result"];
+}
+
+interface MetricFields {
+  macro_f1: string;
+  macro_roc_auc: string;
+  ham_false_positive_rate: string;
+  latency_p95_ms: string;
+}
+
+interface ShadowMetricFields {
+  macro_f1_delta: string;
+}
+
+interface ShadowComparisonFields {
+  decision: string;
+}
+
+type MetricSpec = {
+  label: string;
+  key: string;
+  hint?: string;
+};
+
+const REGISTER_METRIC_FIELDS: MetricSpec[] = [
+  { label: "Macro F1", key: "macro_f1" },
+  { label: "ROC-AUC", key: "macro_roc_auc" },
+  { label: "Ham FP rate", key: "ham_false_positive_rate" },
+  { label: "p95 latency (ms)", key: "latency_p95_ms" },
+];
+
+const SHADOW_METRIC_FIELDS: MetricSpec[] = [{ label: "Macro F1 delta", key: "macro_f1_delta" }];
+
+const METRIC_HINT =
+  "Finite number, e.g. 0.98. Reported to policy as evidence, never as a disposition.";
+
+const COMPARISON_DECISION_OPTIONS = [
+  { value: "manual_review", label: "Manual review" },
+  { value: "promote_candidate", label: "Promote candidate" },
+  { value: "hold_active", label: "Hold active model" },
+  { value: "retune_thresholds", label: "Retune thresholds" },
+];
+
+/** Exported for tests: jsdom's number input sanitizes values like "1e400" to
+ * "", so the finite-value guard can only be exercised through the validator
+ * the field-level error renders. */
+export function metricFieldError(value: string, label: string): string | undefined {
+  if (value.trim() === "") return `${label} is required.`;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return `${label} must be a finite number.`;
+  return undefined;
+}
+
+function parseMetricFields(fields: MetricFields): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const spec of REGISTER_METRIC_FIELDS) {
+    const raw = fields[spec.key as keyof MetricFields];
+    const error = metricFieldError(raw, spec.label);
+    if (error) throw new Error(error);
+    out[spec.key] = Number(raw);
+  }
+  return out;
+}
+
+function parseShadowMetricFields(fields: ShadowMetricFields): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const spec of SHADOW_METRIC_FIELDS) {
+    const raw = fields[spec.key as keyof ShadowMetricFields];
+    const error = metricFieldError(raw, spec.label);
+    if (error) throw new Error(error);
+    out[spec.key] = Number(raw);
+  }
+  return out;
+}
+
+function parseShadowComparisonFields(fields: ShadowComparisonFields): Record<string, unknown> {
+  const decision = fields.decision.trim();
+  if (!decision) throw new Error("Decision is required.");
+  if (decision.length > 64) throw new Error("Decision must be 64 characters or fewer.");
+  return { decision };
 }
 
 type ModelAction =
@@ -71,16 +151,20 @@ const defaultRegisterDraft: RegisterDraft = {
   artifact_uri: "",
   artifact_sha256: "",
   deployment_regions: "local",
-  metrics:
-    '{\n  "macro_f1": 0,\n  "macro_roc_auc": 0,\n  "ham_false_positive_rate": 0,\n  "latency_p95_ms": 0\n}',
+  metrics: {
+    macro_f1: "",
+    macro_roc_auc: "",
+    ham_false_positive_rate: "",
+    latency_p95_ms: "",
+  },
 };
 
 const defaultShadowDraft: ShadowDraft = {
   candidate: "",
   evaluation_set_id: "",
   input_schema_version: "1",
-  metrics: '{\n  "macro_f1_delta": 0\n}',
-  comparison: '{\n  "decision": "manual_review"\n}',
+  metrics: { macro_f1_delta: "" },
+  comparison: { decision: "manual_review" },
   result: "inconclusive",
 };
 
@@ -136,17 +220,6 @@ function latestShadowSummary(evaluations: ShadowEvaluation[] | undefined): strin
   return `${latest.result.replaceAll("_", " ")}${compared} · ${latest.evaluation_set_id}`;
 }
 
-function parseJsonObject(value: string, label: string): Record<string, unknown> {
-  const parsed = JSON.parse(value) as unknown;
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error(`${label} must be a JSON object.`);
-  }
-  if (Object.keys(parsed).length === 0) {
-    throw new Error(`${label} cannot be empty.`);
-  }
-  return parsed as Record<string, unknown>;
-}
-
 function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error) return error.message;
   if (typeof error === "object" && error !== null && "message" in error) {
@@ -159,12 +232,60 @@ function modelKey(model: InlineModel): string {
   return `${model.model_id}/${model.model_version}`;
 }
 
+const ACTION_COPY: Record<
+  ModelAction["type"],
+  { title: string; consequence: string; confirm: string }
+> = {
+  approve: {
+    title: "Approve model",
+    consequence:
+      "Approval is a separate audited transition. The model still does not run until it is activated.",
+    confirm: "Confirm approval",
+  },
+  activate: {
+    title: "Activate model",
+    consequence:
+      "This replaces the currently active runtime model for this deployment. The superseded model is recorded as the rollback target. Requires step-up.",
+    confirm: "Confirm activation",
+  },
+  rollback: {
+    title: "Roll back to this model",
+    consequence:
+      "This re-activates the recorded rollback target and deactivates the current model. Requires step-up.",
+    confirm: "Confirm rollback",
+  },
+  reject: {
+    title: "Reject model",
+    consequence: "Rejection is terminal for this version.",
+    confirm: "Confirm rejection",
+  },
+};
+
+function actionModel(request: ModelAction): InlineModel {
+  return request.model;
+}
+
 export function Models() {
   const queryClient = useQueryClient();
   const [registerDraft, setRegisterDraft] = useState<RegisterDraft>(defaultRegisterDraft);
   const [shadowDraft, setShadowDraft] = useState<ShadowDraft>(defaultShadowDraft);
   const [rejectReasons, setRejectReasons] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<ModelAction | null>(null);
+
+  function requestAction(request: ModelAction) {
+    setPendingAction(request);
+  }
+
+  function cancelPendingAction() {
+    setPendingAction(null);
+  }
+
+  function confirmPendingAction() {
+    if (!pendingAction) return;
+    action.mutate(pendingAction);
+    setPendingAction(null);
+  }
 
   const session = useQuery({
     queryKey: ["session"],
@@ -275,7 +396,7 @@ export function Models() {
           .split(",")
           .map((region) => region.trim())
           .filter(Boolean),
-        metrics: parseJsonObject(registerDraft.metrics, "Metrics"),
+        metrics: parseMetricFields(registerDraft.metrics),
       };
       setFormError(null);
       register.mutate(body);
@@ -296,8 +417,8 @@ export function Models() {
         input_schema_version: Number.parseInt(shadowDraft.input_schema_version, 10),
         active_model_id: activeModel?.model_id ?? null,
         active_model_version: activeModel?.model_version ?? null,
-        metrics: parseJsonObject(shadowDraft.metrics, "Shadow metrics"),
-        comparison: parseJsonObject(shadowDraft.comparison, "Shadow comparison"),
+        metrics: parseShadowMetricFields(shadowDraft.metrics),
+        comparison: parseShadowComparisonFields(shadowDraft.comparison),
         result: shadowDraft.result,
       };
       setFormError(null);
@@ -462,18 +583,33 @@ export function Models() {
                 setRegisterDraft((draft) => ({ ...draft, artifact_sha256: event.target.value }))
               }
             />
-            <label className="models-textarea-label" htmlFor="model-metrics-json">
-              Metrics JSON
-            </label>
-            <textarea
-              id="model-metrics-json"
-              className="models-textarea"
-              value={registerDraft.metrics}
-              onChange={(event) =>
-                setRegisterDraft((draft) => ({ ...draft, metrics: event.target.value }))
-              }
-              rows={7}
-            />
+            <fieldset className="models-fieldset">
+              <legend>Metrics</legend>
+              <div className="models-form-grid">
+                {REGISTER_METRIC_FIELDS.map((field) => {
+                  const raw = registerDraft.metrics[field.key as keyof MetricFields];
+                  const error = raw === "" ? undefined : metricFieldError(raw, field.label);
+                  return (
+                    <Input
+                      key={field.key}
+                      label={field.label}
+                      type="number"
+                      step="any"
+                      inputMode="decimal"
+                      value={raw}
+                      hint={METRIC_HINT}
+                      error={error}
+                      onChange={(event) =>
+                        setRegisterDraft((draft) => ({
+                          ...draft,
+                          metrics: { ...draft.metrics, [field.key]: event.target.value },
+                        }))
+                      }
+                    />
+                  );
+                })}
+              </div>
+            </fieldset>
             <div className="models-actions">
               <Button
                 type="button"
@@ -552,29 +688,43 @@ export function Models() {
                 }))
               }
             />
-            <label className="models-textarea-label" htmlFor="shadow-metrics-json">
-              Shadow metrics JSON
-            </label>
-            <textarea
-              id="shadow-metrics-json"
-              className="models-textarea"
-              value={shadowDraft.metrics}
+            <fieldset className="models-fieldset">
+              <legend>Shadow metrics</legend>
+              <div className="models-form-grid">
+                {SHADOW_METRIC_FIELDS.map((field) => {
+                  const raw = shadowDraft.metrics[field.key as keyof ShadowMetricFields];
+                  const error = raw === "" ? undefined : metricFieldError(raw, field.label);
+                  return (
+                    <Input
+                      key={field.key}
+                      label={field.label}
+                      type="number"
+                      step="any"
+                      inputMode="decimal"
+                      value={raw}
+                      hint={METRIC_HINT}
+                      error={error}
+                      onChange={(event) =>
+                        setShadowDraft((draft) => ({
+                          ...draft,
+                          metrics: { ...draft.metrics, [field.key]: event.target.value },
+                        }))
+                      }
+                    />
+                  );
+                })}
+              </div>
+            </fieldset>
+            <Select
+              label="Comparison decision"
+              value={shadowDraft.comparison.decision}
+              options={COMPARISON_DECISION_OPTIONS}
               onChange={(event) =>
-                setShadowDraft((draft) => ({ ...draft, metrics: event.target.value }))
+                setShadowDraft((draft) => ({
+                  ...draft,
+                  comparison: { ...draft.comparison, decision: event.target.value },
+                }))
               }
-              rows={5}
-            />
-            <label className="models-textarea-label" htmlFor="shadow-comparison-json">
-              Comparison JSON
-            </label>
-            <textarea
-              id="shadow-comparison-json"
-              className="models-textarea"
-              value={shadowDraft.comparison}
-              onChange={(event) =>
-                setShadowDraft((draft) => ({ ...draft, comparison: event.target.value }))
-              }
-              rows={5}
             />
             <div className="models-actions">
               <Button
@@ -688,7 +838,7 @@ export function Models() {
                         variant="primary"
                         disabled={!canApprove}
                         loading={action.isPending}
-                        onClick={() => action.mutate({ type: "approve", model })}
+                        onClick={() => requestAction({ type: "approve", model })}
                       >
                         Approve
                       </Button>
@@ -698,7 +848,7 @@ export function Models() {
                         variant="clean"
                         disabled={!canActivate}
                         loading={action.isPending}
-                        onClick={() => action.mutate({ type: "activate", model })}
+                        onClick={() => requestAction({ type: "activate", model })}
                       >
                         <Power size={14} aria-hidden="true" />
                         Activate
@@ -709,7 +859,7 @@ export function Models() {
                         variant="danger"
                         disabled={!canRollback}
                         loading={action.isPending}
-                        onClick={() => action.mutate({ type: "rollback", model })}
+                        onClick={() => requestAction({ type: "rollback", model })}
                       >
                         Roll back to this
                       </Button>
@@ -760,6 +910,45 @@ export function Models() {
           })}
         </div>
       ) : null}
+
+      <Dialog
+        open={pendingAction !== null}
+        onClose={cancelPendingAction}
+        title={pendingAction ? ACTION_COPY[pendingAction.type].title : "Confirm"}
+      >
+        {pendingAction ? (
+          <form
+            className="models-confirm"
+            onSubmit={(event) => {
+              event.preventDefault();
+              confirmPendingAction();
+            }}
+          >
+            <p>
+              {pendingAction.type === "reject" ? "Reject" : "Apply this to"}{" "}
+              <strong>{modelKey(actionModel(pendingAction))}</strong>?
+            </p>
+            <p className="model-note">{ACTION_COPY[pendingAction.type].consequence}</p>
+            <div className="models-actions">
+              <Button
+                type="button"
+                variant="ghost"
+                loading={action.isPending}
+                onClick={cancelPendingAction}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                variant={pendingAction.type === "rollback" ? "danger" : "primary"}
+                loading={action.isPending}
+              >
+                {ACTION_COPY[pendingAction.type].confirm}
+              </Button>
+            </div>
+          </form>
+        ) : null}
+      </Dialog>
     </div>
   );
 }

@@ -377,6 +377,30 @@ describe("Operations", () => {
     expect(within(readiness).getByText("not ready")).toBeTruthy();
   });
 
+  it("renders each readiness status and its evidence verbatim", async () => {
+    stubFetch({ session: managerSession, snapshot: baseSnapshot, hardening: baseHardening });
+    renderAt("/operations");
+
+    const readiness = await screen.findByRole("region", {
+      name: "Production-readiness evidence",
+    });
+
+    const partialRow = rowFor("Tier-3 SLO/error-budget/burn-rate alerting active");
+    expect(within(partialRow).getByText("partial")).toBeTruthy();
+    expect(within(partialRow).getByText("docs/compliance/08-TIER3-SLO-EVIDENCE.md")).toBeTruthy();
+
+    const notReadyRow = rowFor("Zero-day parser/dependency exercise completed");
+    expect(within(notReadyRow).getByText("not ready")).toBeTruthy();
+    expect(
+      within(notReadyRow).getByText("docs/compliance/15-ZERO-DAY-TABLETOP-TEMPLATE.md"),
+    ).toBeTruthy();
+
+    // The page must never upgrade a partial/not-ready row to a ready badge.
+    expect(within(partialRow).queryByText("ready")).toBeNull();
+    expect(within(notReadyRow).queryByText("ready")).toBeNull();
+    expect(readiness).not.toHaveTextContent("production ready");
+  });
+
   it("renders stale badges for nodes and unknown freshness as muted", async () => {
     stubFetch({ session: managerSession, snapshot: baseSnapshot });
     renderAt("/operations");

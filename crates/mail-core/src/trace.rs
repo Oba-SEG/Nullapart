@@ -103,7 +103,9 @@ const SESSION_SEARCH_SQL: &str =
      WHERE i.transaction_id = t.id AND i.customer_id = $2) \
      AND (t.id::text = $3 OR t.trace_id ILIKE $3 OR t.message_id ILIKE $3 \
      OR t.envelope_sender ILIKE $3 OR EXISTS (SELECT 1 \
-     FROM smtp_transaction_recipients AS r WHERE r.transaction_id = t.id \
+     FROM tenant_message_recipients AS r \
+     JOIN tenant_message_instances AS ri ON ri.id = r.tenant_message_id \
+     WHERE ri.transaction_id = t.id AND ri.customer_id = $2 \
      AND r.address ILIKE $3)) ORDER BY t.received_at DESC, t.id LIMIT $4";
 const SESSION_SEARCH_COUNT_SQL: &str =
     "SELECT count(*)::bigint FROM smtp_transactions AS t WHERE t.deployment_id = $1 \
@@ -111,11 +113,19 @@ const SESSION_SEARCH_COUNT_SQL: &str =
      WHERE i.transaction_id = t.id AND i.customer_id = $2) \
      AND (t.id::text = $3 OR t.trace_id ILIKE $3 OR t.message_id ILIKE $3 \
      OR t.envelope_sender ILIKE $3 OR EXISTS (SELECT 1 \
-     FROM smtp_transaction_recipients AS r WHERE r.transaction_id = t.id \
+     FROM tenant_message_recipients AS r \
+     JOIN tenant_message_instances AS ri ON ri.id = r.tenant_message_id \
+     WHERE ri.transaction_id = t.id AND ri.customer_id = $2 \
      AND r.address ILIKE $3))";
-const SEARCH_RECIPIENTS_SQL: &str =
-    "SELECT transaction_id, address FROM smtp_transaction_recipients \
-     WHERE transaction_id = ANY($1) ORDER BY transaction_id, id";
+const SESSION_SEARCH_RECIPIENTS_SQL: &str =
+    "SELECT i.transaction_id, r.address FROM tenant_message_recipients AS r \
+     JOIN tenant_message_instances AS i ON i.id = r.tenant_message_id \
+     WHERE i.transaction_id = ANY($1) AND i.customer_id = $2 \
+     ORDER BY i.transaction_id, r.id";
+const SESSION_RECIPIENTS_SQL: &str =
+    "SELECT r.address, r.orcpt, r.notify FROM tenant_message_recipients AS r \
+     JOIN tenant_message_instances AS i ON i.id = r.tenant_message_id \
+     WHERE i.transaction_id = $1 AND i.customer_id = $2 ORDER BY r.id";
 const SEARCH_INSTANCES_SQL: &str = "SELECT transaction_id, id AS tenant_message_id, disposition \
      FROM tenant_message_instances WHERE transaction_id = ANY($1) \
      AND customer_id = $2 ORDER BY transaction_id, created_at, id";
@@ -739,6 +749,12 @@ fn take_content_token(state: &MailTraceState, actor_id: &str) -> bool {
     bucket.try_consume()
 }
 
+fn escape_like_pattern(term: &str) -> String {
+    term.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
 fn validate_search_request(request: &TraceSearchRequest) -> Result<ValidatedSearch, Box<Response>> {
     let term = request.q.trim();
     if term.chars().count() < SEARCH_MIN_QUERY_CHARS {
@@ -751,7 +767,7 @@ fn validate_search_request(request: &TraceSearchRequest) -> Result<ValidatedSear
         .unwrap_or(SEARCH_DEFAULT_LIMIT)
         .clamp(SEARCH_MIN_LIMIT, SEARCH_MAX_LIMIT);
     Ok(ValidatedSearch {
-        pattern: format!("%{term}%"),
+        pattern: format!("%{}%", escape_like_pattern(term)),
         limit: i64::from(limit),
     })
 }
@@ -964,38 +980,39 @@ async fn workload_transaction_detail(
     deployment_id: &str,
     transaction_id: Uuid,
 ) -> Result<WorkloadTransactionDetail, Response> {
+    // smtp_transactions and smtp_transaction_recipients carry FORCE RLS
+    // (migration 034); the deployment GUC must be set in the transaction.
+    let mut transaction = pool.begin().await.map_err(|_| unavailable())?;
+    sqlx::query("SELECT set_config('app.current_deployment_id', $1, true)")
+        .bind(deployment_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| unavailable())?;
     let row = sqlx::query(TRANSACTION_SQL)
         .bind(transaction_id)
         .bind(deployment_id)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| unavailable())?;
-    let transaction = row.as_ref().map(transaction_base);
-    let recipients = if transaction.is_some() {
-        workload_recipients(pool, transaction_id).await?
+    let transaction_row = row.as_ref().map(transaction_base);
+    let recipients = if transaction_row.is_some() {
+        let rows = sqlx::query(TRANSACTION_RECIPIENTS_SQL)
+            .bind(transaction_id)
+            .fetch_all(&mut *transaction)
+            .await
+            .map_err(|_| unavailable())?;
+        rows.iter()
+            .map(|row| TraceRecipientResponse {
+                address: row.get("address"),
+                orcpt: row.get("orcpt"),
+                notify: notify_summary(row.get("notify")),
+            })
+            .collect()
     } else {
         Vec::new()
     };
-    build_workload_detail(transaction, recipients).map_err(|error| *error)
-}
-
-async fn workload_recipients(
-    pool: &PgPool,
-    transaction_id: Uuid,
-) -> Result<Vec<TraceRecipientResponse>, Response> {
-    let rows = sqlx::query(TRANSACTION_RECIPIENTS_SQL)
-        .bind(transaction_id)
-        .fetch_all(pool)
-        .await
-        .map_err(|_| unavailable())?;
-    Ok(rows
-        .iter()
-        .map(|row| TraceRecipientResponse {
-            address: row.get("address"),
-            orcpt: row.get("orcpt"),
-            notify: notify_summary(row.get("notify")),
-        })
-        .collect())
+    transaction.commit().await.map_err(|_| unavailable())?;
+    build_workload_detail(transaction_row, recipients).map_err(|error| *error)
 }
 
 async fn session_transaction_detail(
@@ -1030,8 +1047,9 @@ async fn session_transaction_detail(
         .map_err(|_| unavailable())?;
     visible_tenant_instance(instance_count).map_err(|error| *error)?;
 
-    let recipient_rows = sqlx::query(TRANSACTION_RECIPIENTS_SQL)
+    let recipient_rows = sqlx::query(SESSION_RECIPIENTS_SQL)
         .bind(transaction_id)
+        .bind(&context.customer_id.0)
         .fetch_all(&mut *transaction)
         .await
         .map_err(|_| unavailable())?;
@@ -1415,10 +1433,25 @@ async fn handle_trace_search(
         Err(response) => return *response,
     };
 
+    // smtp_transactions and smtp_transaction_recipients carry FORCE RLS
+    // (migration 034); run the workload search in a deployment-scoped
+    // transaction.
+    let mut transaction = match config.pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(_) => return unavailable(),
+    };
+    if sqlx::query("SELECT set_config('app.current_deployment_id', $1, true)")
+        .bind(&config.deployment_id.0)
+        .execute(&mut *transaction)
+        .await
+        .is_err()
+    {
+        return unavailable();
+    }
     let total_count: i64 = match sqlx::query_scalar(WORKLOAD_SEARCH_COUNT_SQL)
         .bind(&config.deployment_id.0)
         .bind(&validated.pattern)
-        .fetch_one(&config.pool)
+        .fetch_one(&mut *transaction)
         .await
     {
         Ok(count) => count,
@@ -1428,12 +1461,15 @@ async fn handle_trace_search(
         .bind(&config.deployment_id.0)
         .bind(&validated.pattern)
         .bind(validated.limit)
-        .fetch_all(&config.pool)
+        .fetch_all(&mut *transaction)
         .await
     {
         Ok(rows) => rows,
         Err(_) => return unavailable(),
     };
+    if transaction.commit().await.is_err() {
+        return unavailable();
+    }
     let results: Vec<WorkloadSearchResult> = rows
         .iter()
         .map(|row| WorkloadSearchResult {
@@ -1561,8 +1597,9 @@ async fn session_search(
     }
 
     if !transaction_ids.is_empty() {
-        let recipient_rows = sqlx::query(SEARCH_RECIPIENTS_SQL)
+        let recipient_rows = sqlx::query(SESSION_SEARCH_RECIPIENTS_SQL)
             .bind(&transaction_ids)
+            .bind(&context.customer_id.0)
             .fetch_all(&mut *transaction)
             .await
             .map_err(|_| unavailable())?;

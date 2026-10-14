@@ -30,7 +30,7 @@ GRANT SELECT, INSERT, UPDATE ON customers, domains TO nullapart_mailcore;
 GRANT SELECT, INSERT, UPDATE ON idempotency_keys TO nullapart_mailcore;
 GRANT SELECT, INSERT, UPDATE, DELETE ON source_ip_groups TO nullapart_mailcore;
 GRANT SELECT, INSERT, UPDATE ON smtp_transactions TO nullapart_mailcore;
-GRANT SELECT, INSERT, UPDATE ON handoff_idempotency TO nullapart_mailcore;
+GRANT SELECT, INSERT ON handoff_idempotency TO nullapart_mailcore;
 GRANT SELECT, INSERT ON
     smtp_transaction_recipients,
     tenant_message_recipients,

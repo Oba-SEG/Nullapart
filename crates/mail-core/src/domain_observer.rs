@@ -164,26 +164,40 @@ impl DomainObserverWorker {
         Ok(domains)
     }
 
+    /// Bootstrap read over `customers`, which carries a deployment-scoped RLS
+    /// policy (migration 034), so this transaction sets only
+    /// `app.current_deployment_id`. Running it directly on the pool would
+    /// match zero rows for every non-BYPASSRLS role.
     async fn load_active_customers(&self) -> Result<Vec<ActiveCustomer>, DomainObserverError> {
-        sqlx::query(
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| DomainObserverError::Persistence)?;
+        set_deployment_scope(&mut transaction, &self.deployment_id).await?;
+        let rows = sqlx::query(
             "SELECT id AS customer_id \
              FROM customers \
              WHERE deployment_id = $1 AND lifecycle = 'active' \
              ORDER BY id",
         )
         .bind(&self.deployment_id.0)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *transaction)
         .await
-        .map_err(|_| DomainObserverError::Persistence)?
-        .into_iter()
-        .map(|row| {
-            Ok(ActiveCustomer {
-                customer_id: row
-                    .try_get("customer_id")
-                    .map_err(|_| DomainObserverError::Persistence)?,
+        .map_err(|_| DomainObserverError::Persistence)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| DomainObserverError::Persistence)?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(ActiveCustomer {
+                    customer_id: row
+                        .try_get("customer_id")
+                        .map_err(|_| DomainObserverError::Persistence)?,
+                })
             })
-        })
-        .collect()
+            .collect()
     }
 
     async fn load_authorizations(
@@ -450,7 +464,15 @@ impl DomainObserverWorker {
             authorization.domain_id,
             "report_authorization",
             &Observation {
-                status: if status == "valid" { "pass" } else { "fail" }.to_string(),
+                // A transient DNS failure is an unknown check, not a
+                // misconfiguration: only a resolved mismatch or a missing
+                // record is a real failure.
+                status: match status {
+                    "valid" => "pass",
+                    "unknown" => "unknown",
+                    _ => "fail",
+                }
+                .to_string(),
                 observed_value: Some(authorization.owner_name.clone()),
                 detail: detail.clone(),
             },
@@ -742,6 +764,18 @@ async fn set_scope(
     .map_err(|_| DomainObserverError::Persistence)
 }
 
+async fn set_deployment_scope(
+    transaction: &mut Transaction<'_, Postgres>,
+    deployment_id: &DeploymentId,
+) -> Result<(), DomainObserverError> {
+    sqlx::query("SELECT set_config('app.current_deployment_id', $1, true)")
+        .bind(&deployment_id.0)
+        .execute(&mut **transaction)
+        .await
+        .map(|_| ())
+        .map_err(|_| DomainObserverError::Persistence)
+}
+
 async fn insert_observation(
     transaction: &mut Transaction<'_, Postgres>,
     deployment_id: &str,
@@ -855,7 +889,12 @@ fn value_has_prefix(value: &str, prefix: &str) -> bool {
 
 fn tag_value(record: &str, tag: &str) -> Option<String> {
     for part in record.split(';') {
-        let (key, value) = part.trim().split_once('=')?;
+        // A trailing or doubled semicolon yields an empty segment; skip it
+        // instead of aborting the whole parse, because published DMARC/BIMI
+        // records commonly end with a semicolon.
+        let Some((key, value)) = part.trim().split_once('=') else {
+            continue;
+        };
         if key.trim().eq_ignore_ascii_case(tag) {
             let value = value.trim();
             if !value.is_empty() && value.len() <= 512 {
@@ -909,6 +948,17 @@ mod tests {
             Some("https://brand.example/logo.svg".to_string())
         );
         assert_eq!(tag_value(record, "x"), None);
+        assert_eq!(
+            tag_value("v=DMARC1; p=reject;", "p"),
+            Some("reject".to_string()),
+            "a trailing semicolon must not abort tag parsing"
+        );
+        assert_eq!(
+            tag_value("v=DMARC1;; p=quarantine", "p"),
+            Some("quarantine".to_string()),
+            "an empty segment must not abort tag parsing"
+        );
+        assert_eq!(tag_value("v=DMARC1; p=;", "p"), None);
     }
 
     #[test]

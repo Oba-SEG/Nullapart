@@ -86,6 +86,12 @@ def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        # CUDA seeding and the deterministic backend are enabled only when a
+        # GPU is actually present, so CPU-only training runs are unaffected.
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 
 def compute_pos_weight(train_rows: list[dict]) -> torch.Tensor:

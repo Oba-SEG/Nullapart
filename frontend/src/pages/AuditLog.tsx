@@ -3,7 +3,6 @@ import { Download, ScrollText } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { api, type ApiError } from "../api/client";
-import { getCsrfToken } from "../auth/csrf";
 import { loadSession } from "../auth/session";
 import { StepUpPrompt } from "../components/StepUpPrompt";
 import { Button } from "../components/primitives/Button";
@@ -142,33 +141,11 @@ export function AuditLog() {
   async function exportCsv() {
     setExportError(null);
     try {
-      const csrfToken = getCsrfToken();
-      const response = await fetch("/api/v1/audit/events/export", {
-        method: "POST",
-        headers: {
-          Accept: "text/csv",
-          "Content-Type": "application/json",
-          ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}),
-        },
-        credentials: "same-origin",
-        body: JSON.stringify({
-          action: filters.action.trim() || null,
-          actor_login: filters.actor_login.trim() || null,
-          result: filters.result || null,
-        }),
+      const blob = await api.download("POST", "/audit/events/export", {
+        action: filters.action.trim() || null,
+        actor_login: filters.actor_login.trim() || null,
+        result: filters.result || null,
       });
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as {
-          code?: string;
-          message?: string;
-        } | null;
-        throw {
-          code: body?.code ?? `HTTP_${response.status}`,
-          message: body?.message ?? "The export could not be completed.",
-          retryable: response.status === 429 || response.status >= 500,
-        } satisfies ApiError;
-      }
-      const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;

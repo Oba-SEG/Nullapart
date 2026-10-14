@@ -482,6 +482,13 @@ async fn post_artifact_grant(
     if !authorized(&state, &context, DEEP_AI_MANAGE_PERMISSION) {
         return api_error(StatusCode::FORBIDDEN, "FORBIDDEN", "Permission is required");
     }
+    if !context.has_step_up() {
+        return api_error(
+            StatusCode::FORBIDDEN,
+            "STEP_UP_REQUIRED",
+            "Step-up authentication is required",
+        );
+    }
     let Json(request) = match body {
         Ok(body) => body,
         Err(_) => return invalid_request(),
@@ -594,6 +601,13 @@ async fn post_analysis_result(
     if !authorized(&state, &context, DEEP_AI_MANAGE_PERMISSION) {
         return api_error(StatusCode::FORBIDDEN, "FORBIDDEN", "Permission is required");
     }
+    if !context.has_step_up() {
+        return api_error(
+            StatusCode::FORBIDDEN,
+            "STEP_UP_REQUIRED",
+            "Step-up authentication is required",
+        );
+    }
     let Json(request) = match body {
         Ok(body) => body,
         Err(_) => return invalid_request(),
@@ -700,6 +714,13 @@ async fn post_rollback(
     };
     if !authorized(&state, &context, DEEP_AI_MANAGE_PERMISSION) {
         return api_error(StatusCode::FORBIDDEN, "FORBIDDEN", "Permission is required");
+    }
+    if !context.has_step_up() {
+        return api_error(
+            StatusCode::FORBIDDEN,
+            "STEP_UP_REQUIRED",
+            "Step-up authentication is required",
+        );
     }
     let Json(request) = match body {
         Ok(body) => body,
@@ -1882,6 +1903,13 @@ mod tests {
     }
 
     fn context(permissions: Vec<String>) -> TenantContext {
+        context_with_assurance(permissions, AuthenticationAssurance::StepUp)
+    }
+
+    fn context_with_assurance(
+        permissions: Vec<String>,
+        authentication_assurance: AuthenticationAssurance,
+    ) -> TenantContext {
         TenantContext {
             region: RegionId::new("local"),
             deployment_id: DeploymentId::new("LOCAL-TEST"),
@@ -1889,7 +1917,7 @@ mod tests {
                 actor_id: ActorId::new(),
                 login: "admin@example.test".to_string(),
                 roles: vec!["system_admin".to_string()],
-                authentication_assurance: AuthenticationAssurance::StepUp,
+                authentication_assurance,
             },
             customer_id: CustomerId::new("customer-1"),
             customer_internal_key: 1,
@@ -2065,6 +2093,40 @@ mod tests {
             .await
             .expect("router must answer");
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn manage_mutations_require_step_up_before_database_access() {
+        let app = deep_ai_router(state());
+        for uri in [
+            "/api/v1/deep-ai/artifact-grants",
+            "/api/v1/deep-ai/analysis-results",
+            "/api/v1/deep-ai/rollback",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .extension(context_with_assurance(
+                            vec!["deep-ai:manage".to_string()],
+                            AuthenticationAssurance::Standard,
+                        ))
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .expect("request must build"),
+                )
+                .await
+                .expect("router must answer");
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "uri = {uri}");
+            let bytes = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .expect("body must read");
+            let body: Value =
+                serde_json::from_slice(&bytes).expect("step-up rejection must be JSON");
+            assert_eq!(body["code"], "STEP_UP_REQUIRED", "uri = {uri}");
+        }
     }
 
     #[tokio::test]

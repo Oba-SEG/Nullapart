@@ -633,6 +633,23 @@ async fn set_scope(
     .map_err(|_| unavailable())
 }
 
+/// Sets only the deployment tenant GUC, for the pre-mint phase of customer
+/// creation where the customer identity does not exist yet but the regional
+/// sequence read already touches the FORCE-row-level-secured `customers`
+/// table (migration 034). The customer GUC follows once the identity is
+/// minted (see `set_scope`).
+async fn set_deployment_scope(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    deployment_id: &str,
+) -> Result<(), Response> {
+    sqlx::query("SELECT set_config('app.current_deployment_id', $1, true)")
+        .bind(deployment_id)
+        .execute(&mut **transaction)
+        .await
+        .map(|_| ())
+        .map_err(|_| unavailable())
+}
+
 /// Claims the idempotency key inside the caller's transaction. Error paths
 /// drop the transaction, rolling back both the claim and any partial work,
 /// so a failed request never burns its key.
@@ -656,6 +673,12 @@ async fn begin_claim(
 /// never mint the same identity. A deployment whose region is not a canonical
 /// docs/02 code fails closed instead of producing an identity no parser will
 /// accept.
+///
+/// The caller's transaction must already assert
+/// `app.current_deployment_id` (see `set_deployment_scope`): the sequence
+/// read touches the FORCE-row-level-secured `customers` table (migration
+/// 034), and an unscoped transaction matches zero rows, which would mint
+/// sequence 1 forever.
 pub async fn next_customer_id(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     deployment_id: &str,
@@ -932,26 +955,15 @@ async fn create_customer(
         Ok(key) => key,
         Err(rejection) => return idempotency_rejection_response(rejection),
     };
-    let mut transaction = match state.0.pool.begin().await {
-        Ok(transaction) => transaction,
-        Err(_) => return unavailable(),
-    };
-    // Mint the operational identity inside the caller's transaction: the
-    // regional sequence lock is held until commit, so two concurrent creations
-    // can never claim the same `C{REGION}-{sequence}` (docs/02).
-    let (customer_id, region_code, sequence_no) =
-        match next_customer_id(&mut transaction, &state.0.deployment_id.0).await {
-            Ok(value) => value,
-            Err(response) => return response,
-        };
-    if let Err(response) = set_scope(&mut transaction, &state.0.deployment_id.0, &customer_id).await
-    {
-        return response;
-    }
+    // Authorization, the role gate and the high-risk gate all run before the
+    // transaction opens, so no pool connection or advisory lock is held on a
+    // denied path and the regional sequence lock is only ever taken by a
+    // caller that has already proven it may create a customer (module
+    // invariant: authorize before any transaction or side effect).
     let route = Route {
         action: ACTION_CUSTOMER_CREATED,
         resource_type: RESOURCE_CUSTOMER,
-        resource_id: Some(customer_id.clone()),
+        resource_id: None,
         permission: CUSTOMERS_MANAGE_PERMISSION,
         target: None,
     };
@@ -969,6 +981,29 @@ async fn create_customer(
         .await;
     }
     if let Err(response) = require_high_risk(&state, &context, &headers, &route).await {
+        return response;
+    }
+    let mut transaction = match state.0.pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(_) => return unavailable(),
+    };
+    // The regional sequence read touches the FORCE-row-level-secured
+    // `customers` table (migration 034), so the deployment tenant GUC must be
+    // asserted before the mint; the customer GUC follows once the identity
+    // exists.
+    if let Err(response) = set_deployment_scope(&mut transaction, &state.0.deployment_id.0).await {
+        return response;
+    }
+    // Mint the operational identity inside the caller's transaction: the
+    // regional sequence lock is held until commit, so two concurrent creations
+    // can never claim the same `C{REGION}-{sequence}` (docs/02).
+    let (customer_id, region_code, sequence_no) =
+        match next_customer_id(&mut transaction, &state.0.deployment_id.0).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    if let Err(response) = set_scope(&mut transaction, &state.0.deployment_id.0, &customer_id).await
+    {
         return response;
     }
     let operation = format!("admin:customer:create:{}", state.0.deployment_id.0);
@@ -1452,47 +1487,93 @@ async fn verify_domain(
     if let Err(response) = authorize(&state, &context, &headers, &route).await {
         return response;
     }
-    let mut transaction = match state.0.pool.begin().await {
-        Ok(transaction) => transaction,
-        Err(_) => return unavailable(),
-    };
-    if let Err(response) = set_scope(&mut transaction, &state.0.deployment_id.0, &customer_id).await
-    {
-        return response;
-    }
-    let row = match sqlx::query_as::<_, DomainRow>(DOMAIN_SELECT_SQL)
-        .bind(domain_uuid)
-        .bind(&customer_id)
-        .bind(&state.0.deployment_id.0)
-        .fetch_optional(&mut *transaction)
-        .await
-    {
-        Ok(row) => row,
-        Err(_) => return unavailable(),
-    };
-    let Some(row) = row else {
-        return not_found("Domain was not found");
-    };
-    let mut domain = domain_from_row(row);
-    if domain.verification_status == "verified" {
-        return (StatusCode::OK, Json(ApiEnvelope { data: domain })).into_response();
-    }
-    if let Some(expires_at) = domain.verification_expires_at {
-        if expires_at < Utc::now() {
-            return conflict("Domain verification window expired");
+    // Phase 1: short read-only transaction. The DNS lookup must never hold a
+    // database transaction (and its connection) open across the network call,
+    // so this snapshot commits/drops before the resolver is touched.
+    let domain = {
+        let mut transaction = match state.0.pool.begin().await {
+            Ok(transaction) => transaction,
+            Err(_) => return unavailable(),
+        };
+        if let Err(response) =
+            set_scope(&mut transaction, &state.0.deployment_id.0, &customer_id).await
+        {
+            return response;
         }
-    }
+        let row = match sqlx::query_as::<_, DomainRow>(DOMAIN_SELECT_SQL)
+            .bind(domain_uuid)
+            .bind(&customer_id)
+            .bind(&state.0.deployment_id.0)
+            .fetch_optional(&mut *transaction)
+            .await
+        {
+            Ok(row) => row,
+            Err(_) => return unavailable(),
+        };
+        let Some(row) = row else {
+            return not_found("Domain was not found");
+        };
+        let domain = domain_from_row(row);
+        if domain.verification_status == "verified" {
+            return (StatusCode::OK, Json(ApiEnvelope { data: domain })).into_response();
+        }
+        if let Some(expires_at) = domain.verification_expires_at {
+            if expires_at < Utc::now() {
+                return conflict("Domain verification window expired");
+            }
+        }
+        domain
+    };
     let name = format!("_nullapart-verify.{}", domain.domain);
     let expected = domain
         .verification_token
         .as_ref()
         .map(|token| format!("nullapart-verify={token}"));
+    // Phase 2: DNS lookup outside any database transaction so a slow or hung
+    // resolver cannot pin a pool connection or hold row locks.
     match state.0.resolver.lookup(&name).await {
         Ok(records) => {
             let matched = expected.is_some()
                 && records
                     .iter()
                     .any(|record| *record == expected.clone().unwrap());
+            // Phase 3: fresh mutation transaction re-checks the row so a
+            // concurrent verification or expiry between the lookup and the
+            // write cannot be silently overwritten.
+            let mut transaction = match state.0.pool.begin().await {
+                Ok(transaction) => transaction,
+                Err(_) => return unavailable(),
+            };
+            if let Err(response) =
+                set_scope(&mut transaction, &state.0.deployment_id.0, &customer_id).await
+            {
+                return response;
+            }
+            let row = match sqlx::query_as::<_, DomainRow>(DOMAIN_SELECT_SQL)
+                .bind(domain_uuid)
+                .bind(&customer_id)
+                .bind(&state.0.deployment_id.0)
+                .fetch_optional(&mut *transaction)
+                .await
+            {
+                Ok(row) => row,
+                Err(_) => return unavailable(),
+            };
+            let Some(row) = row else {
+                return not_found("Domain was not found");
+            };
+            let mut domain = domain_from_row(row);
+            if domain.verification_status == "verified" {
+                if transaction.commit().await.is_err() {
+                    return unavailable();
+                }
+                return (StatusCode::OK, Json(ApiEnvelope { data: domain })).into_response();
+            }
+            if let Some(expires_at) = domain.verification_expires_at {
+                if expires_at < Utc::now() {
+                    return conflict("Domain verification window expired");
+                }
+            }
             let sql = if matched {
                 DOMAIN_VERIFY_OK_SQL
             } else {
@@ -1546,7 +1627,12 @@ async fn verify_domain(
         },
         Err(_) => {
             // The resolver failing never rewrites verification state, but
-            // the attempt is still audited evidence.
+            // the attempt is still audited evidence in its own short
+            // transaction (`write_event` re-asserts the tenant GUC itself).
+            let mut transaction = match state.0.pool.begin().await {
+                Ok(transaction) => transaction,
+                Err(_) => return unavailable(),
+            };
             if let Err(response) = write_event(
                 &mut transaction,
                 &state.0.deployment_id,

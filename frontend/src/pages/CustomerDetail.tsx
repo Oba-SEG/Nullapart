@@ -222,6 +222,8 @@ export function CustomerDetail() {
     mutationFn: (target: Domain) =>
       api.post<Domain>(
         `/admin/customers/${encodeURIComponent(customerId)}/domains/${encodeURIComponent(target.id)}/verify`,
+        undefined,
+        { idempotencyKey: randomUuid() },
       ),
     onSuccess: (verified) => {
       setVerifyNotice({

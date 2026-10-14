@@ -103,6 +103,22 @@ async fn seed_domain(
 }
 
 fn handoff_request(from_domain: &str, source_ip: &str) -> AfterQueueHandoffRequest {
+    handoff_request_with_milter(
+        from_domain,
+        source_ip,
+        Some("pass"),
+        Some("pass"),
+        Some("pass"),
+    )
+}
+
+fn handoff_request_with_milter(
+    from_domain: &str,
+    source_ip: &str,
+    spf_result: Option<&str>,
+    dkim_result: Option<&str>,
+    dmarc_result: Option<&str>,
+) -> AfterQueueHandoffRequest {
     AfterQueueHandoffRequest {
         postfix_queue_id: format!("AUTH-{from_domain}"),
         envelope_sender: EnvelopeSender::new(&format!("sender@{from_domain}")),
@@ -122,9 +138,9 @@ fn handoff_request(from_domain: &str, source_ip: &str) -> AfterQueueHandoffReque
             score: 0.0,
             actions: vec![],
             is_spam: false,
-            dkim_result: Some("pass".to_string()),
-            spf_result: Some("pass".to_string()),
-            dmarc_result: Some("pass".to_string()),
+            dkim_result: dkim_result.map(ToString::to_string),
+            spf_result: spf_result.map(ToString::to_string),
+            dmarc_result: dmarc_result.map(ToString::to_string),
             symbols: vec![],
             latency_ms: 3,
         },
@@ -200,15 +216,24 @@ async fn handoff_auth_telemetry_is_recorded_idempotently_for_owned_from_domain()
     assert_eq!(row.get::<i64, _>("count"), 1);
     assert_eq!(row.get::<String, _>("disposition"), "quarantine");
     assert_eq!(row.get::<String, _>("source_ip"), "203.0.113.99");
-    assert_eq!(row.get::<String, _>("dmarc_result"), "pass");
-    assert_eq!(row.get::<String, _>("spf_aligned_result"), "pass");
-    assert_eq!(row.get::<String, _>("dkim_aligned_result"), "pass");
     assert_eq!(
-        row.get::<String, _>("dkim_domain"),
-        format!("mail.{from_domain}")
+        row.get::<String, _>("dmarc_result"),
+        "pass",
+        "the milter observation must be the source of the stored dmarc result"
     );
-    assert_eq!(row.get::<String, _>("dkim_selector"), "s1");
-    assert_eq!(row.get::<String, _>("arc_result"), "pass");
+    assert_eq!(row.get::<String, _>("spf_aligned_result"), "pass");
+    assert_eq!(
+        row.get::<Option<String>, _>("dkim_aligned_result"),
+        None,
+        "DKIM alignment must stay unknown without a trusted signing-domain observation"
+    );
+    assert_eq!(row.get::<Option<String>, _>("dkim_domain"), None);
+    assert_eq!(row.get::<Option<String>, _>("dkim_selector"), None);
+    assert_eq!(
+        row.get::<Option<String>, _>("arc_result"),
+        None,
+        "Internet-supplied ARC headers must never be recorded as evidence"
+    );
 }
 
 #[tokio::test]
@@ -257,4 +282,62 @@ async fn handoff_auth_telemetry_skips_unowned_domains_and_invalid_source_ip() {
     .await
     .expect("invalid IP projection must not fail");
     assert_eq!(outcome, DomainAuthTelemetryOutcome::SkippedInvalidSourceIp);
+}
+
+#[tokio::test]
+#[ignore = "requires migrated local PostgreSQL through 027_domain_auth_telemetry_details.sql"]
+async fn forged_authentication_results_header_cannot_override_failing_milter_evidence() {
+    let pool = connect().await;
+    let suffix = Uuid::new_v4().simple().to_string();
+    let (deployment_id, customer_id, _domain_id, transaction_id, tenant_message_id) =
+        seed_domain(&pool, &suffix).await;
+    let from_domain = format!("auth-{suffix}.example.test");
+    let request = handoff_request_with_milter(
+        &from_domain,
+        "203.0.113.101",
+        Some("fail"),
+        Some("fail"),
+        Some("fail"),
+    );
+    let mime = format!(
+        "Authentication-Results: mx.local.test; spf=pass smtp.mailfrom=bounces.{from_domain}; \
+         dkim=pass header.d={from_domain} header.s=s1; dmarc=pass header.from={from_domain}; \
+         arc=pass\r\nFrom: Sender <sender@{from_domain}>\r\nSubject: hi\r\n\r\nbody"
+    );
+
+    let outcome = project_handoff_auth_telemetry(
+        &pool,
+        DomainAuthTelemetryInput {
+            deployment_id: &deployment_id,
+            customer_id: &customer_id,
+            transaction_id: &transaction_id,
+            tenant_message_id: &tenant_message_id,
+            request: &request,
+            raw_mime: mime.as_bytes(),
+            disposition: Disposition::Allow,
+        },
+    )
+    .await
+    .expect("telemetry projection must succeed");
+    assert_eq!(outcome, DomainAuthTelemetryOutcome::Recorded);
+
+    let row = sqlx::query(
+        "SELECT spf_result, dkim_result, dmarc_result, spf_aligned_result, \
+                dkim_aligned_result, dkim_domain, dkim_selector, arc_result \
+         FROM domain_auth_telemetry \
+         WHERE deployment_id = $1 AND customer_id = $2",
+    )
+    .bind(&deployment_id.0)
+    .bind(&customer_id.0)
+    .fetch_one(&pool)
+    .await
+    .expect("telemetry row must be readable");
+    assert_eq!(row.get::<String, _>("spf_result"), "fail");
+    assert_eq!(row.get::<String, _>("dkim_result"), "fail");
+    assert_eq!(row.get::<String, _>("dmarc_result"), "fail");
+    assert_eq!(row.get::<String, _>("spf_aligned_result"), "fail");
+    assert_eq!(row.get::<Option<String>, _>("dkim_aligned_result"), None);
+    assert_eq!(row.get::<Option<String>, _>("dkim_domain"), None);
+    assert_eq!(row.get::<Option<String>, _>("dkim_selector"), None);
+    assert_eq!(row.get::<Option<String>, _>("arc_result"), None);
 }

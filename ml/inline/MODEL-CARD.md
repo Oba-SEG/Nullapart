@@ -165,7 +165,7 @@ macro-F1 0.9652, macro-AUC 0.9998, clean FPR 0.0082; validation macro-F1
 | --- | --- | --- |
 | Size | 255.53 MB (+256.77 MB `.data`) | **64.2 MB** ≤ 100 MB |
 | CPU p95 (batch 1, seq 128, `.4`, 300 iters) | — | **41.01 ms** ≤ 50 ms (mean 35.56, p50 34.10) |
-| Parity vs torch-eager | mean/max abs diff 0.0, argmax agree | mean abs diff **0.00015** ≤ 0.05, max 0.00183, argmax agree |
+| Parity vs torch-eager (256-row validation batch, batch-1 runs) | mean/max abs diff 0.0 | mean abs diff **0.00015** ≤ 0.01, max 0.00183, argmax agree |
 
 Dynamic quantization of the classic DistilBERT graph (see
 `export_onnx.py` header for the torch.onnx dynamo caveat). All export

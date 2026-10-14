@@ -132,18 +132,30 @@
   width: 100%;
 }
 
-.models-textarea-label {
+.models-fieldset {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  margin: 0;
+  min-width: 0;
+  padding: var(--spacing-4);
+}
+
+.models-fieldset legend {
   color: var(--color-text-secondary);
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-semibold);
   letter-spacing: 0.04em;
+  padding: 0 var(--spacing-2);
   text-transform: uppercase;
 }
 
-.models-textarea {
-  min-height: 8rem;
-  resize: vertical;
-  width: 100%;
+.models-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
 }
 
 .models-actions {

@@ -152,42 +152,6 @@ impl FeatureEvaluator {
             .find(|f| &f.feature_id == feature_id)
             .ok_or_else(|| FeatureEvaluationError::FeatureNotFound(feature_id.0.clone()))?;
 
-        // System kill switch check — if any System-scope override with Disabled exists,
-        // and this feature is a kill-switch target, force disabled.
-        let system_kill = overrides.iter().find(|o| {
-            o.feature_id == *feature_id
-                && o.scope == OverrideScope::System
-                && o.value.is_disabled()
-                && !o.is_expired(now)
-        });
-
-        if let Some(kill) = system_kill {
-            return Ok(FeatureEvaluation {
-                value: FeatureValue::Disabled,
-                winning_scope: OverrideScope::System,
-                winning_override: Some(kill.clone()),
-                suppressed: true,
-                explanation: format!(
-                    "System kill switch disabled feature {} (override rev {})",
-                    feature_id.0, kill.revision
-                ),
-            });
-        }
-
-        // Mandatory security floor — if feature is mandatory, enforce Enabled.
-        if definition.mandatory {
-            return Ok(FeatureEvaluation {
-                value: FeatureValue::Enabled,
-                winning_scope: OverrideScope::System,
-                winning_override: None,
-                suppressed: false,
-                explanation: format!(
-                    "Feature {} is mandatory security floor — enforced Enabled",
-                    feature_id.0
-                ),
-            });
-        }
-
         // Pre-compute which scopes have any applicable overrides
         let has_deployment_override = overrides.iter().any(|o| {
             o.feature_id == *feature_id
@@ -205,6 +169,59 @@ impl FeatureEvaluator {
                 && o.scope_id == customer_id.0
                 && definition.allowed_scopes.contains(&OverrideScope::Tenant)
         });
+        let suppressed_by_lower_scope = has_deployment_override || has_tenant_override;
+
+        // System kill switch — only features flagged `kill_switch` get the
+        // kill pre-check, and only the NEWEST System non-Inherit override
+        // counts: a later System `Enabled` re-enables the feature. A kill
+        // switch bypasses `allowed_scopes` (System can always kill) and
+        // outranks the mandatory floor.
+        if definition.kill_switch {
+            // Evaluation must not depend on database/query ordering. Newest
+            // revision wins; created_at is a deterministic tie-breaker.
+            let newest_system_non_inherit = overrides
+                .iter()
+                .filter(|o| {
+                    o.feature_id == *feature_id
+                        && o.scope == OverrideScope::System
+                        && !o.is_expired(now)
+                        && !o.value.is_inherit()
+                })
+                .max_by(|a, b| {
+                    a.revision
+                        .cmp(&b.revision)
+                        .then_with(|| a.created_at.cmp(&b.created_at))
+                });
+
+            if let Some(kill) = newest_system_non_inherit {
+                if kill.value.is_disabled() {
+                    return Ok(FeatureEvaluation {
+                        value: FeatureValue::Disabled,
+                        winning_scope: OverrideScope::System,
+                        winning_override: Some(kill.clone()),
+                        suppressed: suppressed_by_lower_scope,
+                        explanation: format!(
+                            "System kill switch disabled feature {} (override rev {})",
+                            feature_id.0, kill.revision
+                        ),
+                    });
+                }
+            }
+        }
+
+        // Mandatory security floor — if feature is mandatory, enforce Enabled.
+        if definition.mandatory {
+            return Ok(FeatureEvaluation {
+                value: FeatureValue::Enabled,
+                winning_scope: OverrideScope::System,
+                winning_override: None,
+                suppressed: false,
+                explanation: format!(
+                    "Feature {} is mandatory security floor — enforced Enabled",
+                    feature_id.0
+                ),
+            });
+        }
 
         // Evaluate overrides in precedence order: System -> Deployment -> Tenant
         let ordered_scopes = [
@@ -400,6 +417,181 @@ mod tests {
 
         let result = ev
             .evaluate(&FeatureId::new("deep_ai"), &dep, &cust, &overrides, now)
+            .unwrap();
+        assert!(result.value.is_disabled());
+        assert_eq!(result.winning_scope, OverrideScope::System);
+    }
+
+    #[test]
+    fn newer_system_enabled_re_enables_after_kill() {
+        let ev = evaluator();
+        let dep = DeploymentId("CZA-1".to_string());
+        let cust = CustomerId("cust-001".to_string());
+        let now = Utc::now();
+
+        // Kill switch fired at rev 1; a newer System Enabled (rev 2) must
+        // re-enable the feature — the kill is not permanent.
+        let overrides = vec![
+            FeatureOverride {
+                feature_id: FeatureId::new("deep_ai"),
+                scope: OverrideScope::System,
+                scope_id: "system".to_string(),
+                value: FeatureValue::Disabled,
+                owner: "admin".to_string(),
+                reason: "emergency".to_string(),
+                revision: 1,
+                created_at: now,
+                expires_at: None,
+            },
+            FeatureOverride {
+                feature_id: FeatureId::new("deep_ai"),
+                scope: OverrideScope::System,
+                scope_id: "system".to_string(),
+                value: FeatureValue::Enabled,
+                owner: "admin".to_string(),
+                reason: "incident resolved".to_string(),
+                revision: 2,
+                created_at: now,
+                expires_at: None,
+            },
+        ];
+
+        let result = ev
+            .evaluate(&FeatureId::new("deep_ai"), &dep, &cust, &overrides, now)
+            .unwrap();
+        assert!(result.value.is_enabled());
+        assert_eq!(result.winning_scope, OverrideScope::System);
+        assert_eq!(result.winning_override.as_ref().unwrap().revision, 2);
+    }
+
+    #[test]
+    fn non_kill_switch_feature_system_disable_resolves_by_revision() {
+        let ev = evaluator();
+        let dep = DeploymentId("CZA-1".to_string());
+        let cust = CustomerId("cust-001".to_string());
+        let now = Utc::now();
+
+        // basic_filter is NOT a kill-switch target: a System Disabled must
+        // not permanently latch the feature off. Newest System revision wins.
+        let overrides = vec![
+            FeatureOverride {
+                feature_id: FeatureId::new("basic_filter"),
+                scope: OverrideScope::System,
+                scope_id: "system".to_string(),
+                value: FeatureValue::Disabled,
+                owner: "admin".to_string(),
+                reason: "temporary".to_string(),
+                revision: 1,
+                created_at: now,
+                expires_at: None,
+            },
+            FeatureOverride {
+                feature_id: FeatureId::new("basic_filter"),
+                scope: OverrideScope::System,
+                scope_id: "system".to_string(),
+                value: FeatureValue::Enabled,
+                owner: "admin".to_string(),
+                reason: "re-enabled".to_string(),
+                revision: 2,
+                created_at: now,
+                expires_at: None,
+            },
+        ];
+
+        let result = ev
+            .evaluate(
+                &FeatureId::new("basic_filter"),
+                &dep,
+                &cust,
+                &overrides,
+                now,
+            )
+            .unwrap();
+        assert!(result.value.is_enabled());
+        assert_eq!(result.winning_override.as_ref().unwrap().revision, 2);
+    }
+
+    #[test]
+    fn kill_suppressed_reflects_lower_scope_overrides() {
+        let ev = evaluator();
+        let dep = DeploymentId("CZA-1".to_string());
+        let cust = CustomerId("cust-001".to_string());
+        let now = Utc::now();
+
+        // Kill with no lower-scope overrides: nothing was suppressed.
+        let kill_only = vec![FeatureOverride {
+            feature_id: FeatureId::new("deep_ai"),
+            scope: OverrideScope::System,
+            scope_id: "system".to_string(),
+            value: FeatureValue::Disabled,
+            owner: "admin".to_string(),
+            reason: "emergency".to_string(),
+            revision: 1,
+            created_at: now,
+            expires_at: None,
+        }];
+        let result = ev
+            .evaluate(&FeatureId::new("deep_ai"), &dep, &cust, &kill_only, now)
+            .unwrap();
+        assert!(result.value.is_disabled());
+        assert!(!result.suppressed, "nothing lower was suppressed");
+
+        // Kill with a tenant enable present: the tenant override was suppressed.
+        let mut overrides = kill_only;
+        overrides.push(FeatureOverride {
+            feature_id: FeatureId::new("deep_ai"),
+            scope: OverrideScope::Tenant,
+            scope_id: "cust-001".to_string(),
+            value: FeatureValue::Enabled,
+            owner: "customer".to_string(),
+            reason: "want it".to_string(),
+            revision: 2,
+            created_at: now,
+            expires_at: None,
+        });
+        let result = ev
+            .evaluate(&FeatureId::new("deep_ai"), &dep, &cust, &overrides, now)
+            .unwrap();
+        assert!(result.value.is_disabled());
+        assert!(result.suppressed, "tenant enable was suppressed by kill");
+    }
+
+    #[test]
+    fn kill_switch_bypasses_disallowed_scopes() {
+        // deep_ai with allowed_scopes limited to Tenant still dies to a
+        // System kill — System kill always bypasses allowed_scopes.
+        let ev = FeatureEvaluator::new(vec![FeatureDefinition {
+            feature_id: FeatureId::new("scoped_feature"),
+            description: "Tenant-only feature".to_string(),
+            default_value: FeatureValue::Enabled,
+            mandatory: false,
+            kill_switch: true,
+            allowed_scopes: vec![OverrideScope::Tenant],
+        }]);
+        let dep = DeploymentId("CZA-1".to_string());
+        let cust = CustomerId("cust-001".to_string());
+        let now = Utc::now();
+
+        let overrides = vec![FeatureOverride {
+            feature_id: FeatureId::new("scoped_feature"),
+            scope: OverrideScope::System,
+            scope_id: "system".to_string(),
+            value: FeatureValue::Disabled,
+            owner: "admin".to_string(),
+            reason: "emergency".to_string(),
+            revision: 1,
+            created_at: now,
+            expires_at: None,
+        }];
+
+        let result = ev
+            .evaluate(
+                &FeatureId::new("scoped_feature"),
+                &dep,
+                &cust,
+                &overrides,
+                now,
+            )
             .unwrap();
         assert!(result.value.is_disabled());
         assert_eq!(result.winning_scope, OverrideScope::System);

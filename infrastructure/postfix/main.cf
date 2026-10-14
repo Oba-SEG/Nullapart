@@ -63,11 +63,16 @@ smtpd_sender_restrictions =
 # ==============================================================================
 # Recipient restrictions
 # ==============================================================================
+# Recipient validation is the relay_domains/relay_recipient_maps interface
+# above. reject_unknown_recipient_domain is intentionally not used here (and
+# is therefore identical to the master.cf smtp override): a DNS-existence
+# check only proves the domain has MX/A, rejects permanently during resolver
+# outages instead of deferring, and would reject the compose.local relay
+# domain (phase2.test) which has no public DNS.
 smtpd_recipient_restrictions =
     permit_mynetworks,
     reject_unauth_destination,
-    reject_non_fqdn_recipient,
-    reject_unknown_recipient_domain
+    reject_non_fqdn_recipient
 
 # ==============================================================================
 # RBL/DNSBL integration
@@ -78,8 +83,7 @@ smtpd_recipient_restrictions =
 #     reject_unauth_destination,
 #     reject_rbl_client zen.spamhaus.org,
 #     reject_rbl_client bl.spamcop.net,
-#     reject_non_fqdn_recipient,
-#     reject_unknown_recipient_domain
+#     reject_non_fqdn_recipient
 
 # ==============================================================================
 # TLS configuration

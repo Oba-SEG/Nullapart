@@ -5,6 +5,8 @@
 //! names and suggested next actions only. It never returns raw aggregate XML,
 //! failure-report samples, message content, SVG bytes or DNS resolver internals.
 
+use std::sync::{Arc, Mutex};
+
 use axum::{
     extract::{rejection::JsonRejection, Extension, State},
     http::{HeaderMap, StatusCode},
@@ -13,7 +15,10 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
-use nullapart_mail_contracts::transaction::DeploymentId;
+use nullapart_mail_contracts::{
+    rate_limit::{AppRateLimits, HighRiskLimits, RateLimitConfig, TokenBucket},
+    transaction::DeploymentId,
+};
 use nullapart_policy::{CustomerLifecycle, TenantContext};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -36,18 +41,63 @@ const AUDIT_SOURCE_CLASSIFICATION_CHANGED: &str = "domain_source_classification_
 const AUDIT_RESOURCE_SOURCE: &str = "domain_source";
 
 #[derive(Clone)]
-pub struct DomainSecurityState {
+pub struct DomainSecurityState(Arc<DomainSecurityStateInner>);
+
+struct DomainSecurityStateInner {
     pool: PgPool,
     deployment_id: DeploymentId,
+    /// Fail-closed read budget for the dashboard projection.
+    read_limiter: Mutex<TokenBucket>,
+    /// Fail-closed shared budget for source-classification mutations. Classifying
+    /// a sender changes the tenant's enforcement posture, so it is budgeted like
+    /// the other Control Plane high-risk mutations.
+    mutation_limiter: Mutex<TokenBucket>,
 }
 
 impl DomainSecurityState {
     pub fn new(pool: PgPool, deployment_id: DeploymentId) -> Self {
-        Self {
+        Self::build(
             pool,
             deployment_id,
-        }
+            AppRateLimits::api_read(),
+            HighRiskLimits::permission_change(),
+        )
     }
+
+    fn build(
+        pool: PgPool,
+        deployment_id: DeploymentId,
+        read_limit: RateLimitConfig,
+        mutation_limit: RateLimitConfig,
+    ) -> Self {
+        Self(Arc::new(DomainSecurityStateInner {
+            pool,
+            deployment_id,
+            read_limiter: Mutex::new(TokenBucket::new(&read_limit)),
+            mutation_limiter: Mutex::new(TokenBucket::new(&mutation_limit)),
+        }))
+    }
+}
+
+/// A fail-closed limit check: the bucket is consumed only while the guard is
+/// held, so a poisoned lock denies the request instead of silently allowing it.
+fn try_consume(limiter: &Mutex<TokenBucket>) -> bool {
+    limiter
+        .lock()
+        .map(|mut bucket| bucket.try_consume())
+        .unwrap_or(false)
+}
+
+fn rate_limited() -> Response {
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        [(axum::http::header::RETRY_AFTER, "60")],
+        Json(ApiErrorBody {
+            code: "RATE_LIMITED",
+            message: "Too many domain security requests",
+        }),
+    )
+        .into_response()
 }
 
 #[derive(Debug, Serialize)]
@@ -236,19 +286,22 @@ async fn get_domain_security(
         );
     };
     if context.customer_lifecycle != CustomerLifecycle::Active
-        || context.deployment_id != state.deployment_id
+        || context.deployment_id != state.0.deployment_id
         || !has_permission(&context, DOMAIN_SECURITY_VIEW_PERMISSION)
     {
         return api_error(StatusCode::FORBIDDEN, "FORBIDDEN", "Permission is required");
     }
+    if !try_consume(&state.0.read_limiter) {
+        return rate_limited();
+    }
 
-    let mut transaction = match state.pool.begin().await {
+    let mut transaction = match state.0.pool.begin().await {
         Ok(transaction) => transaction,
         Err(_) => return unavailable(),
     };
     if set_scope(
         &mut transaction,
-        &state.deployment_id.0,
+        &state.0.deployment_id.0,
         &context.customer_id.0,
     )
     .await
@@ -265,7 +318,7 @@ async fn get_domain_security(
          ORDER BY lower(d.domain)",
     )
     .bind(&context.customer_id.0)
-    .bind(&state.deployment_id.0)
+    .bind(&state.0.deployment_id.0)
     .fetch_all(&mut *transaction)
     .await
     {
@@ -275,7 +328,7 @@ async fn get_domain_security(
 
     let metrics = match load_dmarc_metrics(
         &mut transaction,
-        &state.deployment_id.0,
+        &state.0.deployment_id.0,
         &context.customer_id.0,
     )
     .await
@@ -285,7 +338,7 @@ async fn get_domain_security(
     };
     let sources = match load_sources(
         &mut transaction,
-        &state.deployment_id.0,
+        &state.0.deployment_id.0,
         &context.customer_id.0,
     )
     .await
@@ -295,7 +348,7 @@ async fn get_domain_security(
     };
     let authorizations = match load_authorizations(
         &mut transaction,
-        &state.deployment_id.0,
+        &state.0.deployment_id.0,
         &context.customer_id.0,
     )
     .await
@@ -305,7 +358,7 @@ async fn get_domain_security(
     };
     let bimi = match load_bimi(
         &mut transaction,
-        &state.deployment_id.0,
+        &state.0.deployment_id.0,
         &context.customer_id.0,
     )
     .await
@@ -315,7 +368,7 @@ async fn get_domain_security(
     };
     let observations = match load_observations(
         &mut transaction,
-        &state.deployment_id.0,
+        &state.0.deployment_id.0,
         &context.customer_id.0,
     )
     .await
@@ -325,7 +378,7 @@ async fn get_domain_security(
     };
     let notifications = match load_notifications(
         &mut transaction,
-        &state.deployment_id.0,
+        &state.0.deployment_id.0,
         &context.customer_id.0,
     )
     .await
@@ -423,7 +476,7 @@ async fn get_domain_security(
         StatusCode::OK,
         Json(ApiEnvelope {
             data: DomainSecurityResponse {
-                deployment_id: state.deployment_id.0,
+                deployment_id: state.0.deployment_id.0.clone(),
                 generated_at: Utc::now(),
                 summary,
                 domains,
@@ -448,7 +501,7 @@ async fn post_source_classification(
         );
     };
     if context.customer_lifecycle != CustomerLifecycle::Active
-        || context.deployment_id != state.deployment_id
+        || context.deployment_id != state.0.deployment_id
         || !has_permission(&context, DOMAIN_SECURITY_MANAGE_PERMISSION)
     {
         return api_error(StatusCode::FORBIDDEN, "FORBIDDEN", "Permission is required");
@@ -459,6 +512,9 @@ async fn post_source_classification(
             "STEP_UP_REQUIRED",
             "Step-up authentication is required",
         );
+    }
+    if !try_consume(&state.0.mutation_limiter) {
+        return rate_limited();
     }
     let key = match require_idempotency_key(&headers) {
         Ok(key) => key,
@@ -473,13 +529,13 @@ async fn post_source_classification(
         Err(()) => return invalid_request(),
     };
 
-    let mut transaction = match state.pool.begin().await {
+    let mut transaction = match state.0.pool.begin().await {
         Ok(transaction) => transaction,
         Err(_) => return unavailable(),
     };
     if set_scope(
         &mut transaction,
-        &state.deployment_id.0,
+        &state.0.deployment_id.0,
         &context.customer_id.0,
     )
     .await
@@ -507,7 +563,7 @@ async fn post_source_classification(
     )
     .bind(request.domain_id)
     .bind(&context.customer_id.0)
-    .bind(&state.deployment_id.0)
+    .bind(&state.0.deployment_id.0)
     .fetch_optional(&mut *transaction)
     .await
     {
@@ -521,7 +577,7 @@ async fn post_source_classification(
          FROM domain_source_classifications \
          WHERE deployment_id = $1 AND customer_id = $2 AND domain_id = $3 AND source_key = $4",
     )
-    .bind(&state.deployment_id.0)
+    .bind(&state.0.deployment_id.0)
     .bind(&context.customer_id.0)
     .bind(request.domain_id)
     .bind(&request.source_key)
@@ -556,7 +612,7 @@ async fn post_source_classification(
              updated_at = now() \
          RETURNING updated_at",
     )
-    .bind(&state.deployment_id.0)
+    .bind(&state.0.deployment_id.0)
     .bind(&context.customer_id.0)
     .bind(request.domain_id)
     .bind(&request.source_key)
@@ -575,7 +631,7 @@ async fn post_source_classification(
     if changed
         && write_source_classification_history(
             &mut transaction,
-            &state.deployment_id.0,
+            &state.0.deployment_id.0,
             &context,
             request.domain_id,
             &request,
@@ -589,7 +645,7 @@ async fn post_source_classification(
 
     if write_source_classification_audit(
         &mut transaction,
-        &state.deployment_id.0,
+        &state.0.deployment_id.0,
         &context,
         &headers,
         &domain,
@@ -1244,18 +1300,33 @@ fn api_error(status: StatusCode, code: &'static str, message: &'static str) -> R
 #[cfg(test)]
 mod tests {
     use axum::{body::Body, http::Request, Extension};
-    use nullapart_mail_contracts::{transaction::CustomerId, ActorId};
+    use nullapart_mail_contracts::{rate_limit::RateLimitConfig, transaction::CustomerId, ActorId};
     use nullapart_policy::{AuthenticationAssurance, ContextActor, RegionId};
+    use std::time::Duration;
+
     use sqlx::postgres::PgPoolOptions;
     use tower::ServiceExt;
 
     use super::*;
 
-    fn state() -> DomainSecurityState {
-        let pool = PgPoolOptions::new()
+    fn fast_failing_pool() -> PgPool {
+        PgPoolOptions::new()
+            .acquire_timeout(Duration::from_millis(75))
             .connect_lazy("postgresql://unused:unused@127.0.0.1:1/unused")
-            .expect("lazy test pool must parse");
-        DomainSecurityState::new(pool, DeploymentId::new("LOCAL-TEST"))
+            .expect("lazy test pool must parse")
+    }
+
+    fn state() -> DomainSecurityState {
+        DomainSecurityState::new(fast_failing_pool(), DeploymentId::new("LOCAL-TEST"))
+    }
+
+    fn state_with_budget(read_tokens: u64, mutation_tokens: u64) -> DomainSecurityState {
+        DomainSecurityState::build(
+            fast_failing_pool(),
+            DeploymentId::new("LOCAL-TEST"),
+            rate_limit_config(read_tokens, 0.0),
+            rate_limit_config(mutation_tokens, 0.0),
+        )
     }
 
     fn context(permissions: Vec<String>) -> TenantContext {
@@ -1309,5 +1380,173 @@ mod tests {
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    fn rate_limit_config(max_tokens: u64, refill_rate_per_sec: f64) -> RateLimitConfig {
+        RateLimitConfig {
+            max_tokens,
+            refill_rate_per_sec,
+            ..RateLimitConfig::default()
+        }
+    }
+
+    #[test]
+    fn limiter_helper_consumes_then_exhausts_the_budget() {
+        let limiter = Mutex::new(TokenBucket::new(&rate_limit_config(2, 0.0)));
+        assert!(try_consume(&limiter));
+        assert!(try_consume(&limiter));
+        assert!(!try_consume(&limiter));
+    }
+
+    #[test]
+    fn limiter_helper_denies_when_the_lock_is_poisoned() {
+        let limiter = Mutex::new(TokenBucket::new(&rate_limit_config(100, 0.0)));
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = limiter.lock().expect("lock");
+            panic!("poison the limiter lock");
+        }));
+        assert!(
+            !try_consume(&limiter),
+            "a poisoned limiter lock must fail closed instead of bypassing the budget"
+        );
+    }
+
+    #[tokio::test]
+    async fn default_state_wires_the_shared_read_and_high_risk_budgets() {
+        let state = state();
+        let read = AppRateLimits::api_read();
+        let mutation = HighRiskLimits::permission_change();
+        let read_limiter = state.0.read_limiter.lock().expect("lock");
+        assert_eq!(read_limiter.max_tokens, read.max_tokens as f64);
+        assert_eq!(read_limiter.refill_rate, read.refill_rate_per_sec);
+        drop(read_limiter);
+        let mutation_limiter = state.0.mutation_limiter.lock().expect("lock");
+        assert_eq!(mutation_limiter.max_tokens, mutation.max_tokens as f64);
+        assert_eq!(mutation_limiter.refill_rate, mutation.refill_rate_per_sec);
+    }
+
+    #[tokio::test]
+    async fn domain_security_read_route_enforces_the_api_read_budget() {
+        let router =
+            domain_security_router(state_with_budget(2, 5)).layer(Extension(context(vec![
+                DOMAIN_SECURITY_VIEW_PERMISSION.to_string(),
+            ])));
+        let request = || {
+            Request::builder()
+                .uri("/api/v1/domain-security")
+                .body(Body::empty())
+                .expect("request")
+        };
+        for _ in 0..2 {
+            let inside = router.clone().oneshot(request()).await.expect("response");
+            assert_eq!(
+                inside.status(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "a request inside the budget must reach the failing pool"
+            );
+        }
+        let denied = router.oneshot(request()).await.expect("response");
+        assert_eq!(denied.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            denied
+                .headers()
+                .get(axum::http::header::RETRY_AFTER)
+                .map(|value| value.to_str().expect("header value").to_string()),
+            Some("60".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn source_classification_route_enforces_the_high_risk_budget() {
+        let router =
+            domain_security_router(state_with_budget(100, 2)).layer(Extension(context(vec![
+                DOMAIN_SECURITY_MANAGE_PERMISSION.to_string(),
+            ])));
+        let payload = serde_json::json!({
+            "domain_id": Uuid::new_v4(),
+            "source_key": "203.0.113.10",
+            "source_ip": "203.0.113.10",
+            "classification": "authorized",
+            "notes": "budget test",
+        })
+        .to_string();
+        let request = || {
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/domain-security/source-classifications")
+                .header("content-type", "application/json")
+                .header("x-idempotency-key", "domain-security-budget-test")
+                .body(Body::from(payload.clone()))
+                .expect("request")
+        };
+        for _ in 0..2 {
+            let response = router.clone().oneshot(request()).await.expect("response");
+            assert_eq!(
+                response.status(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "every request inside the budget must reach the failing pool"
+            );
+        }
+        let denied = router.oneshot(request()).await.expect("response");
+        assert_eq!(denied.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[test]
+    fn source_classification_rejects_non_ip_source_addresses() {
+        for value in ["not-an-ip", "203.0.113.0/24", "2001:db8::1/64", "999.1.1.1"] {
+            let rejected = validate_source_classification(SourceClassificationRequest {
+                domain_id: Uuid::nil(),
+                source_key: "source".to_string(),
+                source_ip: Some(value.to_string()),
+                source_domain: None,
+                classification: SourceClassification::Authorized,
+                notes: None,
+            });
+            assert!(
+                rejected.is_err(),
+                "source_ip {value:?} must be rejected as a non-ip value"
+            );
+        }
+        let accepted = validate_source_classification(SourceClassificationRequest {
+            domain_id: Uuid::nil(),
+            source_key: "source".to_string(),
+            source_ip: Some("203.0.113.10".to_string()),
+            source_domain: Some("sender.example.test".to_string()),
+            classification: SourceClassification::Authorized,
+            notes: None,
+        });
+        assert!(accepted.is_ok(), "a valid ip must be accepted");
+    }
+
+    #[test]
+    fn source_classification_rejects_oversized_or_control_source_fields() {
+        let oversize_key = "a".repeat(SOURCE_KEY_MAX_LEN + 1);
+        assert!(validate_source_classification(SourceClassificationRequest {
+            domain_id: Uuid::nil(),
+            source_key: oversize_key,
+            source_ip: None,
+            source_domain: None,
+            classification: SourceClassification::Unknown,
+            notes: None,
+        })
+        .is_err());
+        assert!(validate_source_classification(SourceClassificationRequest {
+            domain_id: Uuid::nil(),
+            source_key: "source\u{0000}key".to_string(),
+            source_ip: None,
+            source_domain: None,
+            classification: SourceClassification::Unknown,
+            notes: None,
+        })
+        .is_err());
+        assert!(validate_source_classification(SourceClassificationRequest {
+            domain_id: Uuid::nil(),
+            source_key: "source".to_string(),
+            source_ip: None,
+            source_domain: Some("sender\u{0007}@example.test".to_string()),
+            classification: SourceClassification::Unknown,
+            notes: None,
+        })
+        .is_err());
     }
 }

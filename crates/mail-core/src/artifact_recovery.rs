@@ -59,12 +59,23 @@ pub async fn recover_persisted_artifacts(
     store: &FilesystemArtifactStore,
     deployment_id: &str,
 ) -> Result<ArtifactRecoveryReport, sqlx::Error> {
-    let customers = sqlx::query_scalar::<_, String>(
-        "SELECT id FROM customers WHERE deployment_id = $1 ORDER BY id",
-    )
-    .bind(deployment_id)
-    .fetch_all(pool)
-    .await?;
+    let customers = {
+        // customers carries FORCE RLS (migration 034); an unscoped pool read
+        // matches zero rows and recovery would silently recover nothing.
+        let mut transaction = pool.begin().await?;
+        sqlx::query("SELECT set_config('app.current_deployment_id', $1, true)")
+            .bind(deployment_id)
+            .execute(&mut *transaction)
+            .await?;
+        let ids = sqlx::query_scalar::<_, String>(
+            "SELECT id FROM customers WHERE deployment_id = $1 ORDER BY id",
+        )
+        .bind(deployment_id)
+        .fetch_all(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        ids
+    };
 
     let mut report = ArtifactRecoveryReport::default();
     for customer in customers {

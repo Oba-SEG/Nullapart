@@ -105,12 +105,26 @@ const baseSnapshot = {
   audit_history: [],
 };
 
-function mockFetch(snapshot = baseSnapshot) {
+type MutationPath = "/connectors-remediation/connectors" | "/connectors-remediation/remediations";
+
+function mockFetch(snapshot = baseSnapshot, options: { stepUpPath?: MutationPath } = {}) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? "GET";
     if (url.endsWith("/auth/session")) {
       return Response.json({ data: managerSession });
+    }
+    if (method === "POST" && options.stepUpPath && url.endsWith(options.stepUpPath)) {
+      expect(init?.headers).toEqual(
+        expect.objectContaining({
+          "X-Idempotency-Key": expect.any(String),
+          "X-CSRF-Token": "csrf-token",
+        }),
+      );
+      return Response.json(
+        { code: "STEP_UP_REQUIRED", message: "Step-up authentication is required" },
+        { status: 403 },
+      );
     }
     if (method === "POST" && url.endsWith("/connectors-remediation/connectors")) {
       expect(init?.headers).toEqual(
@@ -221,5 +235,48 @@ describe("ConnectorsRemediation", () => {
         ),
       ).toBe(true);
     });
+  });
+
+  it("surfaces the step-up re-auth prompt when connector save is rejected", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch(baseSnapshot, { stepUpPath: "/connectors-remediation/connectors" }),
+    );
+    renderAt();
+    await screen.findByText("Save connector");
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Display name"), "Google Workspace ZA");
+    await user.type(screen.getByLabelText("External tenant hash"), "tenant_hash_abcdef");
+    await user.type(screen.getByLabelText("Credential reference hash"), "credential_hash_abcdef");
+    await user.type(
+      screen.getAllByLabelText("Reason")[0],
+      "Directory sync for address validation.",
+    );
+    await user.click(screen.getByText("Save connector"));
+    expect(await screen.findByText("Re-authentication is required for this action.")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Re-authenticate" })).toBeTruthy();
+  });
+
+  it("surfaces the step-up re-auth prompt when a remediation request is rejected", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch(baseSnapshot, { stepUpPath: "/connectors-remediation/remediations" }),
+    );
+    renderAt();
+    await screen.findByText("Record remediation intent");
+    const user = userEvent.setup();
+    await user.selectOptions(
+      screen.getByLabelText("Connector"),
+      "11111111-1111-1111-1111-111111111111",
+    );
+    await user.type(
+      screen.getByLabelText("Tenant message ID"),
+      "44444444-4444-4444-4444-444444444444",
+    );
+    await user.type(screen.getByLabelText("Mailbox address hash"), "mailbox_hash_abcdef");
+    await user.type(screen.getAllByLabelText("Reason")[1], "Post delivery threat remediation.");
+    await user.click(screen.getByText("Record remediation intent"));
+    expect(await screen.findByText("Re-authentication is required for this action.")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Re-authenticate" })).toBeTruthy();
   });
 });

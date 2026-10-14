@@ -69,11 +69,17 @@ impl PostgresPhase2Persistence {
             .begin()
             .await
             .map_err(|_| Phase2PersistenceError::Unavailable)?;
-        sqlx::query("SELECT set_config('app.current_customer_id', $1, true)")
-            .bind(&input.context.customer_id.0)
-            .execute(&mut *transaction)
-            .await
-            .map_err(|_| Phase2PersistenceError::Unavailable)?;
+        // smtp_transactions and related tables carry FORCE RLS (migration
+        // 034); both GUCs must be set before any join/insert/update below.
+        sqlx::query(
+            "SELECT set_config('app.current_deployment_id', $1, true), \
+                    set_config('app.current_customer_id', $2, true)",
+        )
+        .bind(&input.context.deployment_id.0)
+        .bind(&input.context.customer_id.0)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| Phase2PersistenceError::Unavailable)?;
 
         let owned_message = sqlx::query_scalar::<_, i32>(
             "SELECT 1 FROM tenant_message_instances AS message \

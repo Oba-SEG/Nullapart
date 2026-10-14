@@ -643,7 +643,9 @@ impl ScannerFabric {
                             &meta,
                             &target,
                             OutcomeFailure {
-                                failure_type: FailureType::ResourceLimit,
+                                // Content-integrity/hash preflight failure is
+                                // an integrity error, not a resource limit.
+                                failure_type: FailureType::Error,
                                 message: CONTENT_INTEGRITY_MISMATCH_MESSAGE.to_string(),
                                 retryable: false,
                                 status: ScannerStatus::Unknown,
@@ -1818,5 +1820,34 @@ mod tests {
             a, scan_request_id,
             "derived ID is never the operation correlation ID"
         );
+    }
+
+    #[test]
+    fn content_type_matches_wildcard_and_prefix() {
+        assert!(content_type_matches("*", "message/rfc822"));
+        assert!(content_type_matches("*", "application/pdf"));
+        assert!(content_type_matches("*", "anything/at-all"));
+
+        assert!(content_type_matches("message/*", "message/rfc822"));
+        assert!(content_type_matches("message/*", "message/global"));
+        assert!(!content_type_matches("message/*", "application/pdf"));
+        assert!(!content_type_matches("message/*", "messagex/rfc822"));
+        assert!(!content_type_matches("message/*", "message"));
+
+        assert!(content_type_matches("application/*", "application/pdf"));
+        assert!(content_type_matches(
+            "application/*",
+            "application/octet-stream"
+        ));
+        assert!(!content_type_matches("application/*", "text/plain"));
+    }
+
+    #[test]
+    fn content_type_matches_exact_and_mismatch() {
+        assert!(content_type_matches("message/rfc822", "message/rfc822"));
+        assert!(!content_type_matches("message/rfc822", "message/global"));
+        assert!(!content_type_matches("message/rfc822", "MESSAGE/RFC822"));
+        assert!(!content_type_matches("message/rfc822", "message/rfc822x"));
+        assert!(!content_type_matches("", "message/rfc822"));
     }
 }

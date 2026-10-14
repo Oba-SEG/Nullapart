@@ -31,10 +31,23 @@ impl RateLimitKey {
     }
 
     /// Composite key for Redis storage.
+    ///
+    /// Segments are percent-escaped so that `:` (the separator) and `%`
+    /// (the escape character) inside a segment can never collide with a
+    /// different segment layout — e.g. `("a", "b:c")` must not produce the
+    /// same key as `("a:b", "c")`.
     pub fn redis_key(&self) -> String {
+        fn escape(segment: &str) -> String {
+            segment.replace('%', "%25").replace(':', "%3A")
+        }
         match &self.action {
-            Some(action) => format!("rl:{}:{}:{}", self.namespace, self.principal, action),
-            None => format!("rl:{}:{}", self.namespace, self.principal),
+            Some(action) => format!(
+                "rl:{}:{}:{}",
+                escape(&self.namespace),
+                escape(&self.principal),
+                escape(action)
+            ),
+            None => format!("rl:{}:{}", escape(&self.namespace), escape(&self.principal)),
         }
     }
 }
@@ -306,14 +319,24 @@ impl TokenBucket {
     }
 
     /// Time until next token is available.
+    ///
+    /// Returns `None` when a token is already available. A bucket with a
+    /// non-positive refill rate never recovers a token on its own; the wait
+    /// is clamped to a finite cap rather than returning `inf` (which is not
+    /// representable in JSON and would poison any downstream arithmetic).
     pub fn retry_after_secs(&self) -> Option<f64> {
         if self.tokens >= 1.0 {
             None
+        } else if self.refill_rate <= 0.0 {
+            Some(MAX_RETRY_AFTER_SECS)
         } else {
             Some((1.0 - self.tokens) / self.refill_rate)
         }
     }
 }
+
+/// Clamp for `retry_after_secs` on a bucket that never refills.
+const MAX_RETRY_AFTER_SECS: f64 = 86_400.0;
 
 #[cfg(test)]
 mod tests {
@@ -324,11 +347,68 @@ mod tests {
         let key = RateLimitKey::new("smtp", "192.168.1.1");
         assert_eq!(key.redis_key(), "rl:smtp:192.168.1.1");
 
+        // `:` inside the action segment is escaped so it cannot be confused
+        // with a segment boundary.
         let key = key.with_action("sender:test@example.com");
         assert_eq!(
             key.redis_key(),
-            "rl:smtp:192.168.1.1:sender:test@example.com"
+            "rl:smtp:192.168.1.1:sender%3Atest@example.com"
         );
+    }
+
+    #[test]
+    fn rate_limit_key_segments_never_collide() {
+        let a = RateLimitKey::new("a", "b").with_action("c");
+        let b = RateLimitKey::new("a", "b:c");
+        assert_ne!(
+            a.redis_key(),
+            b.redis_key(),
+            "different segment layouts must map to different Redis keys"
+        );
+
+        let c = RateLimitKey::new("a:b", "c");
+        assert_ne!(a.redis_key(), c.redis_key());
+        assert_ne!(b.redis_key(), c.redis_key());
+
+        // `%` must be escaped too, otherwise "%3A" inside a segment could
+        // forge an escaped `:` from a literal segment boundary.
+        let forged = RateLimitKey::new("a", "b%3Ac");
+        assert_ne!(b.redis_key(), forged.redis_key());
+        assert_eq!(forged.redis_key(), "rl:a:b%253Ac");
+    }
+
+    #[test]
+    fn retry_after_on_never_refilling_bucket_is_finite() {
+        let config = RateLimitConfig {
+            max_tokens: 1,
+            refill_rate_per_sec: 0.0,
+            ..Default::default()
+        };
+        let mut bucket = TokenBucket::new(&config);
+        assert!(bucket.try_consume());
+        assert!(!bucket.try_consume());
+        let retry_after = bucket.retry_after_secs();
+        assert!(retry_after.is_some());
+        let retry_after = retry_after.expect("drained bucket must report a wait");
+        assert!(
+            retry_after.is_finite(),
+            "retry_after_secs must never be inf/NaN"
+        );
+        assert_eq!(retry_after, MAX_RETRY_AFTER_SECS);
+    }
+
+    #[test]
+    fn retry_after_on_positive_refill_rate_is_proportional() {
+        let config = RateLimitConfig {
+            max_tokens: 1,
+            refill_rate_per_sec: 2.0,
+            ..Default::default()
+        };
+        let mut bucket = TokenBucket::new(&config);
+        assert!(bucket.try_consume());
+        let retry_after = bucket.retry_after_secs().expect("drained bucket waits");
+        assert!(retry_after.is_finite());
+        assert!((retry_after - 0.5).abs() < f64::EPSILON);
     }
 
     #[test]

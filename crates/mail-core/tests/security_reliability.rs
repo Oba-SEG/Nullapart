@@ -17,8 +17,13 @@ use nullapart_mail_contracts::{
     PolicyRevisionId, SecurityFinding,
 };
 use nullapart_mail_core::{
+    delivery::classify_smtp_response,
     handoff::{AfterQueueHandoffRequest, HandoffConfig, HandoffConnection, MilterObservations},
     node::{MailNodeConfig, PortList},
+    outbound::{
+        validate_outbound, ConnectorType, DomainAuthorization, DomainValidation,
+        DomainValidationSource, OutboundConnector, OutboundError, OutboundIntakeRequest,
+    },
     partition::{DomainMapping, MappingSource, PartitionConfig, TenantResolver},
     policy::{PolicyEvaluationRequest, PolicyRuleEvaluator},
     reinjection::{LoopPreventionHeader, ReinjectionConfig},
@@ -29,14 +34,124 @@ use sha2::Digest;
 // SMTP/Security tests
 // ============================================================================
 
+/// The relay path is the outbound intake gate: [`validate_outbound`] is the
+/// only code that may authorise relaying a submission to an external
+/// destination. It takes an explicit sender-domain allow-list plus a
+/// [`DomainAuthorization`] level, so the fail-closed default is the *empty*
+/// configuration: no allow-listed domain may relay at any authorization
+/// level, and no default tenant may absorb an unmapped recipient.
+fn relay_request() -> OutboundIntakeRequest {
+    OutboundIntakeRequest {
+        connector: OutboundConnector {
+            connector_id: "conn-1".to_string(),
+            customer_id: CustomerId::new("cust-a"),
+            deployment_id: DeploymentId::new("CZA-1"),
+            ip_address: "192.0.2.10".to_string(),
+            authenticated_as: Some("connector-identity".to_string()),
+            connector_type: ConnectorType::SmtpMta,
+        },
+        envelope_sender: EnvelopeSender::new("sender@tenant-a.com"),
+        recipients: vec![Recipient {
+            address: "recipient@external.example".to_string(),
+            orcpt: None,
+            notify: None,
+        }],
+        message_id: None,
+        content_hash: "content-hash".to_string(),
+    }
+}
+
+fn validated_sender_domain(customer_id: CustomerId) -> DomainValidation {
+    DomainValidation {
+        domain: "tenant-a.com".to_string(),
+        customer_id,
+        validated: true,
+        validation_source: DomainValidationSource::DnsTxt,
+        validated_at: chrono::Utc::now(),
+    }
+}
+
 #[test]
 fn open_relay_default_deny() {
-    // Postfix baseline: relay_domains is empty, relay_recipient_maps is empty.
-    // This means no recipient is accepted for relay by default.
-    let config = ReinjectionConfig::default();
+    let empty_allow_list: &[DomainValidation] = &[];
+    for authorization in [
+        DomainAuthorization::Internal,
+        DomainAuthorization::SendOnly,
+        DomainAuthorization::Full,
+    ] {
+        let result = validate_outbound(&relay_request(), empty_allow_list, &authorization);
+        assert!(
+            matches!(result, Err(OutboundError::DomainNotAuthorized(_))),
+            "an empty allow-list must deny relay for {authorization:?}, got {result:?}"
+        );
+    }
+
+    // Partitioning is the inbound half of the same default-deny surface: an
+    // unmapped recipient must never fall into a default customer, because
+    // that would silently become a relay target.
+    let partition = PartitionConfig::default();
     assert!(
-        config.max_reinjection_attempts > 0,
-        "max reinjection attempts must be bounded"
+        partition.default_customer_id.is_none(),
+        "no default tenant may absorb unmapped recipients"
+    );
+}
+
+#[test]
+fn relay_path_fails_closed_for_unauthenticated_unvalidated_and_foreign_senders() {
+    let authorized = vec![validated_sender_domain(CustomerId::new("cust-a"))];
+
+    // The least-privileged authorization never relays, even for a domain that
+    // is validated and owned by the connector's customer.
+    let internal = validate_outbound(
+        &relay_request(),
+        &authorized,
+        &DomainAuthorization::Internal,
+    );
+    assert!(
+        matches!(internal, Err(OutboundError::DomainNotAuthorized(_))),
+        "Internal-only authorization must deny external relay, got {internal:?}"
+    );
+
+    // No authenticated connector identity means no relay, even with a
+    // fully validated allow-list.
+    let mut anonymous = relay_request();
+    anonymous.connector.authenticated_as = None;
+    let unauthenticated = validate_outbound(&anonymous, &authorized, &DomainAuthorization::Full);
+    assert!(
+        matches!(unauthenticated, Err(OutboundError::NotAuthenticated)),
+        "an unauthenticated connector must be denied, got {unauthenticated:?}"
+    );
+
+    // An unvalidated domain never relays.
+    let unvalidated = vec![DomainValidation {
+        validated: false,
+        ..validated_sender_domain(CustomerId::new("cust-a"))
+    }];
+    let unvalidated_result =
+        validate_outbound(&relay_request(), &unvalidated, &DomainAuthorization::Full);
+    assert!(
+        matches!(
+            unvalidated_result,
+            Err(OutboundError::DomainNotAuthorized(_))
+        ),
+        "an unvalidated sender domain must be denied, got {unvalidated_result:?}"
+    );
+
+    // A domain validated for a *different* customer never relays.
+    let foreign = vec![validated_sender_domain(CustomerId::new("cust-b"))];
+    let foreign_result = validate_outbound(&relay_request(), &foreign, &DomainAuthorization::Full);
+    assert!(
+        matches!(foreign_result, Err(OutboundError::DomainNotAuthorized(_))),
+        "a cross-customer sender domain must be denied, got {foreign_result:?}"
+    );
+
+    // The permitted path still succeeds, so the denials above are
+    // configuration denials rather than a broken gate that rejects
+    // everything (which would hide a real open-relay regression).
+    let permitted = validate_outbound(&relay_request(), &authorized, &DomainAuthorization::Full);
+    assert!(
+        permitted.is_ok(),
+        "an authenticated, validated, owned sender domain must relay, got {permitted:?}"
     );
 }
 
@@ -408,16 +523,120 @@ fn wrong_tenant_lookup_returns_no_data() {
 // ============================================================================
 
 #[test]
-fn tier3_sli_statuses_representable() {
-    let success = nullapart_mail_contracts::transaction::DeliveryStatus::Success;
-    let transient = nullapart_mail_contracts::transaction::DeliveryStatus::TransientFailure;
-    let permanent = nullapart_mail_contracts::transaction::DeliveryStatus::PermanentFailure;
-    let pending = nullapart_mail_contracts::transaction::DeliveryStatus::Pending;
+fn tier3_delivery_sli_statuses_have_documented_docs_30_meanings() {
+    use nullapart_mail_contracts::transaction::DeliveryStatus;
 
-    assert_ne!(format!("{:?}", success), "");
-    assert_ne!(format!("{:?}", transient), "");
-    assert_ne!(format!("{:?}", permanent), "");
-    assert_ne!(format!("{:?}", pending), "");
+    // docs/30-RELIABILITY-SLO-ERROR-BUDGETS.md defines the Tier-3 indicators:
+    // "accepted messages not lost after Nullapart 250" (durability),
+    // "accepted tenant instances reaching a valid terminal/queued state"
+    // (mail processing) and delivery retry/terminal failure rate. Every
+    // recorded status must land in exactly one of those buckets, and the
+    // match is exhaustive: adding a status without classifying it fails the
+    // build instead of silently landing in an SLI bucket.
+    let sli_bucket = |status: DeliveryStatus| match status {
+        DeliveryStatus::Success => "delivered",
+        DeliveryStatus::TransientFailure => "retrying",
+        DeliveryStatus::PermanentFailure => "terminal_failure",
+        DeliveryStatus::Bounced => "terminal_failure",
+        DeliveryStatus::Pending => "queued_not_terminal",
+        DeliveryStatus::InProgress => "queued_not_terminal",
+    };
+
+    assert_eq!(sli_bucket(DeliveryStatus::Success), "delivered");
+    assert_eq!(sli_bucket(DeliveryStatus::TransientFailure), "retrying");
+    assert_eq!(
+        sli_bucket(DeliveryStatus::PermanentFailure),
+        "terminal_failure"
+    );
+    assert_eq!(sli_bucket(DeliveryStatus::Bounced), "terminal_failure");
+    assert_eq!(sli_bucket(DeliveryStatus::Pending), "queued_not_terminal");
+    assert_eq!(
+        sli_bucket(DeliveryStatus::InProgress),
+        "queued_not_terminal"
+    );
+
+    // Retryable and bounced states must never be conflated with delivery
+    // success: docs/30 forbids trading accepted-mail durability for a good
+    // looking number.
+    assert_ne!(DeliveryStatus::TransientFailure, DeliveryStatus::Success);
+    assert_ne!(DeliveryStatus::Bounced, DeliveryStatus::Success);
+    assert_ne!(DeliveryStatus::Pending, DeliveryStatus::Success);
+}
+
+#[test]
+fn tier3_delivery_sli_classification_never_fabricates_success() {
+    use nullapart_mail_contracts::transaction::DeliveryStatus;
+
+    // The production mapping from a downstream SMTP response to the recorded
+    // delivery status is what the mail-processing and durability SLIs are
+    // measured on: only a 2xx may count as success, 4xx keeps the message
+    // retrying (retained, not lost), 5xx is terminal, and a code outside the
+    // SMTP classes must never be reported as success.
+    assert_eq!(classify_smtp_response(250), DeliveryStatus::Success);
+    assert_eq!(classify_smtp_response(200), DeliveryStatus::Success);
+    assert_eq!(
+        classify_smtp_response(421),
+        DeliveryStatus::TransientFailure
+    );
+    assert_eq!(
+        classify_smtp_response(452),
+        DeliveryStatus::TransientFailure
+    );
+    assert_eq!(
+        classify_smtp_response(550),
+        DeliveryStatus::PermanentFailure
+    );
+    assert_eq!(
+        classify_smtp_response(554),
+        DeliveryStatus::PermanentFailure
+    );
+    for code in [0, 100, 1000, u32::MAX] {
+        assert_ne!(
+            classify_smtp_response(code),
+            DeliveryStatus::Success,
+            "non-SMTP code {code} must not be reported as delivery success"
+        );
+    }
+}
+
+#[test]
+fn required_scanner_sli_statuses_never_report_unknown_or_error_as_clean() {
+    use nullapart_mail_contracts::finding::ScannerStatus;
+
+    // docs/30: the required scanner path is "required scan attempts yielding
+    // valid result or explicit policy-safe handling", with "scanner
+    // UNKNOWN/ERROR rate" tracked as a failure signal. Unknown/Error are
+    // failures for that SLI and may never take the Clean value; the match is
+    // exhaustive so a new status must be classified deliberately.
+    let yields_valid_result = |status: ScannerStatus| match status {
+        ScannerStatus::Clean
+        | ScannerStatus::Threat
+        | ScannerStatus::Suspicious
+        | ScannerStatus::NotApplicable => true,
+        ScannerStatus::Unknown | ScannerStatus::Error => false,
+    };
+
+    assert!(yields_valid_result(ScannerStatus::Clean));
+    assert!(yields_valid_result(ScannerStatus::Threat));
+    assert!(yields_valid_result(ScannerStatus::Suspicious));
+    assert!(yields_valid_result(ScannerStatus::NotApplicable));
+    assert!(!yields_valid_result(ScannerStatus::Unknown));
+    assert!(!yields_valid_result(ScannerStatus::Error));
+
+    // The measurement surface must keep the three values distinguishable, so
+    // no aggregation can collapse an unknown/error run into "clean".
+    assert_eq!(
+        serde_json::to_value(ScannerStatus::Clean).expect("status must serialize"),
+        "clean"
+    );
+    assert_eq!(
+        serde_json::to_value(ScannerStatus::Unknown).expect("status must serialize"),
+        "unknown"
+    );
+    assert_eq!(
+        serde_json::to_value(ScannerStatus::Error).expect("status must serialize"),
+        "error"
+    );
 }
 
 #[test]

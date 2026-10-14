@@ -702,6 +702,22 @@ async fn begin_claim(
         .map_err(|_| unavailable())
 }
 
+/// The operation name a refresh key is claimed under. It binds the
+/// authenticated deployment and customer plus the resolved scope, so a key
+/// already claimed in another session resolves to `OperationMismatch` instead
+/// of replaying that session's stored response into this one.
+fn refresh_operation(
+    target: RefreshTarget,
+    deployment_id: &str,
+    customer_id: &str,
+    scope_id: &str,
+) -> String {
+    format!(
+        "runtime:refresh:{}:{deployment_id}:{customer_id}:{scope_id}",
+        target.as_str()
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Projection helpers
 // ---------------------------------------------------------------------------
@@ -1148,7 +1164,12 @@ async fn post_refresh(
         }
     }
 
-    let operation = format!("runtime:refresh:{}", body.target.as_str());
+    let operation = refresh_operation(
+        body.target,
+        &state.0.deployment_id.0,
+        &context.customer_id.0,
+        &scope_id,
+    );
     let outcome = match begin_claim(&mut transaction, &key, &operation).await {
         Ok(outcome) => outcome,
         Err(response) => return response,
@@ -1580,5 +1601,39 @@ mod tests {
         assert_eq!(stale(None, Some(10)), None);
         assert_eq!(stale(Some(5), None), None);
         assert_eq!(stale(None, None), None);
+    }
+
+    #[test]
+    fn idempotent_refresh_replays_are_scoped_to_session_and_target() {
+        let tenant_a = refresh_operation(RefreshTarget::Tenant, "DEP-A", "cust-a", "cust-a");
+        let tenant_b = refresh_operation(RefreshTarget::Tenant, "DEP-A", "cust-b", "cust-b");
+        let other_deployment =
+            refresh_operation(RefreshTarget::Tenant, "DEP-B", "cust-a", "cust-a");
+        let deployment_scope_a =
+            refresh_operation(RefreshTarget::Deployment, "DEP-A", "cust-a", "DEP-A");
+        let deployment_scope_b =
+            refresh_operation(RefreshTarget::Deployment, "DEP-A", "cust-b", "DEP-A");
+        let node_a = refresh_operation(RefreshTarget::Node, "DEP-A", "cust-a", "mx-1");
+        let node_b = refresh_operation(RefreshTarget::Node, "DEP-A", "cust-a", "mx-2");
+
+        assert_ne!(
+            tenant_a, tenant_b,
+            "a key claimed by one tenant must not replay another tenant's response"
+        );
+        assert_ne!(
+            tenant_a, other_deployment,
+            "a key claimed in one deployment must not replay another deployment's response"
+        );
+        assert_ne!(
+            deployment_scope_a, deployment_scope_b,
+            "a key claimed by one customer must not replay another customer's deployment refresh"
+        );
+        assert_ne!(node_a, node_b, "one key may only cover one node target");
+        // The name is stable for the same session and scope so an honest retry
+        // still replays its own completed response.
+        assert_eq!(
+            tenant_a,
+            refresh_operation(RefreshTarget::Tenant, "DEP-A", "cust-a", "cust-a")
+        );
     }
 }

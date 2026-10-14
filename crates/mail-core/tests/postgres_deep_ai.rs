@@ -355,6 +355,40 @@ async fn deep_ai_tables_fail_closed_and_isolate_by_tenant() {
 
 #[tokio::test]
 #[ignore = "requires migrated local PostgreSQL through 030_deep_ai.sql"]
+async fn artifact_grant_rejects_unknown_skill_version() {
+    let pool = connect().await;
+    ensure_request_role(&pool).await;
+    let fixture = seed(&pool).await;
+
+    let mut transaction = begin_request(
+        &pool,
+        Some(&fixture.deployment_a),
+        Some(&fixture.customer_a),
+    )
+    .await;
+    expect_rejected(
+        &mut transaction,
+        sqlx::query(
+            "INSERT INTO deep_ai_artifact_access_grants \
+                (deployment_id, customer_id, artifact_id, resource_type, purpose, skill_id, \
+                 skill_version, artifact_type, expires_at, created_by) \
+             VALUES ($1,$2,$3,'reported_phishing','security_analysis', \
+                 'security.message.deep_analysis','v99','message_rfc822', \
+                 now() + interval '10 minutes', 'attacker')",
+        )
+        .bind(&fixture.deployment_a)
+        .bind(&fixture.customer_a)
+        .bind(fixture.artifact_a),
+    )
+    .await;
+    transaction
+        .rollback()
+        .await
+        .expect("transaction must roll back");
+}
+
+#[tokio::test]
+#[ignore = "requires migrated local PostgreSQL through 030_deep_ai.sql"]
 async fn training_governance_and_benchmarks_are_deployment_scoped() {
     let pool = connect().await;
     ensure_request_role(&pool).await;

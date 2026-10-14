@@ -29,8 +29,9 @@ use crate::artifact_store::FilesystemArtifactStore;
 use crate::dmarc_mailbox_ingress::ingest_dmarc_report_mailbox_message;
 use crate::domain_auth_telemetry::{project_handoff_auth_telemetry, DomainAuthTelemetryInput};
 use crate::handoff::{
-    deterministic_transaction_id, process_handoff, verify_request_auth, AfterQueueHandoffRequest,
-    AfterQueueHandoffResponse, HandoffConfig, HandoffStatus, HANDOFF_PATH,
+    deterministic_transaction_id, handoff_body_limit, process_handoff, verify_request_auth,
+    AfterQueueHandoffRequest, AfterQueueHandoffResponse, HandoffConfig, HandoffStatus,
+    HANDOFF_PATH,
 };
 use crate::policy::PolicyEvaluationResult;
 use crate::scanner_pipeline::{DurableScannerPipeline, TenantScanContext};
@@ -62,9 +63,9 @@ impl DurableHandoffState {
 pub fn durable_handoff_router(state: DurableHandoffState) -> Router {
     Router::new()
         .route(HANDOFF_PATH, post(handle_durable_handoff))
-        .layer(axum::extract::DefaultBodyLimit::max(
-            state.config.max_message_size as usize,
-        ))
+        .layer(axum::extract::DefaultBodyLimit::max(handoff_body_limit(
+            state.config.max_message_size,
+        )))
         .with_state(state)
 }
 
@@ -264,6 +265,13 @@ async fn prepare_tenant_rows(
     let mut transaction = state
         .pool
         .begin()
+        .await
+        .map_err(|_| PrepareError::Unavailable)?;
+    // handoff_idempotency carries FORCE RLS keyed on deployment_id (migration
+    // 034), so the claim/select must run under the deployment GUC.
+    sqlx::query("SELECT set_config('app.current_deployment_id', $1, true)")
+        .bind(&state.config.deployment_id.0)
+        .execute(&mut *transaction)
         .await
         .map_err(|_| PrepareError::Unavailable)?;
     let existing = sqlx::query(

@@ -191,11 +191,25 @@ pub fn process_handoff(
 }
 
 pub fn handoff_router(config: HandoffConfig) -> Router {
-    let body_limit = config.max_message_size as usize;
+    let body_limit = handoff_body_limit(config.max_message_size);
     Router::new()
         .route(HANDOFF_PATH, post(handle_handoff))
         .layer(axum::extract::DefaultBodyLimit::max(body_limit))
         .with_state(config)
+}
+
+/// HTTP body limit for the JSON + base64 handoff envelope.
+///
+/// `max_message_size` bounds the raw message, but the transport carries the
+/// message base64-encoded inside JSON. A raw message of exactly the maximum
+/// size therefore encodes to `ceil(n/3) * 4` characters before any envelope
+/// fields, so an equal-sized limit rejects valid maximum-size messages with
+/// 413 before the handler runs. The fixed headroom covers the JSON envelope
+/// (recipients, connection, milter observations) around the encoded message.
+pub(crate) fn handoff_body_limit(max_message_size: u64) -> usize {
+    const HANDOFF_ENVELOPE_HEADROOM: usize = 1024 * 1024;
+    let base64_expanded = (max_message_size as usize).div_ceil(3) * 4;
+    base64_expanded.saturating_add(HANDOFF_ENVELOPE_HEADROOM)
 }
 
 pub(crate) fn verify_request_auth(
@@ -322,6 +336,18 @@ impl HandoffIdempotencyStore for PostgresHandoffIdempotencyStore {
         }
 
         let transaction_id = TransactionId::new();
+        // handoff_idempotency carries FORCE RLS keyed on deployment_id
+        // (migration 034); claim/select must run under the deployment GUC.
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| HandoffIdempotencyError::Unavailable)?;
+        sqlx::query("SELECT set_config('app.current_deployment_id', $1, true)")
+            .bind(&deployment_id.0)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| HandoffIdempotencyError::Unavailable)?;
         let inserted = sqlx::query_scalar::<_, Uuid>(
             "INSERT INTO handoff_idempotency \
              (deployment_id, postfix_queue_id, content_hash, transaction_id) \
@@ -333,11 +359,15 @@ impl HandoffIdempotencyStore for PostgresHandoffIdempotencyStore {
         .bind(postfix_queue_id)
         .bind(content_hash)
         .bind(transaction_id.0)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| HandoffIdempotencyError::Unavailable)?;
 
         if let Some(transaction_id) = inserted {
+            transaction
+                .commit()
+                .await
+                .map_err(|_| HandoffIdempotencyError::Unavailable)?;
             return Ok(HandoffIdempotencyResult {
                 transaction_id: TransactionId(transaction_id),
                 duplicate: false,
@@ -351,9 +381,13 @@ impl HandoffIdempotencyStore for PostgresHandoffIdempotencyStore {
         )
         .bind(&deployment_id.0)
         .bind(postfix_queue_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| HandoffIdempotencyError::Unavailable)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| HandoffIdempotencyError::Unavailable)?;
 
         let (stored_hash, stored_transaction_id) =
             existing.ok_or(HandoffIdempotencyError::Unavailable)?;

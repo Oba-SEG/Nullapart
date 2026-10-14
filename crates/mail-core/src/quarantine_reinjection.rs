@@ -15,7 +15,7 @@ use nullapart_mail_contracts::artifact::{
 };
 use nullapart_mail_contracts::transaction::{CustomerId, DeploymentId};
 use serde_json::Value;
-use sqlx::{PgPool, Postgres, Row, Transaction};
+use sqlx::{pool::PoolConnection, PgPool, Postgres, Row, Transaction};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use uuid::Uuid;
@@ -128,26 +128,37 @@ impl QuarantineReinjectionWorker {
     }
 
     pub async fn run_once(&self) -> Result<ReinjectionRunOutcome, ReinjectionWorkerError> {
-        // Events that cannot be attributed to a tenant message are excluded
-        // only for this cycle, so one terminal record can never starve the
-        // rest of the release queue.
+        // Events that cannot be attributed to a tenant message, or whose
+        // delivery guard is held by a sibling process, are excluded only for
+        // this cycle so one stuck event can never starve the release queue.
         let mut skipped: Vec<Uuid> = Vec::new();
         loop {
-            let Some((mut transaction, event)) = self.next_candidate(&skipped).await? else {
+            let Some(claim) = self.claim_next(&skipped).await? else {
                 return Ok(ReinjectionRunOutcome::Idle);
             };
-            let event_id: Uuid = event.get("id");
-            match self.handle_event(&mut transaction, &event).await {
-                Ok(outcome) => {
-                    transaction
-                        .commit()
-                        .await
-                        .map_err(|_| ReinjectionWorkerError::Persistence)?;
+            let ClaimedEvent {
+                event_id,
+                event,
+                outcome,
+                guard,
+            } = claim;
+            match outcome {
+                ClaimOutcome::Terminal(outcome) => {
+                    if let Some(guard) = guard {
+                        guard.release().await;
+                    }
                     return Ok(outcome);
                 },
-                Err(ReinjectionWorkerError::InvalidEvent) => {
-                    drop(transaction);
-                    if self.dead_letter_invalid_event(&event).await {
+                ClaimOutcome::Contended => {
+                    tracing::debug!(%event_id, "quarantine reinjection event is being delivered by a sibling process; skipping this cycle");
+                    skipped.push(event_id);
+                },
+                ClaimOutcome::Invalid => {
+                    let recorded = self.dead_letter_invalid_event(&event).await;
+                    if let Some(guard) = guard {
+                        guard.release().await;
+                    }
+                    if recorded {
                         return Ok(ReinjectionRunOutcome::InvalidEventRecorded {
                             outbox_event_id: event_id,
                         });
@@ -155,18 +166,26 @@ impl QuarantineReinjectionWorker {
                     tracing::warn!(%event_id, "quarantine reinjection event lacks tenant attribution; skipping this cycle");
                     skipped.push(event_id);
                 },
-                Err(error) => return Err(error),
+                ClaimOutcome::Ready(prepared) => {
+                    let result = self.deliver(*prepared).await;
+                    if let Some(guard) = guard {
+                        guard.release().await;
+                    }
+                    return result;
+                },
             }
         }
     }
 
-    /// Locks the oldest release event that is neither published, already
-    /// dead-lettered, nor skipped in the current cycle.
-    async fn next_candidate(
+    /// Claims the oldest eligible release event, resolves every database-only
+    /// outcome inside the claim transaction, and hands a prepared delivery to
+    /// the network phase. The claim transaction is always committed or rolled
+    /// back before this function returns: no row lock survives into
+    /// artifact-store or SMTP I/O.
+    async fn claim_next(
         &self,
         skipped: &[Uuid],
-    ) -> Result<Option<(Transaction<'_, Postgres>, sqlx::postgres::PgRow)>, ReinjectionWorkerError>
-    {
+    ) -> Result<Option<ClaimedEvent>, ReinjectionWorkerError> {
         let mut transaction = self
             .pool
             .begin()
@@ -181,43 +200,55 @@ impl QuarantineReinjectionWorker {
         .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| ReinjectionWorkerError::Persistence)?;
-        match event {
-            Some(event) => Ok(Some((transaction, event))),
-            None => {
-                transaction
-                    .commit()
-                    .await
-                    .map_err(|_| ReinjectionWorkerError::Persistence)?;
-                Ok(None)
-            },
-        }
-    }
-
-    /// Replays one locked release event. Structural failures surface as
-    /// [`ReinjectionWorkerError::InvalidEvent`] for the caller to dead-letter
-    /// or skip; the caller owns the transaction commit.
-    async fn handle_event(
-        &self,
-        transaction: &mut Transaction<'_, Postgres>,
-        event: &sqlx::postgres::PgRow,
-    ) -> Result<ReinjectionRunOutcome, ReinjectionWorkerError> {
+        let Some(event) = event else {
+            transaction
+                .commit()
+                .await
+                .map_err(|_| ReinjectionWorkerError::Persistence)?;
+            return Ok(None);
+        };
         let event_id: Uuid = event.get("id");
+
         let customer_id = event
             .get::<Option<String>, _>("customer_id")
-            .filter(|value| !value.is_empty())
-            .ok_or(ReinjectionWorkerError::InvalidEvent)?;
-        let deployment_id: String = event.get("deployment_id");
-        let trace_id: String = event.get("trace_id");
-        let payload: Value = event.get("payload");
-        let tenant_message_id = payload
+            .filter(|value| !value.is_empty());
+        let tenant_message_id = event
+            .get::<Value, _>("payload")
             .get("tenant_message_id")
             .and_then(Value::as_str)
-            .and_then(|value| Uuid::parse_str(value).ok())
-            .ok_or(ReinjectionWorkerError::InvalidEvent)?;
+            .and_then(|value| Uuid::parse_str(value).ok());
+        let (Some(customer_id), Some(tenant_message_id)) = (customer_id, tenant_message_id) else {
+            // The claim transaction is rolled back on return, matching the
+            // former drop-before-dead-letter behaviour.
+            return Ok(Some(ClaimedEvent {
+                event_id,
+                event,
+                guard: None,
+                outcome: ClaimOutcome::Invalid,
+            }));
+        };
+        let event_context = EventContext {
+            customer_id,
+            deployment_id: event.get("deployment_id"),
+            trace_id: event.get("trace_id"),
+            tenant_message_id,
+        };
+
+        // Cross-process delivery guard, taken before the claim row lock is
+        // released so a sibling worker can never observe this event as both
+        // claimable and unguarded.
+        let Some(guard) = self.try_acquire_guard(event_id).await? else {
+            return Ok(Some(ClaimedEvent {
+                event_id,
+                event,
+                guard: None,
+                outcome: ClaimOutcome::Contended,
+            }));
+        };
 
         sqlx::query("SELECT set_config('app.current_customer_id', $1, true)")
-            .bind(&customer_id)
-            .execute(&mut **transaction)
+            .bind(&event_context.customer_id)
+            .execute(&mut *transaction)
             .await
             .map_err(|_| ReinjectionWorkerError::Persistence)?;
 
@@ -226,14 +257,23 @@ impl QuarantineReinjectionWorker {
              WHERE outbox_event_id = $1 AND outcome = 'succeeded')",
         )
         .bind(event_id)
-        .fetch_one(&mut **transaction)
+        .fetch_one(&mut *transaction)
         .await
         .map_err(|_| ReinjectionWorkerError::Persistence)?
         {
-            mark_published(transaction, event_id).await?;
-            return Ok(ReinjectionRunOutcome::AlreadyDelivered {
-                outbox_event_id: event_id,
-            });
+            mark_published(&mut transaction, event_id).await?;
+            transaction
+                .commit()
+                .await
+                .map_err(|_| ReinjectionWorkerError::Persistence)?;
+            return Ok(Some(ClaimedEvent {
+                event_id,
+                event,
+                guard: Some(guard),
+                outcome: ClaimOutcome::Terminal(ReinjectionRunOutcome::AlreadyDelivered {
+                    outbox_event_id: event_id,
+                }),
+            }));
         }
 
         let failed_attempts = sqlx::query_scalar::<_, i64>(
@@ -241,21 +281,30 @@ impl QuarantineReinjectionWorker {
              WHERE outbox_event_id = $1 AND outcome = 'failed'",
         )
         .bind(event_id)
-        .fetch_one(&mut **transaction)
+        .fetch_one(&mut *transaction)
         .await
         .map_err(|_| ReinjectionWorkerError::Persistence)?;
         if failed_attempts >= self.config.max_attempts {
             record_dead_letter(
-                transaction,
+                &mut transaction,
                 event_id,
-                tenant_message_id,
-                &deployment_id,
-                &customer_id,
+                event_context.tenant_message_id,
+                &event_context.deployment_id,
+                &event_context.customer_id,
             )
             .await?;
-            return Ok(ReinjectionRunOutcome::AttemptsExhausted {
-                outbox_event_id: event_id,
-            });
+            transaction
+                .commit()
+                .await
+                .map_err(|_| ReinjectionWorkerError::Persistence)?;
+            return Ok(Some(ClaimedEvent {
+                event_id,
+                event,
+                guard: Some(guard),
+                outcome: ClaimOutcome::Terminal(ReinjectionRunOutcome::AttemptsExhausted {
+                    outbox_event_id: event_id,
+                }),
+            }));
         }
 
         let row = sqlx::query(
@@ -269,67 +318,111 @@ impl QuarantineReinjectionWorker {
              WHERE q.tenant_message_id = $1 AND q.customer_id = $2 AND q.deployment_id = $3 \
                AND q.released_at IS NOT NULL",
         )
-        .bind(tenant_message_id)
-        .bind(&customer_id)
-        .bind(&deployment_id)
-        .fetch_optional(&mut **transaction)
+        .bind(event_context.tenant_message_id)
+        .bind(&event_context.customer_id)
+        .bind(&event_context.deployment_id)
+        .fetch_optional(&mut *transaction)
         .await
-        .map_err(|_| ReinjectionWorkerError::Persistence)?
-        .ok_or(ReinjectionWorkerError::InvalidEvent)?;
+        .map_err(|_| ReinjectionWorkerError::Persistence)?;
 
-        let transaction_id: Uuid = row.get("transaction_id");
-        let artifact_id: Uuid = row.get("artifact_id");
-        let recipients = parse_recipients(row.get("recipients"))?;
-        let envelope_sender: String = row.get("envelope_sender");
-        validate_envelope(&envelope_sender, &recipients)?;
-        let artifact = artifact_from_row(&row, artifact_id, &deployment_id, &customer_id)?;
-        let attempt_id = Uuid::new_v4();
+        let Some(row) = row else {
+            return Ok(Some(ClaimedEvent {
+                event_id,
+                event,
+                guard: Some(guard),
+                outcome: ClaimOutcome::Invalid,
+            }));
+        };
+
+        let prepared = match prepare_delivery(event_id, &event_context, &row, failed_attempts) {
+            Ok(prepared) => Box::new(prepared),
+            Err(ReinjectionWorkerError::InvalidEvent) => {
+                return Ok(Some(ClaimedEvent {
+                    event_id,
+                    event,
+                    guard: Some(guard),
+                    outcome: ClaimOutcome::Invalid,
+                }));
+            },
+            Err(error) => return Err(error),
+        };
+
+        transaction
+            .commit()
+            .await
+            .map_err(|_| ReinjectionWorkerError::Persistence)?;
+        Ok(Some(ClaimedEvent {
+            event_id,
+            event,
+            guard: Some(guard),
+            outcome: ClaimOutcome::Ready(prepared),
+        }))
+    }
+
+    /// Takes the cross-process delivery guard for one event on a dedicated
+    /// pooled connection. Returns `None` when a sibling process already holds
+    /// it; the connection is then returned to the pool without the lock.
+    async fn try_acquire_guard(
+        &self,
+        event_id: Uuid,
+    ) -> Result<Option<AdvisoryGuard>, ReinjectionWorkerError> {
+        let mut connection = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|_| ReinjectionWorkerError::Persistence)?;
+        let key = advisory_lock_key(event_id);
+        let acquired = match sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_lock($1, $2)")
+            .bind(key.0)
+            .bind(key.1)
+            .fetch_one(&mut *connection)
+            .await
+        {
+            Ok(acquired) => acquired,
+            Err(_) => {
+                // Never return a session of unknown lock state to the pool.
+                let _ = connection.close().await;
+                return Err(ReinjectionWorkerError::Persistence);
+            },
+        };
+        if acquired {
+            Ok(Some(AdvisoryGuard {
+                connection: Some(connection),
+                key,
+            }))
+        } else {
+            drop(connection);
+            Ok(None)
+        }
+    }
+
+    /// Phase B + C: artifact-store and SMTP I/O with no database transaction
+    /// held, then one short transaction that records the terminal outcome.
+    /// The tenant GUC is re-established in the finalize transaction because
+    /// `set_config(..., true)` is scoped to the transaction that set it.
+    async fn deliver(
+        &self,
+        prepared: PreparedDelivery,
+    ) -> Result<ReinjectionRunOutcome, ReinjectionWorkerError> {
+        let PreparedDelivery {
+            event_id,
+            customer_id,
+            deployment_id,
+            trace_id,
+            tenant_message_id,
+            transaction_id,
+            artifact,
+            artifact_id,
+            envelope_sender,
+            recipients,
+            attempt_id,
+            failed_attempts,
+            grant,
+        } = prepared;
 
         if self.store.recover_existing(artifact).await.is_err() {
-            record_failure(
-                transaction,
-                &DeliveryIdentity {
-                    event_id,
-                    tenant_message_id,
-                    transaction_id,
-                    deployment_id: &deployment_id,
-                    customer_id: &customer_id,
-                    attempt_id,
-                },
-                "ARTIFACT_UNAVAILABLE",
-            )
-            .await?;
-            if failed_attempts + 1 >= self.config.max_attempts {
-                record_dead_letter(
-                    transaction,
-                    event_id,
-                    tenant_message_id,
-                    &deployment_id,
-                    &customer_id,
-                )
-                .await?;
-            }
-            return Ok(ReinjectionRunOutcome::Failed {
-                outbox_event_id: event_id,
-                code: "ARTIFACT_UNAVAILABLE",
-            });
-        }
-
-        let grant = ArtifactAccessGrant::issue_server_authorized(
-            DeploymentId::new(&deployment_id),
-            ArtifactScope::Customer(CustomerId::new(&customer_id)),
-            WORKER_ACTOR.to_string(),
-            ArtifactPermissions::content_read_only(),
-            ArtifactAccessPurpose::QuarantineRelease,
-            [ArtifactId(artifact_id)],
-            Utc::now() + chrono::Duration::seconds(60),
-        )
-        .map_err(|_| ReinjectionWorkerError::InvalidEvent)?;
-        let authorized = match self.store.get(&grant, &ArtifactId(artifact_id)).await {
-            Ok(artifact) => artifact,
-            Err(_) => {
-                record_failure(
-                    transaction,
+            return self
+                .finalize_failure(
                     &DeliveryIdentity {
                         event_id,
                         tenant_message_id,
@@ -338,53 +431,45 @@ impl QuarantineReinjectionWorker {
                         customer_id: &customer_id,
                         attempt_id,
                     },
+                    failed_attempts,
                     "ARTIFACT_UNAVAILABLE",
                 )
-                .await?;
-                if failed_attempts + 1 >= self.config.max_attempts {
-                    record_dead_letter(
-                        transaction,
-                        event_id,
-                        tenant_message_id,
-                        &deployment_id,
-                        &customer_id,
+                .await;
+        }
+        let authorized = match self.store.get(&grant, &ArtifactId(artifact_id)).await {
+            Ok(artifact) => artifact,
+            Err(_) => {
+                return self
+                    .finalize_failure(
+                        &DeliveryIdentity {
+                            event_id,
+                            tenant_message_id,
+                            transaction_id,
+                            deployment_id: &deployment_id,
+                            customer_id: &customer_id,
+                            attempt_id,
+                        },
+                        failed_attempts,
+                        "ARTIFACT_UNAVAILABLE",
                     )
-                    .await?;
-                }
-                return Ok(ReinjectionRunOutcome::Failed {
-                    outbox_event_id: event_id,
-                    code: "ARTIFACT_UNAVAILABLE",
-                });
+                    .await;
             },
         };
         if contains_loop_header(&authorized.bytes) {
-            record_failure(
-                transaction,
-                &DeliveryIdentity {
-                    event_id,
-                    tenant_message_id,
-                    transaction_id,
-                    deployment_id: &deployment_id,
-                    customer_id: &customer_id,
-                    attempt_id,
-                },
-                "LOOP_HEADER_PRESENT",
-            )
-            .await?;
-            if failed_attempts + 1 >= self.config.max_attempts {
-                record_dead_letter(
-                    transaction,
-                    event_id,
-                    tenant_message_id,
-                    &deployment_id,
-                    &customer_id,
+            return self
+                .finalize_failure(
+                    &DeliveryIdentity {
+                        event_id,
+                        tenant_message_id,
+                        transaction_id,
+                        deployment_id: &deployment_id,
+                        customer_id: &customer_id,
+                        attempt_id,
+                    },
+                    failed_attempts,
+                    "LOOP_HEADER_PRESENT",
                 )
-                .await?;
-            }
-            return Ok(ReinjectionRunOutcome::Failed {
-                outbox_event_id: event_id,
-                code: "LOOP_HEADER_PRESENT",
-            });
+                .await;
         }
 
         let message = add_reinjection_headers(
@@ -406,36 +491,29 @@ impl QuarantineReinjectionWorker {
         {
             Ok(queue_id) => queue_id,
             Err(_) => {
-                record_failure(
-                    transaction,
-                    &DeliveryIdentity {
-                        event_id,
-                        tenant_message_id,
-                        transaction_id,
-                        deployment_id: &deployment_id,
-                        customer_id: &customer_id,
-                        attempt_id,
-                    },
-                    "SMTP_UNAVAILABLE",
-                )
-                .await?;
-                if failed_attempts + 1 >= self.config.max_attempts {
-                    record_dead_letter(
-                        transaction,
-                        event_id,
-                        tenant_message_id,
-                        &deployment_id,
-                        &customer_id,
+                return self
+                    .finalize_failure(
+                        &DeliveryIdentity {
+                            event_id,
+                            tenant_message_id,
+                            transaction_id,
+                            deployment_id: &deployment_id,
+                            customer_id: &customer_id,
+                            attempt_id,
+                        },
+                        failed_attempts,
+                        "SMTP_UNAVAILABLE",
                     )
-                    .await?;
-                }
-                return Ok(ReinjectionRunOutcome::Failed {
-                    outbox_event_id: event_id,
-                    code: "SMTP_UNAVAILABLE",
-                });
+                    .await;
             },
         };
 
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| ReinjectionWorkerError::Persistence)?;
+        set_tenant_scope(&mut transaction, &customer_id).await?;
         sqlx::query(
             "INSERT INTO reinjection_deliveries \
              (outbox_event_id, tenant_message_id, transaction_id, deployment_id, customer_id, \
@@ -449,13 +527,52 @@ impl QuarantineReinjectionWorker {
         .bind(&customer_id)
         .bind(attempt_id)
         .bind(&queue_id)
-        .execute(&mut **transaction)
+        .execute(&mut *transaction)
         .await
         .map_err(|_| ReinjectionWorkerError::Persistence)?;
-        mark_published(transaction, event_id).await?;
+        mark_published(&mut transaction, event_id).await?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| ReinjectionWorkerError::Persistence)?;
         Ok(ReinjectionRunOutcome::Delivered {
             outbox_event_id: event_id,
             queue_id,
+        })
+    }
+
+    /// Records one failed delivery attempt in its own short transaction,
+    /// dead-lettering the event when the attempt budget is exhausted.
+    async fn finalize_failure(
+        &self,
+        identity: &DeliveryIdentity<'_>,
+        failed_attempts: i64,
+        code: &'static str,
+    ) -> Result<ReinjectionRunOutcome, ReinjectionWorkerError> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| ReinjectionWorkerError::Persistence)?;
+        set_tenant_scope(&mut transaction, identity.customer_id).await?;
+        record_failure(&mut transaction, identity, code).await?;
+        if failed_attempts + 1 >= self.config.max_attempts {
+            record_dead_letter(
+                &mut transaction,
+                identity.event_id,
+                identity.tenant_message_id,
+                identity.deployment_id,
+                identity.customer_id,
+            )
+            .await?;
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|_| ReinjectionWorkerError::Persistence)?;
+        Ok(ReinjectionRunOutcome::Failed {
+            outbox_event_id: identity.event_id,
+            code,
         })
     }
 
@@ -543,6 +660,178 @@ impl QuarantineReinjectionWorker {
             },
         }
     }
+}
+
+/// One claimed release event plus its cross-process delivery guard. The guard
+/// must outlive the network phase and be released immediately after the
+/// finalize transaction commits or rolls back.
+struct ClaimedEvent {
+    event_id: Uuid,
+    event: sqlx::postgres::PgRow,
+    outcome: ClaimOutcome,
+    guard: Option<AdvisoryGuard>,
+}
+
+enum ClaimOutcome {
+    /// Resolved entirely inside the claim transaction (already delivered or
+    /// attempts exhausted); the claim transaction is committed.
+    Terminal(ReinjectionRunOutcome),
+    /// The event cannot be delivered as recorded; the claim transaction was
+    /// rolled back and the caller may dead-letter or skip it.
+    Invalid,
+    /// A sibling process holds the delivery guard for this event.
+    Contended,
+    /// Claim transaction committed; the event is ready for Phase B/C.
+    Ready(Box<PreparedDelivery>),
+}
+
+/// Everything Phase A proved from the database, ready for the network phase.
+struct PreparedDelivery {
+    event_id: Uuid,
+    customer_id: String,
+    deployment_id: String,
+    trace_id: String,
+    tenant_message_id: Uuid,
+    transaction_id: Uuid,
+    artifact: Artifact,
+    artifact_id: Uuid,
+    envelope_sender: String,
+    recipients: Vec<String>,
+    attempt_id: Uuid,
+    failed_attempts: i64,
+    grant: ArtifactAccessGrant,
+}
+
+/// Extracts and validates the delivery plan from the claimed event's
+/// quarantine context. Pure database/payload validation: no I/O, so it runs
+/// inside the claim transaction.
+fn prepare_delivery(
+    event_id: Uuid,
+    event_context: &EventContext,
+    row: &sqlx::postgres::PgRow,
+    failed_attempts: i64,
+) -> Result<PreparedDelivery, ReinjectionWorkerError> {
+    let transaction_id: Uuid = row.get("transaction_id");
+    let artifact_id: Uuid = row.get("artifact_id");
+    let recipients = parse_recipients(row.get("recipients"))?;
+    let envelope_sender: String = row.get("envelope_sender");
+    validate_envelope(&envelope_sender, &recipients)?;
+    let artifact = artifact_from_row(
+        row,
+        artifact_id,
+        &event_context.deployment_id,
+        &event_context.customer_id,
+    )?;
+    let grant = ArtifactAccessGrant::issue_server_authorized(
+        DeploymentId::new(&event_context.deployment_id),
+        ArtifactScope::Customer(CustomerId::new(&event_context.customer_id)),
+        WORKER_ACTOR.to_string(),
+        ArtifactPermissions::content_read_only(),
+        ArtifactAccessPurpose::QuarantineRelease,
+        [ArtifactId(artifact_id)],
+        Utc::now() + chrono::Duration::seconds(60),
+    )
+    .map_err(|_| ReinjectionWorkerError::InvalidEvent)?;
+    Ok(PreparedDelivery {
+        event_id,
+        customer_id: event_context.customer_id.clone(),
+        deployment_id: event_context.deployment_id.clone(),
+        trace_id: event_context.trace_id.clone(),
+        tenant_message_id: event_context.tenant_message_id,
+        transaction_id,
+        artifact,
+        artifact_id,
+        envelope_sender,
+        recipients,
+        attempt_id: Uuid::new_v4(),
+        failed_attempts,
+        grant,
+    })
+}
+
+/// Tenant attribution parsed from the claimed outbox event before any
+/// quarantine context is loaded.
+struct EventContext {
+    customer_id: String,
+    deployment_id: String,
+    trace_id: String,
+    tenant_message_id: Uuid,
+}
+
+/// Session-level advisory lock held on a dedicated pooled connection for the
+/// duration of one event's network-delivery window. It replaces the claim
+/// transaction's row lock during artifact-store and SMTP I/O. Postgres
+/// releases the lock when the session ends, so a crashed worker can never
+/// strand an event: the lock disappears with its connection.
+struct AdvisoryGuard {
+    connection: Option<PoolConnection<Postgres>>,
+    key: (i32, i32),
+}
+
+impl AdvisoryGuard {
+    async fn release(mut self) {
+        if let Some(mut connection) = self.connection.take() {
+            let released = sqlx::query_scalar::<_, bool>("SELECT pg_advisory_unlock($1, $2)")
+                .bind(self.key.0)
+                .bind(self.key.1)
+                .fetch_one(&mut *connection)
+                .await
+                .unwrap_or(false);
+            if released {
+                drop(connection);
+            } else {
+                // The session's lock state is unknown; never reuse it.
+                let _ = connection.close().await;
+            }
+        }
+    }
+}
+
+impl Drop for AdvisoryGuard {
+    fn drop(&mut self) {
+        if let Some(mut connection) = self.connection.take() {
+            let (key1, key2) = self.key;
+            // Safety net for paths that did not await `release`: unlock the
+            // session before it returns to the pool so the lock can never be
+            // inherited by an unrelated checkout. The worker always runs
+            // inside the Tokio runtime; without one the connection is simply
+            // dropped and the lock dies with the session.
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    let _ = sqlx::query("SELECT pg_advisory_unlock($1, $2)")
+                        .bind(key1)
+                        .bind(key2)
+                        .execute(&mut *connection)
+                        .await;
+                });
+            }
+        }
+    }
+}
+
+/// Advisory lock namespace for reinjection delivery guards. The second key
+/// is the first four bytes of the event UUID, so distinct events never
+/// contend with each other.
+fn advisory_lock_key(event_id: Uuid) -> (i32, i32) {
+    let bytes = event_id.as_bytes();
+    (
+        0x7172_6569, // "qrei"
+        i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+    )
+}
+
+/// Restores the tenant GUC inside a fresh transaction before any RLS
+/// protected row is written; `set_config(..., true)` is transaction-local.
+async fn set_tenant_scope(
+    transaction: &mut Transaction<'_, Postgres>,
+    customer_id: &str,
+) -> Result<(), ReinjectionWorkerError> {
+    sqlx::query("SELECT set_config('app.current_customer_id', $1, true)")
+        .bind(customer_id)
+        .execute(&mut **transaction)
+        .await
+        .map_err(|_| ReinjectionWorkerError::Persistence)?;
+    Ok(())
 }
 
 struct DeliveryIdentity<'a> {

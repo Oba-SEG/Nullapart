@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 
 import { api, type ApiError } from "../api/client";
 import { hasPermission, loadSession } from "../auth/session";
+import { StepUpPrompt } from "../components/StepUpPrompt";
 import { StatusPill } from "../components/StatusPill";
 import { Button } from "../components/primitives/Button";
 import { Input } from "../components/primitives/Input";
@@ -536,6 +537,7 @@ export function DeepAi() {
               {formError || grantError ? (
                 <p className="deep-ai-error">{formError ?? grantError}</p>
               ) : null}
+              {createGrant.isError ? <StepUpPrompt error={createGrant.error} /> : null}
               <Button type="submit" disabled={createGrant.isPending}>
                 {createGrant.isPending ? "Creating grant…" : "Create scoped grant"}
               </Button>
@@ -669,6 +671,7 @@ export function DeepAi() {
             {formError || rollbackError ? (
               <p className="deep-ai-error">{formError ?? rollbackError}</p>
             ) : null}
+            {rollbackRelease.isError ? <StepUpPrompt error={rollbackRelease.error} /> : null}
             <Button type="submit" variant="danger" disabled={rollbackRelease.isPending}>
               {rollbackRelease.isPending ? "Rolling back…" : "Record rollback"}
             </Button>

@@ -109,8 +109,13 @@ const SELECT_MODEL_SQL: &str = "SELECT {cols} FROM inline_ml_models \
      WHERE deployment_id = $1 AND model_id = $2 AND model_version = $3 FOR UPDATE";
 const SELECT_MODEL_READ_SQL: &str = "SELECT {cols} FROM inline_ml_models \
      WHERE deployment_id = $1 AND model_id = $2 AND model_version = $3";
+// `activated_at IS NOT NULL AND deactivated_at IS NULL` matches the partial
+// unique index that permits at most one active row per deployment. ORDER BY
+// activated_at + FOR UPDATE OF + LIMIT 1 keeps a legacy/raced duplicate
+// deterministic and locked instead of surfacing as a backend error.
 const SELECT_ACTIVE_SQL: &str = "SELECT {cols} FROM inline_ml_models \
-     WHERE deployment_id = $1 AND activated_at IS NOT NULL AND deactivated_at IS NULL FOR UPDATE";
+     WHERE deployment_id = $1 AND activated_at IS NOT NULL AND deactivated_at IS NULL \
+     ORDER BY activated_at DESC, id LIMIT 1 FOR UPDATE OF inline_ml_models";
 const LIST_SQL: &str = "SELECT {cols} FROM inline_ml_models \
      WHERE deployment_id = $1 ORDER BY model_id, model_version, registered_at";
 const INSERT_MODEL_SQL: &str = "INSERT INTO inline_ml_models \
@@ -158,6 +163,16 @@ struct ModelRegistryStateInner {
     deployment_id: DeploymentId,
     audit: Arc<dyn AuditStore>,
     high_risk_limiter: Mutex<TokenBucket>,
+}
+
+/// Fail-closed limit check (same contract as
+/// `connectors_remediation_api::try_consume_high_risk`): a poisoned lock or an
+/// exhausted bucket denies the change instead of silently allowing it.
+fn try_high_risk_consume(limiter: &Mutex<TokenBucket>) -> bool {
+    limiter
+        .lock()
+        .map(|mut bucket| bucket.try_consume())
+        .unwrap_or(false)
 }
 
 impl ModelRegistryState {
@@ -657,9 +672,12 @@ async fn require_system_admin(
     Ok(())
 }
 
-/// Fresh step-up, then the shared fail-closed budget. Used by the
-/// runtime-affecting transitions (approve, activate, rollback); registration
-/// and rejection never change what runs.
+/// Fresh step-up, then the shared fail-closed budget. Used by every audited
+/// lifecycle transition that changes approval or runtime state (approve,
+/// reject, activate, rollback); registration is evidence-only and never
+/// consumes the budget. A missing step-up or an exhausted budget is audited
+/// like every other denial, so a rate-limited high-risk change is visible to
+/// reviewers instead of vanishing.
 async fn require_high_risk(
     state: &ModelRegistryState,
     context: &TenantContext,
@@ -669,13 +687,28 @@ async fn require_high_risk(
     if !context.has_step_up() {
         return Err(denied(state, context, headers, route, &Denial::step_up_required()).await);
     }
-    let allowed = state
-        .0
-        .high_risk_limiter
-        .lock()
-        .map(|mut bucket| bucket.try_consume())
-        .unwrap_or(false);
-    if !allowed {
+    if !try_high_risk_consume(&state.0.high_risk_limiter) {
+        let denial = Denial::forbidden("too many high-risk changes");
+        let record = audit_record(
+            context,
+            headers,
+            "denied",
+            AuditFields {
+                action: route.action,
+                resource_type: route.resource_type,
+                resource_id: route.resource_id.clone(),
+                customer_id: context.customer_id.0.clone(),
+                details: json!({ "reason": denial.reason }),
+            },
+        );
+        if let Err(error) = state
+            .0
+            .audit
+            .record_event(&state.0.deployment_id.0, record)
+            .await
+        {
+            error!(%error, "failed to audit model registry rate-limit denial");
+        }
         return Err((
             StatusCode::TOO_MANY_REQUESTS,
             [(axum::http::header::RETRY_AFTER, "60")],
@@ -2123,6 +2156,25 @@ mod tests {
         assert!(!valid_note("short"));
         assert!(!valid_note(&"x".repeat(APPROVAL_NOTE_MAX_LEN + 1)));
         assert!(!valid_note("line one\nline two"));
+    }
+
+    /// The high-risk budget is fail-closed: the shared bucket grants exactly
+    /// its burst capacity and then denies, so `require_high_risk` audits a 429
+    /// instead of letting a rate-limited transition fall through.
+    #[test]
+    fn high_risk_budget_is_fail_closed_when_exhausted() {
+        let limiter = Mutex::new(TokenBucket::new(&HighRiskLimits::permission_change()));
+        // permission_change() is configured with a burst capacity of 5 tokens.
+        for granted in 0..5 {
+            assert!(
+                try_high_risk_consume(&limiter),
+                "consume {granted} within capacity must be granted"
+            );
+        }
+        assert!(
+            !try_high_risk_consume(&limiter),
+            "exhausted budget must deny"
+        );
     }
 
     #[test]

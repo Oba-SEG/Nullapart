@@ -5,6 +5,7 @@ import { useState } from "react";
 import { api, type ApiError } from "../api/client";
 import { hasPermission, loadSession } from "../auth/session";
 import { Button } from "../components/primitives/Button";
+import { StepUpPrompt } from "../components/StepUpPrompt";
 import { randomUuid } from "../lib/ids";
 import "./ConnectorsRemediation.css";
 
@@ -189,7 +190,8 @@ export function ConnectorsRemediation() {
   const [connectorDraft, setConnectorDraft] = useState<ConnectorDraft>(defaultConnectorDraft);
   const [remediationDraft, setRemediationDraft] =
     useState<RemediationDraft>(defaultRemediationDraft);
-  const [formError, setFormError] = useState<string | null>(null);
+  const [connectorFormError, setConnectorFormError] = useState<string | null>(null);
+  const [remediationFormError, setRemediationFormError] = useState<string | null>(null);
 
   const session = useQuery({
     queryKey: ["session"],
@@ -242,7 +244,7 @@ export function ConnectorsRemediation() {
         { idempotencyKey: randomUuid() },
       ),
     onSuccess: async () => {
-      setFormError(null);
+      setConnectorFormError(null);
       setConnectorDraft(defaultConnectorDraft);
       await queryClient.invalidateQueries({ queryKey: ["connectors-remediation"] });
     },
@@ -264,7 +266,7 @@ export function ConnectorsRemediation() {
         { idempotencyKey: randomUuid() },
       ),
     onSuccess: async () => {
-      setFormError(null);
+      setRemediationFormError(null);
       setRemediationDraft(defaultRemediationDraft);
       await queryClient.invalidateQueries({ queryKey: ["connectors-remediation"] });
     },
@@ -286,11 +288,10 @@ export function ConnectorsRemediation() {
   }
 
   const data = connectors.data;
-  const mutationError = upsertConnector.isError
-    ? errorMessage(upsertConnector.error)
-    : requestRemediation.isError
-      ? errorMessage(requestRemediation.error)
-      : null;
+  const upsertError = upsertConnector.isError ? errorMessage(upsertConnector.error) : null;
+  const remediationError = requestRemediation.isError
+    ? errorMessage(requestRemediation.error)
+    : null;
 
   return (
     <div className="connectors-page">
@@ -399,7 +400,9 @@ export function ConnectorsRemediation() {
                 connectorDraft.credential_reference_hash.trim().length < 16 ||
                 connectorDraft.reason.trim().length < 12
               ) {
-                setFormError("Connector name, safe hashes and a substantive reason are required.");
+                setConnectorFormError(
+                  "Connector name, safe hashes and a substantive reason are required.",
+                );
                 return;
               }
               upsertConnector.mutate(connectorDraft);
@@ -488,9 +491,10 @@ export function ConnectorsRemediation() {
                 }
               />
             </label>
-            {formError || mutationError ? (
-              <p className="connectors-error">{formError ?? mutationError}</p>
+            {connectorFormError || upsertError ? (
+              <p className="connectors-error">{connectorFormError ?? upsertError}</p>
             ) : null}
+            <StepUpPrompt error={upsertConnector.error} />
             <Button type="submit" variant="primary" loading={upsertConnector.isPending}>
               Save connector
             </Button>
@@ -506,7 +510,7 @@ export function ConnectorsRemediation() {
                 remediationDraft.mailbox_address_hash.trim().length < 16 ||
                 remediationDraft.reason.trim().length < 12
               ) {
-                setFormError(
+                setRemediationFormError(
                   "Connector, delivered message ID, mailbox hash and reason are required.",
                 );
                 return;
@@ -593,6 +597,10 @@ export function ConnectorsRemediation() {
                 }
               />
             </label>
+            {remediationFormError || remediationError ? (
+              <p className="connectors-error">{remediationFormError ?? remediationError}</p>
+            ) : null}
+            <StepUpPrompt error={requestRemediation.error} />
             <Button type="submit" variant="danger" loading={requestRemediation.isPending}>
               Record remediation intent
             </Button>

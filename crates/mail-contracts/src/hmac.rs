@@ -33,9 +33,7 @@ impl HmacSignature {
             .and_then(|v| v.parse::<u32>().ok())
             .ok_or(HmacError::InvalidVersion)?;
 
-        if parts[1].is_empty() || parts[1].len() > 128 {
-            return Err(HmacError::InvalidKeyId);
-        }
+        validate_key_id(parts[1])?;
 
         let timestamp = parts[2]
             .parse::<u64>()
@@ -85,6 +83,21 @@ fn canonical_input(
         body_hash
     )
     .into_bytes())
+}
+
+fn validate_key_id(key_id: &str) -> Result<(), HmacError> {
+    // Key IDs travel in a comma-delimited header. Restrict to printable
+    // ASCII so a key_id can never smuggle control characters, whitespace,
+    // or the `,` field separator that `parse` splits on.
+    if key_id.is_empty()
+        || key_id.len() > 128
+        || !key_id
+            .bytes()
+            .all(|b| (0x21..=0x7e).contains(&b) && b != b',')
+    {
+        return Err(HmacError::InvalidKeyId);
+    }
+    Ok(())
 }
 
 fn validate_event_id(event_id: &str) -> Result<(), HmacError> {
@@ -145,9 +158,7 @@ fn sign_http_at(
     normalized_path: &str,
     timestamp: u64,
 ) -> Result<HmacSignature, HmacError> {
-    if key_id.is_empty() || key_id.len() > 128 {
-        return Err(HmacError::InvalidKeyId);
-    }
+    validate_key_id(key_id)?;
 
     let canonical = canonical_input(
         SIGNATURE_VERSION,
@@ -402,5 +413,70 @@ mod tests {
     fn parse_rejects_invalid_format() {
         assert!(HmacSignature::parse("invalid").is_err());
         assert!(HmacSignature::parse("v1,key,ts").is_err());
+    }
+
+    #[test]
+    fn key_id_rejects_header_separator_and_control_characters() {
+        // `,` is the header field separator — a smuggled extra field shifts
+        // the timestamp/signature slots and must never parse cleanly.
+        let injected = "v1,evil,extra,1700000000,0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        assert!(HmacSignature::parse(injected).is_err());
+
+        for bad_key_id in [
+            "with space",
+            "with\nnewline",
+            "with\rreturn",
+            "with\ttab",
+            "with\x00null",
+            "with\x1bansi",
+            "ünïcode-key",
+            "",
+        ] {
+            let header = format!(
+                "v1,{bad_key_id},1700000000,0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            );
+            assert!(
+                HmacSignature::parse(&header).is_err(),
+                "key_id {bad_key_id:?} must be rejected"
+            );
+        }
+
+        let overlong = "a".repeat(129);
+        let header = format!(
+            "v1,{overlong},1700000000,0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        );
+        assert!(HmacSignature::parse(&header).is_err());
+
+        // Known-good IDs used in production keep working.
+        assert!(HmacSignature::parse(
+            "v1,primary,1700000000,0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        )
+        .is_ok());
+        assert!(HmacSignature::parse(
+            "v1,mail-handoff-v1,1700000000,0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn sign_rejects_invalid_key_id() {
+        let now = 1_700_000_000u64;
+        for bad_key_id in ["with space", "with,comma", "with\nnewline", "ünïcode", ""] {
+            assert!(
+                matches!(
+                    sign_http_at(
+                        b"body",
+                        TEST_KEY,
+                        bad_key_id,
+                        TEST_EVENT_ID,
+                        "POST",
+                        "/hook",
+                        now,
+                    ),
+                    Err(HmacError::InvalidKeyId)
+                ),
+                "signing with key_id {bad_key_id:?} must fail"
+            );
+        }
     }
 }

@@ -3,6 +3,11 @@
 Each source is downloaded once, checksummed into data/fetch_manifest.json,
 and verified on every later run. The prepare step refuses sources without a
 pin. Licenses are permissive-only: MIT, CC-BY-4.0, CC0, Apache-2.0.
+
+License strings below are SPDX identifiers declared by the operator for each
+approved source. They are review-time claims recorded in this pin file, not
+anything fetched or verified from the upstream host; a reviewer confirms each
+declaration against the upstream page before the source is approved.
 """
 
 from __future__ import annotations
@@ -150,14 +155,24 @@ def fetch_source(source: dict, manifest: dict) -> dict:
             download(source["url"], file_path)
         files = [filename]
 
-    primary = dest_dir / files[0].split("!")[0]
-    digest = sha256_file(primary)
+    # Every file/member is hashed, not just the first. A multi-file source
+    # used to be pinned by its first member alone, so a changed second member
+    # would go undetected. Zip members live under dest_dir / "extracted" /
+    # <relative member path>.
+    file_sha256 = {}
+    for name in files:
+        base, _, member = name.partition("!")
+        path = dest_dir / "extracted" / member if member else dest_dir / base
+        file_sha256[name] = sha256_file(path)
+
+    digest = file_sha256[files[0]]
     entry = {
         "url": source["url"],
         "license": source["license"],
         "description": source["description"],
         "files": files,
         "primary_sha256": digest,
+        "file_sha256": file_sha256,
     }
     if recorded is not None:
         if recorded.get("primary_sha256") != digest:
@@ -165,6 +180,13 @@ def fetch_source(source: dict, manifest: dict) -> dict:
                 f"pin mismatch for {source['name']}: "
                 f"{recorded.get('primary_sha256')} != {digest}"
             )
+        recorded_map = recorded.get("file_sha256") or {}
+        for name, want in file_sha256.items():
+            have = recorded_map.get(name)
+            if have is not None and have != want:
+                raise RuntimeError(
+                    f"pin mismatch for {source['name']} file {name}: {have} != {want}"
+                )
         entry["pinned_at"] = recorded["pinned_at"]
         status = "verified"
     else:

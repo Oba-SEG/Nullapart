@@ -12,6 +12,18 @@ function jsonResponse(status: number, body: unknown) {
   };
 }
 
+function blobResponse(status: number, body: string, jsonBody?: unknown) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: "Response",
+    // jsdom's Blob lacks .text(); a blob-shaped stand-in keeps the client
+    // contract (response.blob() then caller-side .text()) testable.
+    blob: async () => ({ text: async () => body }) as unknown as Blob,
+    json: async () => jsonBody,
+  };
+}
+
 describe("api client CSRF header", () => {
   beforeEach(() => {
     clearCsrfToken();
@@ -96,5 +108,39 @@ describe("api client CSRF header", () => {
 
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(init.redirect).toBe("manual");
+  });
+
+  it("attaches the CSRF token and returns a blob from download", async () => {
+    setCsrfToken("session-csrf");
+    const fetchMock = vi.fn(async () => blobResponse(200, "time,actor\n1,admin\n"));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createApiClient({ baseUrl: "/api/v1" });
+
+    const blob = await client.download("POST", "/audit/events/export", { result: "success" });
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/v1/audit/events/export");
+    const headers = init.headers as Record<string, string>;
+    expect(headers["X-CSRF-Token"]).toBe("session-csrf");
+    expect(headers.Accept).toContain("text/csv");
+    expect(init.credentials).toBe("same-origin");
+    expect(init.body).toBe(JSON.stringify({ result: "success" }));
+    expect(await blob.text()).toContain("time,actor");
+  });
+
+  it("surfaces download error envelopes as typed API errors", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        blobResponse(403, "", { code: "STEP_UP_REQUIRED", message: "Step-up is required" }),
+      ),
+    );
+    const client = createApiClient({ baseUrl: "/api/v1" });
+
+    await expect(client.download("POST", "/audit/events/export")).rejects.toMatchObject({
+      code: "STEP_UP_REQUIRED",
+      message: "Step-up is required",
+      retryable: false,
+    });
   });
 });

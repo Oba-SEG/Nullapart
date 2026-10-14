@@ -315,6 +315,22 @@ async fn connector_tables_fail_closed_and_isolate_by_tenant() {
             },
             "{table} should be visible in the second tenant scope",
         );
+        assert_eq!(
+            count_as_request(&pool, Some(&fixture.deployment_a), None, table).await,
+            0,
+            "{table} must stay fail closed when only the deployment scope is set",
+        );
+        assert_eq!(
+            count_as_request(
+                &pool,
+                Some(&fixture.deployment_a),
+                Some(&fixture.customer_b),
+                table,
+            )
+            .await,
+            0,
+            "{table} must be invisible when the customer belongs to another deployment",
+        );
     }
 
     let mut transaction = begin_request(
