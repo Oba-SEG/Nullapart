@@ -20,6 +20,7 @@ import {
   Users,
 } from "lucide-react";
 import { hasPermission, loadSession, logout } from "../auth/session";
+import { getSessionPresentation } from "../lib/session-presentation";
 import { ImpersonationBanner } from "./ImpersonationBanner";
 import { ThemeToggle } from "./ThemeToggle";
 import { Toasts } from "./Toasts";
@@ -71,6 +72,7 @@ export function Layout() {
   }
 
   const current = session.data ?? null;
+  const sessionPresentation = getSessionPresentation(current, session.isError);
   const can = (permission: string) => hasPermission(current, permission);
 
   return (
@@ -80,8 +82,20 @@ export function Layout() {
       </a>
       <aside className="sidebar">
         <Link to="/" className="sidebar-brand" aria-label="Nullapart home">
-          <img src="/brand/horizontal-logo.png" alt="Nullapart" className="sidebar-logo" />
+          <img
+            src="/brand/logos/horizontal-logo-dark.png"
+            alt="Nullapart"
+            className="sidebar-logo"
+          />
         </Link>
+
+        <div className="sidebar-boundary" aria-label="Operator session context">
+          <img src={sessionPresentation.asset} alt="" className="sidebar-boundary-mark" />
+          <span>
+            <strong>Operator boundary</strong>
+            <small>{sessionPresentation.boundaryLabel}</small>
+          </span>
+        </div>
 
         <nav ref={navRef} className="sidebar-nav" aria-label="Primary">
           <Link
@@ -243,6 +257,19 @@ export function Layout() {
       <div className="content">
         <Toasts />
         <ImpersonationBanner session={current} />
+        <header className="command-context" aria-label="Current operator context">
+          <div className="command-context-product">
+            <img src="/brand/logos/logo-mark@2x.png" alt="" />
+            <span>Nullapart Control</span>
+            <span className="command-context-state">{sessionPresentation.stateLabel}</span>
+          </div>
+          <div className="command-context-scope">
+            <ShieldCheck size={15} aria-hidden="true" />
+            <span>{sessionPresentation.scopeLabel}</span>
+            <span className="command-context-divider" aria-hidden="true" />
+            <span className="command-context-email">{current?.email ?? "Loading session…"}</span>
+          </div>
+        </header>
         <main className="main" id="main-content" tabIndex={-1}>
           <Outlet />
         </main>

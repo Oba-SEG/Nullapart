@@ -1,14 +1,17 @@
 import type { ReactNode } from "react";
-import { AlertTriangle, Check, Clock, Info, Mail, Minus } from "lucide-react";
+import { Minus } from "lucide-react";
 import type { StatusTone } from "../lib/status";
 import "./StatusPill.css";
 
-const ICONS: Record<StatusTone, ReactNode> = {
-  clean: <Check size={11} strokeWidth={3} />,
-  threat: <Info size={11} strokeWidth={3} />,
-  review: <AlertTriangle size={10} strokeWidth={2.75} />,
-  processing: <Clock size={11} strokeWidth={2.5} />,
-  delivered: <Mail size={11} strokeWidth={2.5} />,
+const STATUS_ASSETS: Partial<Record<StatusTone, string>> = {
+  clean: "/brand/status/status-clean-256.png",
+  threat: "/brand/status/status-threat-256.png",
+  review: "/brand/status/status-review-256.png",
+  processing: "/brand/status/status-processing.svg",
+  delivered: "/brand/status/status-delivered.svg",
+};
+
+const ICONS: Partial<Record<StatusTone, ReactNode>> = {
   muted: <Minus size={11} strokeWidth={2.5} />,
 };
 
@@ -16,7 +19,7 @@ export function StatusPill({ tone, label }: { tone: StatusTone; label: string })
   return (
     <span className={`status-pill status-${tone}`}>
       <span className="status-pill-icon" aria-hidden="true">
-        {ICONS[tone]}
+        {STATUS_ASSETS[tone] ? <img src={STATUS_ASSETS[tone]} alt="" /> : ICONS[tone]}
       </span>
       {label}
     </span>

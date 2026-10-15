@@ -14,7 +14,8 @@
     "test": "vitest run --passWithNoTests",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage",
-    "check-all": "pnpm format-check && pnpm lint && pnpm typecheck && pnpm test"
+    "verify:brand": "node scripts/verify-brand-assets.mjs",
+    "check-all": "pnpm format-check && pnpm verify:brand && pnpm lint && pnpm typecheck && pnpm test"
   },
   "dependencies": {
     "@fontsource/inter": "^5.3.0",

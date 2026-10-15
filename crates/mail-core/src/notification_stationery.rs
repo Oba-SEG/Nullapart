@@ -34,7 +34,7 @@ pub const EMAIL_STATIONERY_BANNER_CONTENT_ID: &str = "nullapart-stationery-banne
 const EMAIL_STATIONERY_BANNER_PNG: &[u8] =
     include_bytes!("../assets/brand/nullapart-email-stationery-banner@2x.png");
 
-/// Return the high-density artwork that a future mail composer may attach as
+/// Return supplied stationery artwork that a future mail composer may attach as
 /// a CID part. `render_html` intentionally does not reference it yet: this
 /// repository has no reviewed notification dispatch/attachment composer.
 #[must_use]
@@ -206,6 +206,6 @@ mod tests {
 
         assert_eq!(banner.content_id, "nullapart-stationery-banner");
         assert_eq!(banner.media_type, "image/png");
-        assert_eq!(decoded.dimensions(), (2172, 724));
+        assert_eq!(decoded.dimensions(), (1200, 400));
     }
 }

@@ -30,30 +30,43 @@ The implementation lives in `frontend/src/styles/tokens.css`,
 `frontend/src/styles/global.css`, and the existing component/page styles. The
 application shell supplies a keyboard-visible skip link to `#main-content`.
 
-## Asset inventory
+## Asset inventory and provenance
 
-| Asset | Dimensions | Purpose | Use constraints |
-| --- | ---: | --- | --- |
-| `frontend/public/brand/horizontal-logo.png` | existing source | Application shell lock-up | Do not regenerate textual logo art with an image model. |
-| `frontend/public/brand/logo-mark.png` | existing source | Compact product mark | Preserve its established brand geometry. |
-| `frontend/public/brand/generated/nullapart-globe-command-bg.png` | 1672×941 | Wide admin header/ambient background | Decorative only; never conveys state. |
-| `frontend/public/brand/generated/nullapart-globe-command-bg@2x.png` | 3344×1882 | High-density rendition | Current header/background source. |
-| `frontend/public/brand/generated/nullapart-wave-command-bg.png` | 1916×821 | Panel/sidebar ambient background | Decorative only; never conveys state. |
-| `frontend/public/brand/generated/nullapart-wave-command-bg@2x.png` | 3832×1642 | High-density rendition | Current panel/sidebar source. |
-| `crates/mail-core/assets/brand/nullapart-email-stationery-banner.png` | 1086×362 | Standard-density email artwork | CID-ready only; never remote-loaded from a recipient's mail client. |
-| `crates/mail-core/assets/brand/nullapart-email-stationery-banner@2x.png` | 2172×724 | High-density email artwork | Bundled by `notification_stationery::inline_assets()`. |
+`frontend/public/brand/asset-manifest.json` is the machine-readable inventory.
+It maps every labelled item in `/Users/ob/Downloads/asset_contact_sheet.png`.
+The production pack uses the separate supplied original exports under
+`/Users/ob/Downloads/nullapart-acid-lime-assets`; it does **not** use crops or
+Lanczos upscales of the flattened contact sheet.
 
-The two visual compositions were generated as artwork, then retained with
-high-density renditions for the browser. CSS-built grids, focus rings, status
-markers, controls and table structures are deliberately code-native rather
-than raster assets so they respond to theme, zoom, content and assistive
-technology.
+| Reference group | Production files | Origin / dimensions | Current use |
+| --- | --- | --- | --- |
+| Primary vertical, horizontal and mark | `logos/primary-logo-dark@2x.png`, `logos/horizontal-logo-dark.png`, `logos/logo-mark@2x.png` | supplied originals; 2350×2272, 1770×521, 2048×2048 | Login, shell and compact context mark. |
+| Wordmark/tagline and monochrome lock-ups | `logos/wordmark-light.png`, `logos/tagline-lime.png`, `logos/horizontal-clean-teal.png`, `logos/horizontal-threat-magenta.png` | supplied originals | Approved variants for email, status communications and dark/light composition. |
+| Website hero and header | `web/website-hero-2560x900.png`, `web/website-header-1600x320.png` | supplied originals | Login hero; marketing/header usage only. |
+| Social cards | `social/x-card-1200x675.png`, `social/linkedin-card-1200x627.png`, `social/youtube-card-2560x1440.png` | supplied originals | Publishing assets; not loaded into the operator console. |
+| App, favicon and profile assets | `app/*` including Android, Apple, maskable, favicon and round signature mark variants | supplied originals; 16–2048 px | Wired by `index.html` and `site.webmanifest` for browser/PWA and email-signature use. |
+| Email signature and stationery artwork | `email/email-signature-horizontal-600.png`, `email/email-stationery-banner-{600x200,1200x400}.png` | supplied originals | Browser/email composition reference; the supplied 1200×400 banner is also bundled as the CID-safe mail-core attachment. |
+| Motion frames | `animation/{logo,mark}-loop.{gif,webp}`, `frames/logo-motion-01.png` through `04.png` | supplied animation plus native-frame extraction; 1280×420 frames | Motion/export production; stills correspond to the four contact-sheet frames. |
+| Globe and wave backgrounds | `generated/nullapart-{globe,wave}-command-bg@2x.png` | direct generated artwork; 3344×1882 and 3832×1642 | Decorative shell atmosphere only, never status information. |
+| Security icon set | `icons/icon-{clean-shield,threat-shield,review-warning,processing-mail,settings}.svg` | code-native SVG; scalable | Semantic visual vocabulary, safe at zoom and themable by context. |
+| CTA reference assets | `ui/{get-started-button,contact-sales-button}.svg` | code-native SVG; 360×112 | Marketing reference assets; not used to create deceptive admin actions. |
+| Status set | `status/status-{clean,threat,review}-256.png`, `status/status-{processing,delivered}.svg` | supplied originals plus code-native SVG; 256 px/scalable | Live application status pills and sidebar session-boundary mark. |
+
+The application uses high-density original image files where imagery is useful,
+and uses SVG/CSS for scalable interactive controls. Decorative images carry an
+empty `alt`; labels and state stay in semantic text so no security meaning is
+lost when images, animation or colour are unavailable.
+
+The shell now applies the horizontal lock-up, status mark and an authenticated
+scope bar to every protected route. The login uses the supplied 2560×900 hero
+behind an overlay, preserving foreground contrast and never making a visual
+asset an authentication or authorization signal.
 
 ## Email stationery
 
 `crates/mail-core/src/notification_stationery.rs` provides a branded HTML
-renderer, matching plain-text alternative, and a 2172×724 CID-ready header
-artwork bundle. It deliberately contains no remote images, tracking pixels,
+renderer, matching plain-text alternative, and the supplied 1200×400 CID-ready
+header artwork bundle. It deliberately contains no remote images, tracking pixels,
 scripts, forms, caller-controlled markup or URLs. This works in image-blocking
 mail clients and avoids privacy/tracking behaviour in a security-product
 notification.

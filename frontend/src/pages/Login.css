@@ -14,19 +14,17 @@
   position: absolute;
   inset: 0;
   background:
+    linear-gradient(90deg, rgba(5, 5, 5, 0.78), rgba(5, 5, 5, 0.2)),
+    url("/brand/web/website-hero-2560x900.png") center / cover no-repeat,
     url("/brand/generated/nullapart-globe-command-bg@2x.png") right -80px
       center / 72% auto no-repeat,
-    url("/brand/generated/nullapart-wave-command-bg@2x.png") left top /
-      min(900px, 92vw) auto no-repeat,
     var(--brand-beam),
     radial-gradient(
       900px 500px at 50% -10%,
       color-mix(in srgb, var(--lime) 7%, transparent),
       transparent 65%
     );
-  opacity: 0.55;
-  /* Screen-blend so the image's dark rectangle melts into the canvas. */
-  mix-blend-mode: screen;
+  opacity: 0.66;
   pointer-events: none;
 }
 

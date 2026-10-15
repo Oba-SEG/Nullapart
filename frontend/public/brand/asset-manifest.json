@@ -1,0 +1,188 @@
+{
+  "schema_version": 1,
+  "generated_on": "2026-10-14",
+  "source": "/Users/ob/Downloads/asset_contact_sheet.png",
+  "policy": "Each item maps to an original supplied export, a native animation frame extracted from an original supplied animation, or a scalable code-native SVG. No flattened contact-sheet crop is a production asset.",
+  "assets": [
+    {
+      "reference": "primary_logo_vertical",
+      "file": "logos/primary-logo-dark@2x.png",
+      "type": "supplied",
+      "dimensions": "2350x2272"
+    },
+    {
+      "reference": "horizontal_logo",
+      "file": "logos/horizontal-logo-dark.png",
+      "type": "supplied",
+      "dimensions": "1770x521"
+    },
+    {
+      "reference": "logo_mark_icon_only",
+      "file": "logos/logo-mark@2x.png",
+      "type": "supplied",
+      "dimensions": "2048x2048"
+    },
+    {
+      "reference": "website_hero",
+      "file": "web/website-hero-2560x900.png",
+      "type": "supplied",
+      "dimensions": "2560x900"
+    },
+    {
+      "reference": "website_header",
+      "file": "web/website-header-1600x320.png",
+      "type": "supplied",
+      "dimensions": "1600x320"
+    },
+    {
+      "reference": "x_twitter_card",
+      "file": "social/x-card-1200x675.png",
+      "type": "supplied",
+      "dimensions": "1200x675"
+    },
+    {
+      "reference": "linkedin_card",
+      "file": "social/linkedin-card-1200x627.png",
+      "type": "supplied",
+      "dimensions": "1200x627"
+    },
+    {
+      "reference": "youtube_card",
+      "file": "social/youtube-card-2560x1440.png",
+      "type": "supplied",
+      "dimensions": "2560x1440"
+    },
+    {
+      "reference": "app_touch_dark",
+      "file": "app/android-chrome-512.png",
+      "type": "supplied",
+      "dimensions": "512x512"
+    },
+    {
+      "reference": "app_touch_light",
+      "file": "app/apple-touch-icon-180.png",
+      "type": "supplied",
+      "dimensions": "180x180"
+    },
+    {
+      "reference": "email_signature_round_mark",
+      "file": "app/email-signature-round@2x.png",
+      "type": "supplied",
+      "dimensions": "2048x2048"
+    },
+    {
+      "reference": "email_signature_horizontal",
+      "file": "email/email-signature-horizontal-600.png",
+      "type": "supplied",
+      "dimensions": "600x177"
+    },
+    {
+      "reference": "frame_01_form",
+      "file": "frames/logo-motion-01.png",
+      "type": "extracted-from-supplied-animation",
+      "dimensions": "1280x420"
+    },
+    {
+      "reference": "frame_02_glow",
+      "file": "frames/logo-motion-02.png",
+      "type": "extracted-from-supplied-animation",
+      "dimensions": "1280x420"
+    },
+    {
+      "reference": "frame_03_reveal",
+      "file": "frames/logo-motion-03.png",
+      "type": "extracted-from-supplied-animation",
+      "dimensions": "1280x420"
+    },
+    {
+      "reference": "frame_04_complete",
+      "file": "frames/logo-motion-04.png",
+      "type": "extracted-from-supplied-animation",
+      "dimensions": "1280x420"
+    },
+    {
+      "reference": "globe_background",
+      "file": "generated/nullapart-globe-command-bg@2x.png",
+      "type": "generated-artwork",
+      "dimensions": "3344x1882"
+    },
+    {
+      "reference": "wave_background",
+      "file": "generated/nullapart-wave-command-bg@2x.png",
+      "type": "generated-artwork",
+      "dimensions": "3832x1642"
+    },
+    {
+      "reference": "iconset_clean_shield",
+      "file": "icons/icon-clean-shield.svg",
+      "type": "code-native-svg",
+      "dimensions": "scalable"
+    },
+    {
+      "reference": "iconset_threat_shield",
+      "file": "icons/icon-threat-shield.svg",
+      "type": "code-native-svg",
+      "dimensions": "scalable"
+    },
+    {
+      "reference": "iconset_review_warning",
+      "file": "icons/icon-review-warning.svg",
+      "type": "code-native-svg",
+      "dimensions": "scalable"
+    },
+    {
+      "reference": "iconset_processing_mail",
+      "file": "icons/icon-processing-mail.svg",
+      "type": "code-native-svg",
+      "dimensions": "scalable"
+    },
+    {
+      "reference": "iconset_settings",
+      "file": "icons/icon-settings.svg",
+      "type": "code-native-svg",
+      "dimensions": "scalable"
+    },
+    {
+      "reference": "get_started_button",
+      "file": "ui/get-started-button.svg",
+      "type": "code-native-svg",
+      "dimensions": "360x112"
+    },
+    {
+      "reference": "contact_sales_button",
+      "file": "ui/contact-sales-button.svg",
+      "type": "code-native-svg",
+      "dimensions": "360x112"
+    },
+    {
+      "reference": "status_clean",
+      "file": "status/status-clean-256.png",
+      "type": "supplied",
+      "dimensions": "256x256"
+    },
+    {
+      "reference": "status_threat",
+      "file": "status/status-threat-256.png",
+      "type": "supplied",
+      "dimensions": "256x256"
+    },
+    {
+      "reference": "status_review",
+      "file": "status/status-review-256.png",
+      "type": "supplied",
+      "dimensions": "256x256"
+    },
+    {
+      "reference": "status_processing",
+      "file": "status/status-processing.svg",
+      "type": "code-native-svg",
+      "dimensions": "scalable"
+    },
+    {
+      "reference": "status_delivered",
+      "file": "status/status-delivered.svg",
+      "type": "code-native-svg",
+      "dimensions": "scalable"
+    }
+  ]
+}

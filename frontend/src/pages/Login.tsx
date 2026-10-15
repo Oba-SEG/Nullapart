@@ -30,7 +30,7 @@ export function Login() {
       <div className="login-card">
         <div className="login-header">
           <img
-            src="/brand/primary-logo.png"
+            src="/brand/logos/primary-logo-dark@2x.png"
             alt="Nullapart — Cleaner mail. A safer world."
             className="login-logo-img"
           />
