@@ -46,6 +46,7 @@ interface ReportAuthorizationStatus {
 interface BimiStatus {
   selector: string;
   status: "ready" | "not_ready" | "invalid" | "unknown";
+  validation_scope: "dns_metadata_only";
   logo_url: string | null;
   svg_status: "valid" | "invalid" | "not_checked" | "unknown";
   dmarc_enforcement_status: "enforced" | "not_enforced" | "unknown";
@@ -171,6 +172,12 @@ function policyTone(policy: string | null): StatusTone {
   return "threat";
 }
 
+function bimiStatusLabel(bimi: BimiStatus): string {
+  return bimi.status === "ready" && bimi.validation_scope === "dns_metadata_only"
+    ? "DNS prerequisites observed"
+    : bimi.status;
+}
+
 function SummaryCard({
   label,
   value,
@@ -270,7 +277,7 @@ export function DomainSecurity() {
       <WorkspaceHeader
         eyebrow="Trust & identity"
         title="Domain security"
-        description={`DMARC reporting, sender inventory, external report authorization, BIMI readiness and DNS observer status for ${data.deployment_id}.`}
+        description={`DMARC reporting, sender inventory, external report authorization, and DNS-only BIMI readiness for ${data.deployment_id}.`}
         scope="Domain configuration"
         actions={
           <button
@@ -367,7 +374,7 @@ export function DomainSecurity() {
         <SummaryCard
           label="BIMI not ready"
           value={data.summary.bimi_not_ready}
-          detail="enforcement/SVG/cert gaps"
+          detail="DNS readiness gaps; SVG/VMC are not fetched"
         />
         <SummaryCard
           label="Open alerts"
@@ -473,10 +480,11 @@ export function DomainSecurity() {
                     <div className="domain-security-record">
                       <StatusPill
                         tone={toneForStatus(domain.bimi.status)}
-                        label={domain.bimi.status}
+                        label={bimiStatusLabel(domain.bimi)}
                       />
                       <span>Selector {domain.bimi.selector}</span>
-                      <span>SVG {domain.bimi.svg_status}</span>
+                      <span>SVG URL {domain.bimi.svg_status} (not fetched)</span>
+                      <span>Certificate URL {domain.bimi.certificate_status} (not validated)</span>
                       <span>DMARC {domain.bimi.dmarc_enforcement_status}</span>
                       {domain.bimi.logo_url ? (
                         <span className="domain-security-logo-url">
@@ -484,6 +492,10 @@ export function DomainSecurity() {
                           {domain.bimi.logo_url}
                         </span>
                       ) : null}
+                      <small>
+                        DNS metadata only. Nullapart does not fetch, render, or cryptographically
+                        validate BIMI SVG or VMC/CMC material.
+                      </small>
                     </div>
                   ) : (
                     <p className="domain-security-muted">No BIMI observation recorded.</p>

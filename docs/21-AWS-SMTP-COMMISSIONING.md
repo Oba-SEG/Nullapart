@@ -74,6 +74,15 @@ Commission the Nullapart infrastructure domains used for platform-generated mail
 
 Customer outbound signing remains customer/domain specific.
 
+Do not mark a customer domain as signed merely because its sender domain passed
+admission validation. Each customer sender domain needs a private authenticated
+submission path, a tenant-authorized DKIM key provisioned through the approved
+secret boundary (never Git, image layers, or UI), a published selector record,
+SPF authorization for the commissioned egress identity, aligned DMARC, and a
+recorded external delivery verification. BIMI logo display is decided by
+receiving mailbox providers; DNS URL-shape observation alone is not SVG/VMC
+validation or provider acceptance.
+
 ## Inbound DNS
 
 Commission:

@@ -2,6 +2,14 @@
 //!
 //! Receives authenticated outbound mail from internal connectors/MTAs,
 //! validates domain ownership, and routes to delivery (direct MX or smart-host).
+//!
+//! Signing claims are truthful and fail closed: Mail Core reports DKIM as
+//! available only when the caller supplies trusted signing configuration that
+//! matches the validated sender domain. Private key material never enters this
+//! crate; actual signing happens on the trusted private outbound path
+//! (Postfix/Rspamd) with per-domain keys provisioned outside Git through the
+//! approved secrets boundary. With no provisioned signer the intake result
+//! reports signing unavailable rather than claiming `dkim_enabled`.
 //! Follows: docs/phases/PHASE-1-EXECUTION-PLAN.md Work Package 9
 
 use std::collections::BTreeMap;
@@ -133,13 +141,96 @@ pub enum RoutingMethod {
     Internal,
 }
 
-/// Signing configuration for outbound.
+/// Trusted outbound signing state for a validated intake.
+///
+/// Reported truthfully from [`OutboundSigningConfig`]; never derived from
+/// untrusted message headers or from the mere existence of a sender domain.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutboundSigning {
     pub dkim_enabled: bool,
+    pub dkim_status: DkimSigningStatus,
     pub dkim_domain: Option<String>,
     pub dkim_selector: Option<String>,
     pub spf_helo: Option<String>,
+}
+
+/// Whether a trusted outbound DKIM signer is configured and available.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DkimSigningStatus {
+    /// A trusted, key-backed signer for this sending domain is provisioned on
+    /// the private outbound path.
+    Available,
+    /// No trusted signer is provisioned; outbound DKIM signing fails closed
+    /// and must surface as unavailable.
+    Unavailable,
+}
+
+/// Trusted outbound signing configuration supplied by the authenticated
+/// server stage that calls [`validate_outbound`].
+///
+/// Nullapart never derives signing claims from untrusted message headers or
+/// from the mere existence of an envelope sender domain. Real per-domain key
+/// material is provisioned outside Git through the approved secrets boundary
+/// and mounted into the trusted private outbound path (Rspamd/Postfix). This
+/// pure structure only reports whether that trusted provisioning exists. The
+/// default configuration reports signing unavailable, so outbound signing
+/// fails closed instead of silently claiming `dkim_enabled = true`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutboundSigningConfig {
+    /// Trusted provisioned DKIM signer, when a real key-backed signer exists
+    /// for the sending domain on the private outbound path.
+    pub dkim: Option<ProvisionedDkimSigner>,
+    /// Commissioned HELO identity for outbound SMTP, when separately
+    /// provisioned. Never derived from envelope/header sender data.
+    pub helo_identity: Option<String>,
+}
+
+/// A DKIM signing identity that a trusted deployment stage has confirmed is
+/// available for one sending domain.
+///
+/// Metadata only: the private key never enters this structure or Mail Core;
+/// it stays with the outbound signer behind the secrets boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProvisionedDkimSigner {
+    /// Sending domain the provisioned key is valid for.
+    pub domain: String,
+    /// Published selector for the provisioned key.
+    pub selector: String,
+}
+
+/// Derive the outbound signing report from trusted deployment provisioning.
+///
+/// Pure and deterministic: signing is available only when a provisioned
+/// signer's domain matches the validated sender domain. A missing or
+/// mismatched signer fails closed as unavailable.
+pub fn outbound_signing(sender_domain: &str, config: &OutboundSigningConfig) -> OutboundSigning {
+    let sender = sender_domain.trim();
+    let matched = config.dkim.as_ref().filter(|signer| {
+        !signer.selector.trim().is_empty() && signer.domain.trim().eq_ignore_ascii_case(sender)
+    });
+    let spf_helo = config
+        .helo_identity
+        .as_deref()
+        .map(str::trim)
+        .filter(|identity| !identity.is_empty())
+        .map(str::to_string);
+    match matched {
+        Some(signer) => OutboundSigning {
+            dkim_enabled: true,
+            dkim_status: DkimSigningStatus::Available,
+            dkim_domain: Some(signer.domain.trim().to_string()),
+            dkim_selector: Some(signer.selector.trim().to_string()),
+            spf_helo,
+        },
+        None => OutboundSigning {
+            dkim_enabled: false,
+            dkim_status: DkimSigningStatus::Unavailable,
+            dkim_domain: None,
+            dkim_selector: None,
+            spf_helo,
+        },
+    }
 }
 
 /// Phase 6 behaviour/threat snapshot supplied by trusted server stages.
@@ -158,11 +249,35 @@ pub struct OutboundIntakeWithIntelligence {
     pub intelligence: OutboundIntelligenceDecision,
 }
 
-/// Validate an outbound intake request.
+/// Validate an outbound intake request against trusted domain authorization.
+///
+/// The general admission boundary has no key-backed signer attached, so it
+/// reports signing unavailable. The private delivery stage must use
+/// [`validate_outbound_with_signing_config`] only after it has selected an
+/// actual provisioned signer.
 pub fn validate_outbound(
     request: &OutboundIntakeRequest,
     allowed_domains: &[DomainValidation],
     authorization: &DomainAuthorization,
+) -> Result<OutboundIntakeResult, OutboundError> {
+    validate_outbound_with_signing_config(
+        request,
+        allowed_domains,
+        authorization,
+        &OutboundSigningConfig::default(),
+    )
+}
+
+/// Validate an outbound intake request using trusted signing provisioning.
+///
+/// `signing_config` must originate in authenticated server configuration that
+/// reflects actual key provisioning on the private outbound path. It is never
+/// populated from connector or message data.
+pub fn validate_outbound_with_signing_config(
+    request: &OutboundIntakeRequest,
+    allowed_domains: &[DomainValidation],
+    authorization: &DomainAuthorization,
+    signing_config: &OutboundSigningConfig,
 ) -> Result<OutboundIntakeResult, OutboundError> {
     if request.connector.connector_id.trim().is_empty()
         || request
@@ -251,13 +366,10 @@ pub fn validate_outbound(
         use_tls: true,
     };
 
-    // Signing configuration
-    let signing = OutboundSigning {
-        dkim_enabled: true,
-        dkim_domain: Some(sender_domain.to_string()),
-        dkim_selector: Some("nullapart".to_string()),
-        spf_helo: Some(sender_domain.to_string()),
-    };
+    // Signing is reported truthfully from trusted provisioning only. Mail
+    // Core never fabricates a DKIM-enabled claim from the sender domain; a
+    // missing provisioned signer fails closed as unavailable.
+    let signing = outbound_signing(sender_domain, signing_config);
 
     Ok(OutboundIntakeResult {
         transaction_id: uuid::Uuid::new_v4().to_string(),
@@ -275,10 +387,16 @@ pub async fn validate_outbound_with_intelligence(
     request: &OutboundIntakeRequest,
     allowed_domains: &[DomainValidation],
     authorization: &DomainAuthorization,
+    signing_config: &OutboundSigningConfig,
     snapshot: OutboundIntelligenceSnapshot,
     store: &PostgresOutboundIntelligenceStore,
 ) -> Result<OutboundIntakeWithIntelligence, OutboundError> {
-    let intake = validate_outbound(request, allowed_domains, authorization)?;
+    let intake = validate_outbound_with_signing_config(
+        request,
+        allowed_domains,
+        authorization,
+        signing_config,
+    )?;
     let source = OutboundSourceContext {
         deployment_id: request.connector.deployment_id.clone(),
         customer_id: request.connector.customer_id.clone(),
@@ -498,6 +616,51 @@ mod tests {
         assert!(result.is_ok());
         let result = result.unwrap();
         assert_eq!(result.disposition, OutboundDisposition::Accepted);
+        assert!(!result.signing.dkim_enabled);
+        assert_eq!(result.signing.dkim_status, DkimSigningStatus::Unavailable);
+        assert_eq!(result.signing.dkim_domain, None);
+        assert_eq!(result.signing.dkim_selector, None);
+        assert_eq!(result.signing.spf_helo, None);
+    }
+
+    #[test]
+    fn signing_is_available_only_for_a_matching_trusted_provisioned_domain() {
+        let config = OutboundSigningConfig {
+            dkim: Some(ProvisionedDkimSigner {
+                domain: "customer-a.com".to_string(),
+                selector: "s2026".to_string(),
+            }),
+            helo_identity: Some("mxout-za-a-01.nullapart.com".to_string()),
+        };
+
+        let signing = outbound_signing("customer-a.com", &config);
+
+        assert!(signing.dkim_enabled);
+        assert_eq!(signing.dkim_status, DkimSigningStatus::Available);
+        assert_eq!(signing.dkim_domain.as_deref(), Some("customer-a.com"));
+        assert_eq!(signing.dkim_selector.as_deref(), Some("s2026"));
+        assert_eq!(
+            signing.spf_helo.as_deref(),
+            Some("mxout-za-a-01.nullapart.com")
+        );
+    }
+
+    #[test]
+    fn signing_fails_closed_when_the_provisioned_domain_does_not_match() {
+        let config = OutboundSigningConfig {
+            dkim: Some(ProvisionedDkimSigner {
+                domain: "other-customer.com".to_string(),
+                selector: "s2026".to_string(),
+            }),
+            helo_identity: None,
+        };
+
+        let signing = outbound_signing("customer-a.com", &config);
+
+        assert!(!signing.dkim_enabled);
+        assert_eq!(signing.dkim_status, DkimSigningStatus::Unavailable);
+        assert_eq!(signing.dkim_domain, None);
+        assert_eq!(signing.dkim_selector, None);
     }
 
     #[test]

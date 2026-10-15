@@ -543,6 +543,24 @@ classification/history, external report authorization validation, DNS observer
 history, BIMI readiness metadata, idempotent alert generation and
 metadata-only quarantine for restricted `ruf` failure reports.
 
+### Outbound-authentication boundary (2026-10-15 correction)
+
+The Domain Security experience reports **DNS-only BIMI readiness metadata**.
+`ready` means the observer found enforced DMARC and safe-shaped HTTPS logo and
+certificate URLs; it does not mean the SVG profile, VMC/CMC chain, or
+mailbox-provider logo display has been validated. The observer intentionally
+does not dereference customer-controlled URLs to avoid SSRF and untrusted SVG
+parsing in the control plane.
+
+The Phase 1 outbound admission model reports DKIM signing as unavailable until
+a future private outbound submission path has selected a tenant-authorized
+domain key from the approved secret boundary and submitted mail to a configured
+signing MTA/milter. Sender-domain validation alone is not signing evidence.
+Actual customer outbound signing remains an operational Phase 1/SMTP
+commissioning prerequisite: private authenticated submission, key provisioning
+outside Git, selector DNS, SPF authorization, aligned DMARC, and a real
+external-message verification test.
+
 ## Failure-report privacy controls
 
 Implemented:

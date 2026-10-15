@@ -640,12 +640,12 @@ impl DomainObserverWorker {
                     observation: if ready {
                         Observation::pass(
                             Some(name),
-                            "BIMI record is present and prerequisites are ready for safe validation.",
+                            "BIMI DNS prerequisites are present; SVG and certificate material were not fetched or cryptographically validated.",
                         )
                     } else {
                         Observation::warning(
                             Some(name),
-                            "BIMI exists but readiness prerequisites are incomplete.",
+                            "BIMI DNS readiness prerequisites are incomplete; SVG and certificate material are never fetched by this observer.",
                         )
                     },
                 }

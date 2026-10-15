@@ -172,6 +172,7 @@ struct ReportAuthorizationStatus {
 struct BimiStatus {
     selector: String,
     status: String,
+    validation_scope: &'static str,
     logo_url: Option<String>,
     svg_status: String,
     dmarc_enforcement_status: String,
@@ -900,6 +901,11 @@ async fn load_bimi(
                     BimiStatus {
                         selector: row.get("selector"),
                         status: row.get("status"),
+                        // The observer validates only DNS record and URL
+                        // shape. This explicit projection prevents callers
+                        // from treating a ready record as SVG/VMC or mailbox
+                        // provider validation.
+                        validation_scope: "dns_metadata_only",
                         logo_url: row.get("logo_url"),
                         svg_status: row.get("svg_status"),
                         dmarc_enforcement_status: row.get("dmarc_enforcement_status"),
@@ -1023,6 +1029,9 @@ fn next_actions(
     }
     if bimi.is_some_and(|value| value.status != "ready") {
         actions.push("Fix BIMI readiness: DMARC enforcement, secure SVG profile and certificate state must all pass.".to_string());
+    }
+    if bimi.is_some_and(|value| value.validation_scope == "dns_metadata_only") {
+        actions.push("Treat BIMI as DNS readiness only: validate the secure SVG profile and VMC/CMC outside the observer before relying on mailbox-logo display.".to_string());
     }
     if observations.iter().any(|value| value.status == "fail") {
         actions
