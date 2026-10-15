@@ -5,6 +5,9 @@ import { useState } from "react";
 import { api, type ApiError } from "../api/client";
 import { canImpersonate, hasPermission, loadSession, startImpersonation } from "../auth/session";
 import { StepUpPrompt } from "../components/StepUpPrompt";
+import { WorkspaceHeader } from "../components/WorkspaceHeader";
+import { WorkflowGuide } from "../components/WorkflowGuide";
+import { ControlRail } from "../components/ControlRail";
 import { Button } from "../components/primitives/Button";
 import { Dialog } from "../components/primitives/Dialog";
 import { Input } from "../components/primitives/Input";
@@ -95,6 +98,8 @@ export function Customers() {
   const nameError = displayNameError(displayName);
   const reasonTooShort = reason.trim().length < MIN_REASON_LENGTH;
   const rows = customers.data?.customers ?? [];
+  const customersAvailable = customers.isSuccess;
+  const customersState = customers.isError ? "Unavailable" : "Loading";
 
   function closeDialog() {
     setOpen(false);
@@ -148,20 +153,69 @@ export function Customers() {
 
   return (
     <div className="customers-page">
-      <header className="customers-header">
-        <div>
-          <h1 className="customers-title">Customers</h1>
-          <p className="customers-subtitle">
-            Customer records for this deployment. Lifecycle changes, domains and source IP groups
-            are managed from the customer detail page and are audited.
-          </p>
-        </div>
-        {canManage ? (
-          <Button type="button" variant="primary" onClick={() => setOpen(true)}>
-            New customer
-          </Button>
-        ) : null}
-      </header>
+      <WorkspaceHeader
+        eyebrow="Tenant administration"
+        title="Customers"
+        description="Create and enter customer workspaces, then manage lifecycle, domains and source IP groups from the customer record. Every state-changing action is audited."
+        scope="Customer lifecycle controls"
+        actions={
+          canManage ? (
+            <Button type="button" variant="primary" onClick={() => setOpen(true)}>
+              New customer
+            </Button>
+          ) : null
+        }
+      />
+
+      <ControlRail
+        title="Customer estate"
+        summary="Choose a customer record to enter its lifecycle and trust configuration workspace."
+        signals={[
+          {
+            label: "Customers",
+            value: customersAvailable ? rows.length : customersState,
+            detail: customersAvailable
+              ? "Records visible in your current deployment scope."
+              : "Customer scope has not produced an authoritative result yet.",
+          },
+          {
+            label: "Active",
+            value: customersAvailable
+              ? rows.filter((row) => row.lifecycle === "active").length
+              : customersState,
+            detail: customersAvailable
+              ? "Currently active customer records."
+              : "Lifecycle state is unavailable until the customer query succeeds.",
+            tone: customersAvailable ? "healthy" : "neutral",
+          },
+          {
+            label: "Needs review",
+            value: customersAvailable
+              ? rows.filter((row) => row.lifecycle !== "active").length
+              : customersState,
+            detail: customersAvailable
+              ? "Grace, suspended or terminated records require deliberate handling."
+              : "No review queue is inferred while the customer query is unavailable.",
+            tone: customersAvailable ? "attention" : "neutral",
+          },
+        ]}
+      />
+
+      <WorkflowGuide
+        title="Establish a tenant safely"
+        description="Customer records are the boundary for all downstream configuration and investigation work."
+        steps={[
+          { label: "Create", detail: "Create the customer record with a controlled display name." },
+          {
+            label: "Configure",
+            detail: "Open the record to manage lifecycle, domains and source IP groups.",
+          },
+          {
+            label: "Enter",
+            detail: "Use a recorded reason before entering a customer-scoped workspace.",
+          },
+        ]}
+      />
 
       {customers.isPending ? (
         <div className="customers-state" role="status">

@@ -5,6 +5,9 @@ import { useState } from "react";
 import { api, type ApiError } from "../api/client";
 import { hasPermission, loadSession } from "../auth/session";
 import { StatusPill } from "../components/StatusPill";
+import { ControlRail } from "../components/ControlRail";
+import { WorkspaceHeader } from "../components/WorkspaceHeader";
+import { WorkflowGuide } from "../components/WorkflowGuide";
 import { randomUuid } from "../lib/ids";
 import type { StatusTone } from "../lib/status";
 import "./OutboundIntelligence.css";
@@ -251,23 +254,64 @@ export function OutboundIntelligence() {
 
   return (
     <div className="outbound-page">
-      <header className="page-header outbound-header">
-        <div>
-          <h1 className="page-title">Outbound intelligence</h1>
-          <p className="outbound-subtitle">
-            Sender, source, campaign and containment controls for deployment {data.deployment_id}.
-          </p>
-        </div>
-        <button
-          type="button"
-          className="btn btn-ghost"
-          onClick={() => void intelligence.refetch()}
-          aria-label="Refresh outbound intelligence"
-        >
-          <RefreshCw size={14} aria-hidden="true" />
-          Refresh
-        </button>
-      </header>
+      <WorkspaceHeader
+        eyebrow="Outbound protection"
+        title="Outbound intelligence"
+        description={`Review sender, source, campaign and containment controls for deployment ${data.deployment_id}.`}
+        scope="Outbound enforcement controls"
+        actions={
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => void intelligence.refetch()}
+            aria-label="Refresh outbound intelligence"
+          >
+            <RefreshCw size={14} aria-hidden="true" />
+            Refresh
+          </button>
+        }
+      />
+
+      <ControlRail
+        title="Outbound risk queue"
+        summary="Prioritize open security events before changing sender approval limits or applying containment."
+        signals={[
+          {
+            label: "Open events",
+            value: data.summary.open_security_events,
+            detail: "Outbound security events still awaiting closure.",
+            tone: data.summary.open_security_events > 0 ? "attention" : "healthy",
+          },
+          {
+            label: "Critical",
+            value: data.summary.critical_security_events,
+            detail: "Critical events in the current security event set.",
+            tone: data.summary.critical_security_events > 0 ? "attention" : "healthy",
+          },
+          {
+            label: "Approved senders",
+            value: data.summary.approved_bulk_senders,
+            detail: "Bulk senders with an active approved policy.",
+            tone: "healthy",
+          },
+        ]}
+      />
+
+      <WorkflowGuide
+        title="Contain outbound risk deliberately"
+        description="Use observed send activity to determine whether a sender needs an approved limit, source correction or containment action."
+        steps={[
+          { label: "Assess", detail: "Read current sender, campaign and security-event signals." },
+          {
+            label: "Authorize",
+            detail: "Create or change approved sender limits with a recorded reason.",
+          },
+          {
+            label: "Contain",
+            detail: "Apply the permitted containment control and verify it in the refreshed state.",
+          },
+        ]}
+      />
 
       {notice ? (
         <div className="outbound-notice" role="status">

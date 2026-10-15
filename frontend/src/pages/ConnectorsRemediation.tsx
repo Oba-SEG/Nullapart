@@ -6,6 +6,9 @@ import { api, type ApiError } from "../api/client";
 import { hasPermission, loadSession } from "../auth/session";
 import { Button } from "../components/primitives/Button";
 import { StepUpPrompt } from "../components/StepUpPrompt";
+import { WorkspaceHeader } from "../components/WorkspaceHeader";
+import { ControlRail } from "../components/ControlRail";
+import { WorkflowGuide } from "../components/WorkflowGuide";
 import { randomUuid } from "../lib/ids";
 import "./ConnectorsRemediation.css";
 
@@ -295,16 +298,56 @@ export function ConnectorsRemediation() {
 
   return (
     <div className="connectors-page">
-      <header className="page-header connectors-header">
-        <div>
-          <p className="eyebrow">Phase 8</p>
-          <h1>Connectors & remediation</h1>
-          <p className="connectors-subtitle">
-            Manage tenant-scoped Microsoft 365 and Google Workspace capabilities, directory status,
-            mailbox search, and truthful remediation outcomes without exposing provider tokens.
-          </p>
-        </div>
-      </header>
+      <WorkspaceHeader
+        eyebrow="Provider controls"
+        title="Connectors & remediation"
+        description="Manage tenant-scoped Microsoft 365 and Google Workspace capabilities, directory status, mailbox search and recorded remediation outcomes without exposing provider tokens."
+        scope="Tenant-scoped connector controls"
+      />
+
+      <ControlRail
+        title="Connector action queue"
+        summary="Start with connector availability, then use only the provider capabilities that have been authorized for the selected tenant."
+        signals={[
+          {
+            label: "Active",
+            value: data.summary.active_connectors,
+            detail: "Connected provider integrations available in scope.",
+            tone: data.summary.active_connectors > 0 ? "healthy" : "attention",
+          },
+          {
+            label: "Directory sync",
+            value: data.summary.directory_sync_enabled,
+            detail: "Connectors currently reporting directory-sync capability.",
+          },
+          {
+            label: "Pending remediation",
+            value: data.summary.pending_remediations,
+            detail: "Provider actions awaiting a recorded outcome.",
+            tone: data.summary.pending_remediations > 0 ? "attention" : "healthy",
+          },
+        ]}
+      />
+
+      <WorkflowGuide
+        title="Remediate through the connected provider"
+        description="Provider capabilities and mailbox actions are tenant-scoped. The console records the result but never displays provider tokens."
+        steps={[
+          {
+            label: "Validate",
+            detail: "Confirm provider connection and directory state for the selected tenant.",
+          },
+          {
+            label: "Locate",
+            detail: "Search the permitted mailbox metadata or targeted remediation candidates.",
+          },
+          {
+            label: "Remediate",
+            detail:
+              "Execute the authorized action and capture its provider result in the audit trail.",
+          },
+        ]}
+      />
 
       <section className="connectors-summary" aria-label="Connector summary">
         <div>

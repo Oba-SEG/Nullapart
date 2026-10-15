@@ -4,6 +4,9 @@ import { useState } from "react";
 import { api, type ApiError } from "../api/client";
 import { hasPermission, loadSession } from "../auth/session";
 import { StepUpPrompt } from "../components/StepUpPrompt";
+import { WorkspaceHeader } from "../components/WorkspaceHeader";
+import { WorkflowGuide } from "../components/WorkflowGuide";
+import { ControlRail } from "../components/ControlRail";
 import { Button } from "../components/primitives/Button";
 import { Dialog } from "../components/primitives/Dialog";
 import { Input } from "../components/primitives/Input";
@@ -309,26 +312,71 @@ export function Operations() {
 
   return (
     <div className="operations-page">
-      <header className="operations-header">
-        <div>
-          <h1 className="operations-title">Runtime operations</h1>
-          <p className="operations-subtitle">
-            Published configuration, registered nodes and durable queue health for this deployment.
-            Values are reported by the running stack; nothing on this page is estimated.
-          </p>
-          {data ? <p className="operations-meta">Deployment {data.deployment_id}</p> : null}
-        </div>
-        <div className="operations-header-actions">
-          <Button type="button" onClick={() => void snapshot.refetch()}>
-            Reload
-          </Button>
-          {canManage ? (
-            <Button type="button" variant="primary" onClick={openDialog}>
-              Refresh
+      <WorkspaceHeader
+        eyebrow="Runtime control"
+        title="Runtime operations"
+        description="Inspect published configuration, registered nodes and durable queue health as reported by the running stack. Nothing on this page is estimated."
+        scope={data ? `Deployment ${data.deployment_id}` : "Runtime control"}
+        actions={
+          <>
+            <Button type="button" onClick={() => void snapshot.refetch()}>
+              Reload
             </Button>
-          ) : null}
-        </div>
-      </header>
+            {canManage ? (
+              <Button type="button" variant="primary" onClick={openDialog}>
+                Refresh
+              </Button>
+            ) : null}
+          </>
+        }
+      />
+
+      {data ? (
+        <ControlRail
+          title="Live runtime priorities"
+          summary="These signals come from the current server snapshot. Refresh is the only state-changing action exposed on this route."
+          signals={[
+            {
+              label: "Unpublished outbox",
+              value: data.outbox.unpublished_count,
+              detail: "Durable events awaiting publication.",
+              tone: data.outbox.unpublished_count > 0 ? "attention" : "healthy",
+            },
+            {
+              label: "Dead letters",
+              value: data.dead_letters.count,
+              detail: "Items requiring operator investigation.",
+              tone: data.dead_letters.count > 0 ? "attention" : "healthy",
+            },
+            {
+              label: "Active scanners",
+              value: `${data.scanner.active}/${data.scanner.total}`,
+              detail: "Registered scanner capacity currently active.",
+              tone: data.scanner.active === data.scanner.total ? "healthy" : "attention",
+            },
+          ]}
+        />
+      ) : null}
+
+      <WorkflowGuide
+        title="Operate from published state"
+        description="Use the live snapshot to determine where intervention is permitted before requesting a refresh."
+        steps={[
+          {
+            label: "Assess",
+            detail: "Read queue, scanner and configuration state from the running deployment.",
+          },
+          {
+            label: "Target",
+            detail:
+              "Choose deployment, tenant or node only when the operation scope is understood.",
+          },
+          {
+            label: "Refresh",
+            detail: "Request an audited refresh, then reload to confirm the resulting state.",
+          },
+        ]}
+      />
 
       {notice ? (
         <p className="operations-notice" role="status">

@@ -2,7 +2,7 @@
 
 **Status:** implementation record.
 
-**Last verified:** 2026-10-14.
+**Last verified:** 2026-10-15.
 
 ## Purpose
 
@@ -61,6 +61,46 @@ The shell now applies the horizontal lock-up, status mark and an authenticated
 scope bar to every protected route. The login uses the supplied 2560×900 hero
 behind an overlay, preserving foreground contrast and never making a visual
 asset an authentication or authorization signal.
+
+## Operator workspace interaction model
+
+**Implemented:** 2026-10-15.
+
+The protected console is organized as an operator workspace rather than a
+decorated dashboard. Each operational route uses a shared `WorkspaceHeader`
+that states the control domain, the route purpose and the authorization
+boundary. Its primary action slot contains only controls already backed by an
+authorized server operation; it never creates an implied local-only control.
+
+The `WorkflowGuide` beneath the route header puts the existing workflow in the
+order an administrator should follow: assess evidence, make a bounded change,
+then confirm the server-reported result. It is present across customers,
+policies and feature overrides, runtime/scanner operations, domains, outbound
+intelligence, connectors, quarantine, message tracing, audit, AI/model
+governance, user directory and local console settings. Record-detail routes
+retain their case/customer/policy facts and use the same workflow treatment
+where an investigation or revision decision is required.
+
+Routes with a live operational state also use `ControlRail`, a compact
+priority surface whose operational and risk signals come from the query
+response already authorized for that route. It may also label explicitly local
+UI state, such as the browser theme or whether a search has been submitted;
+local state is never presented as server health. It puts the relevant queue or
+risk signal directly beside the permitted operation: customer lifecycle state,
+policy release scope, feature floors, runtime outbox/dead letters, scanner
+capacity, domain trust, outbound events, connector remediation, quarantine
+eligibility, model/AI governance and the dashboard's navigation-only priority
+queue. A rail never manufactures a health state from browser data, and
+dashboard signals link to the workspace where the authorized action actually
+exists.
+
+This presentation layer does not change the authority model. Buttons still
+render according to the existing permission checks; server authorization,
+tenant ownership, step-up prompts, idempotency keys and audit records remain
+the source of truth. The workflow language explicitly calls out sandboxed
+message rendering, non-display of provider secrets, security floors and
+exception-only quarantine release so visual convenience cannot be mistaken for
+permission.
 
 ## Email stationery
 

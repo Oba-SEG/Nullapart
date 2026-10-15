@@ -1,6 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { api, type ApiError } from "../api/client";
 import { loadSession } from "../auth/session";
+import { ControlRail } from "../components/ControlRail";
+import { WorkspaceHeader } from "../components/WorkspaceHeader";
+import { WorkflowGuide } from "../components/WorkflowGuide";
 import "./AdminUsers.css";
 
 interface AdminUser {
@@ -38,13 +41,64 @@ export function AdminUsers() {
 
   const current = session.data ?? null;
   const canManage = current?.permissions?.includes("admin:users:manage") ?? false;
+  const directoryAvailable = users.isSuccess;
+  const directoryState = users.isError ? "Unavailable" : "Loading";
 
   return (
     <div className="admin-users-page">
-      <div>
-        <h1>Admin users</h1>
-        <p className="admin-users-subtitle">Directory of administrators for this deployment.</p>
-      </div>
+      <WorkspaceHeader
+        eyebrow="Identity administration"
+        title="Admin users"
+        description="Review the administrators recognized by this deployment and their current lifecycle. Role grants and revocations remain server-authorized and audited."
+        scope={canManage ? "Administrator directory" : "Read-only directory"}
+      />
+
+      <ControlRail
+        title="Directory scope"
+        summary="This console route is intentionally read-only. User-role mutation is not implemented as a browser action in this deployment."
+        signals={[
+          {
+            label: "Administrators",
+            value: directoryAvailable ? (users.data ?? []).length : directoryState,
+            detail: directoryAvailable
+              ? "Directory subjects returned in the permitted scope."
+              : "The directory has not produced an authoritative result yet.",
+          },
+          {
+            label: "Active",
+            value: directoryAvailable
+              ? (users.data ?? []).filter((user) => user.lifecycle === "active").length
+              : directoryState,
+            detail: directoryAvailable
+              ? "Subjects with an active lifecycle."
+              : "Lifecycle status is unavailable until the directory query succeeds.",
+            tone: directoryAvailable ? "healthy" : "neutral",
+          },
+          {
+            label: "Mutation path",
+            value: canManage ? "API-only" : "not granted",
+            detail: canManage
+              ? "The management API remains separately authorized and audited; no grant control is implied here."
+              : "Your current role has no user-management permission.",
+          },
+        ]}
+      />
+
+      <WorkflowGuide
+        title="Review identity scope before access changes"
+        description="This directory is evidence for administrative access. User-role mutation is intentionally API-only in this deployment."
+        steps={[
+          {
+            label: "Locate",
+            detail: "Find the administrator and verify their tenant association.",
+          },
+          { label: "Review", detail: "Compare lifecycle and currently effective roles." },
+          {
+            label: "Escalate",
+            detail: "Role mutation is API-only and remains separately authorized and audited.",
+          },
+        ]}
+      />
 
       {users.isError ? (
         <p className="admin-users-error" role="alert">
@@ -82,9 +136,7 @@ export function AdminUsers() {
       </div>
 
       {canManage ? (
-        <p className="admin-users-hint">
-          Role changes happen through the management API; every grant and revocation is audited.
-        </p>
+        <p className="admin-users-hint">Role mutation is intentionally API-only.</p>
       ) : null}
     </div>
   );

@@ -15,6 +15,9 @@ import { hasPermission, loadSession } from "../auth/session";
 import { MessageContent } from "../components/MessageContent";
 import { Button } from "../components/primitives/Button";
 import { StatusPill } from "../components/StatusPill";
+import { ControlRail } from "../components/ControlRail";
+import { WorkspaceHeader } from "../components/WorkspaceHeader";
+import { WorkflowGuide } from "../components/WorkflowGuide";
 import { severityTone } from "../lib/status";
 import "./MessageDetail.css";
 
@@ -148,20 +151,16 @@ export function MessageDetail() {
 
   return (
     <div className="detail-page">
-      <header className="detail-header">
-        <div>
-          <Link to="/messages" className="detail-back">
-            <ArrowLeft size={16} aria-hidden="true" /> Back to messages
-          </Link>
-          <h1 className="detail-title">Message trace</h1>
-          <p className="detail-subtitle">
-            Transaction metadata, authentication results, delivery attempts and scanner findings for
-            one mail transaction. Raw message bodies are only rendered through the sandboxed content
-            view.
-          </p>
-        </div>
-        {canViewContent && (
-          <div className="detail-actions">
+      <Link to="/messages" className="detail-back">
+        <ArrowLeft size={16} aria-hidden="true" /> Back to messages
+      </Link>
+      <WorkspaceHeader
+        eyebrow="Trace investigation"
+        title="Message trace"
+        description="Review transaction metadata, authentication, delivery attempts and scanner findings for one mail transaction. Raw message content is isolated in its sandboxed view."
+        scope="Tenant-scoped trace access"
+        actions={
+          canViewContent ? (
             <Button
               onClick={() => setContentOpen((open) => !open)}
               aria-expanded={contentOpen}
@@ -169,9 +168,53 @@ export function MessageDetail() {
             >
               {contentOpen ? "Close message content" : "View message content"}
             </Button>
-          </div>
-        )}
-      </header>
+          ) : null
+        }
+      />
+      <WorkflowGuide
+        title="Investigate from transaction evidence"
+        description="Trace stages and findings are ordered so an operator can identify the mail-security decision without treating a message body as trusted UI content."
+        steps={[
+          {
+            label: "Correlate",
+            detail: "Start with transaction facts and authentication evidence.",
+          },
+          {
+            label: "Inspect stages",
+            detail: "Read delivery and scanner outcomes in their execution order.",
+          },
+          {
+            label: "Open content cautiously",
+            detail: "Use the sandboxed content view only when your role permits it.",
+          },
+        ]}
+      />
+
+      {data ? (
+        <ControlRail
+          title="Trace decision state"
+          summary="This compact summary stays with the current trace so the next investigation step is grounded in the record, not a dashboard estimate."
+          signals={[
+            {
+              label: "Flow stages",
+              value: stages.length,
+              detail: "Recorded processing stages for this transaction.",
+            },
+            {
+              label: "Threat findings",
+              value: threatFindings.length,
+              detail: "Findings requiring an operator decision or linked-case review.",
+              tone: threatFindings.length > 0 ? "attention" : "healthy",
+            },
+            {
+              label: "Content access",
+              value: canViewContent ? "permitted" : "restricted",
+              detail: "Untrusted message content remains in the isolated view.",
+              tone: canViewContent ? "neutral" : "healthy",
+            },
+          ]}
+        />
+      ) : null}
 
       {detail.isError && isNotFound(detail.error) && (
         <div className="detail-state" role="alert">

@@ -1,6 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { api, type ApiError } from "../api/client";
+import { ControlRail } from "../components/ControlRail";
+import { WorkspaceHeader } from "../components/WorkspaceHeader";
+import { WorkflowGuide } from "../components/WorkflowGuide";
 import "./ScannerOperations.css";
 
 interface NodeStatus {
@@ -65,16 +68,57 @@ export function ScannerOperations() {
   const { node, capabilities, last_24_hours: totals } = operations.data;
   return (
     <div className="scanner-page">
-      <header className="page-header">
-        <div>
-          <h1 className="page-title">Scanner operations</h1>
-          <p className="scanner-subtitle">
-            Product capability health and tenant-scoped results. Engine details and message content
-            remain private.
-          </p>
-        </div>
-        <span className={`scanner-node-status ${node.status}`}>{node.status}</span>
-      </header>
+      <WorkspaceHeader
+        eyebrow="Mail security fabric"
+        title="Scanner operations"
+        description="Inspect product capability health and tenant-scoped results. Engine detail and message content remain private by design."
+        scope="Health-only operations view"
+        actions={<span className={`scanner-node-status ${node.status}`}>{node.status}</span>}
+      />
+
+      <ControlRail
+        title="Scanner capacity state"
+        summary="Health is exposed by capability label so routing decisions do not depend on scanner engine implementation detail."
+        signals={[
+          {
+            label: "Required unhealthy",
+            value: node.required_unhealthy,
+            detail: "Required capabilities not currently healthy.",
+            tone: node.required_unhealthy > 0 ? "attention" : "healthy",
+          },
+          {
+            label: "Capabilities",
+            value: `${capabilities.filter((item) => item.status === "healthy").length}/${capabilities.length}`,
+            detail: "Published capability health at this node.",
+            tone: capabilities.every((item) => item.status === "healthy") ? "healthy" : "attention",
+          },
+          {
+            label: "Reinjection failures",
+            value: totals.release_reinjection_failures,
+            detail: "Recorded release reinjection failures in the last 24 hours.",
+            tone: totals.release_reinjection_failures > 0 ? "attention" : "healthy",
+          },
+        ]}
+      />
+
+      <WorkflowGuide
+        title="Assess scanner capacity before routing work"
+        description="This page reports health and operation capability only; it deliberately does not expose scanner engines or unauthenticated management controls."
+        steps={[
+          {
+            label: "Read health",
+            detail: "Confirm active, draining and unavailable scanner capacity.",
+          },
+          {
+            label: "Inspect operation",
+            detail: "Compare the published capability labels and health state.",
+          },
+          {
+            label: "Escalate safely",
+            detail: "Use runtime operations for a permitted refresh when the evidence warrants it.",
+          },
+        ]}
+      />
 
       <section className="card scanner-stats" aria-label="Scanner totals for the last 24 hours">
         <div className="stat-row">

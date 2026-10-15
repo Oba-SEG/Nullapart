@@ -5,6 +5,9 @@ import { useState } from "react";
 import { api, type ApiError } from "../api/client";
 import { hasPermission, loadSession } from "../auth/session";
 import { StatusPill } from "../components/StatusPill";
+import { ControlRail } from "../components/ControlRail";
+import { WorkspaceHeader } from "../components/WorkspaceHeader";
+import { WorkflowGuide } from "../components/WorkflowGuide";
 import { randomUuid } from "../lib/ids";
 import type { StatusTone } from "../lib/status";
 import "./DomainSecurity.css";
@@ -264,24 +267,70 @@ export function DomainSecurity() {
 
   return (
     <div className="domain-security-page">
-      <header className="page-header domain-security-header">
-        <div>
-          <h1 className="page-title">Domain security</h1>
-          <p className="domain-security-subtitle">
-            DMARC reporting, sender inventory, external report authorization, BIMI readiness and DNS
-            observer status for deployment {data.deployment_id}.
-          </p>
-        </div>
-        <button
-          type="button"
-          className="btn btn-ghost"
-          onClick={() => void security.refetch()}
-          aria-label="Refresh domain security"
-        >
-          <RefreshCw size={14} aria-hidden="true" />
-          Refresh
-        </button>
-      </header>
+      <WorkspaceHeader
+        eyebrow="Trust & identity"
+        title="Domain security"
+        description={`DMARC reporting, sender inventory, external report authorization, BIMI readiness and DNS observer status for ${data.deployment_id}.`}
+        scope="Domain configuration"
+        actions={
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => void security.refetch()}
+            aria-label="Refresh domain security"
+          >
+            <RefreshCw size={14} aria-hidden="true" />
+            Refresh
+          </button>
+        }
+      />
+
+      <ControlRail
+        title="Domain trust priorities"
+        summary="Start with broken report authorization and unknown sources before treating a domain as ready for send identity."
+        signals={[
+          {
+            label: "Verified domains",
+            value: `${data.summary.verified_domains}/${data.summary.domains_total}`,
+            detail: "Domains whose configured verification is currently accepted.",
+            tone:
+              data.summary.verified_domains === data.summary.domains_total
+                ? "healthy"
+                : "attention",
+          },
+          {
+            label: "Unknown sources",
+            value: data.summary.unknown_sources,
+            detail: "Observed sources awaiting an explicit classification.",
+            tone: data.summary.unknown_sources > 0 ? "attention" : "healthy",
+          },
+          {
+            label: "Open notices",
+            value: data.summary.open_notifications,
+            detail: "Published domain-security observations that need review.",
+            tone: data.summary.open_notifications > 0 ? "attention" : "healthy",
+          },
+        ]}
+      />
+
+      <WorkflowGuide
+        title="Establish a defensible sending identity"
+        description="Work from the observed verification state, then correct the domain configuration through the server-authorized deployment workflow."
+        steps={[
+          {
+            label: "Observe",
+            detail: "Review SPF, DKIM and DMARC verification status and evidence.",
+          },
+          {
+            label: "Correct",
+            detail: "Apply the permitted domain configuration change with an explicit reason.",
+          },
+          {
+            label: "Verify",
+            detail: "Refresh observed state before treating the domain as ready for use.",
+          },
+        ]}
+      />
 
       {notice ? (
         <div className="domain-security-notice" role="status">

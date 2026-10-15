@@ -10,6 +10,9 @@ import {
   type RevisionSummary,
 } from "../api/policies";
 import { StepUpPrompt } from "../components/StepUpPrompt";
+import { WorkspaceHeader } from "../components/WorkspaceHeader";
+import { WorkflowGuide } from "../components/WorkflowGuide";
+import { ControlRail } from "../components/ControlRail";
 import "./Policies.css";
 
 type LevelFilter = "all" | ManagementLevel;
@@ -55,21 +58,76 @@ export function Policies() {
 
   const allRows = policies.data?.families ?? [];
   const rows = allRows.filter((family) => level === "all" || family.management_level === level);
+  const policiesAvailable = policies.isSuccess;
+  const policiesState = policies.isError ? "Unavailable" : "Loading";
 
   return (
     <div className="policies-page">
-      <header className="policies-header">
-        <div>
-          <h1 className="policies-title">Policies</h1>
-          <p className="policies-subtitle">
-            Policy families define how mail is evaluated and dispositioned. Revisions are versioned
-            and audited; the server enforces which management level may publish each family.
-          </p>
-        </div>
-        <Link to="/policies/features" className="btn btn-primary">
-          Feature overrides
-        </Link>
-      </header>
+      <WorkspaceHeader
+        eyebrow="Configuration governance"
+        title="Policies"
+        description="Review policy families by management level, then open a family to draft, validate and publish a versioned revision. The server enforces who may publish each level."
+        scope="Versioned policy controls"
+        actions={
+          <Link to="/policies/features" className="btn btn-primary">
+            Feature overrides
+          </Link>
+        }
+      />
+
+      <ControlRail
+        title="Policy release queue"
+        summary="The selected management level determines which policy families are in view; open a family to use its controlled revision workflow."
+        signals={[
+          {
+            label: "In view",
+            value: policiesAvailable ? rows.length : policiesState,
+            detail: policiesAvailable
+              ? `${LEVEL_LABELS[level]} policy families currently shown.`
+              : "The policy release queue has not produced an authoritative result yet.",
+          },
+          {
+            label: "Security floors",
+            value: policiesAvailable
+              ? rows.filter((row) => row.security_floor).length
+              : policiesState,
+            detail: policiesAvailable
+              ? "Families whose floor remains enforced during change."
+              : "Security-floor counts are unavailable until the policy query succeeds.",
+            tone: policiesAvailable ? "attention" : "neutral",
+          },
+          {
+            label: "Published",
+            value: policiesAvailable
+              ? rows.filter((row) => row.active_revision !== null).length
+              : policiesState,
+            detail: policiesAvailable
+              ? "Families with a current published revision."
+              : "Published revision state is unavailable until the policy query succeeds.",
+            tone: policiesAvailable ? "healthy" : "neutral",
+          },
+        ]}
+      />
+
+      <WorkflowGuide
+        title="Publish policy by authority level"
+        description="Use the filter to locate the family you own, then work through its versioned revision workflow."
+        steps={[
+          {
+            label: "Locate",
+            detail: "Filter families by the management level you are permitted to administer.",
+          },
+          {
+            label: "Revise",
+            detail: "Open the family and prepare a validated, versioned revision.",
+          },
+          {
+            label: "Publish",
+            detail:
+              "Publish only through the server-authorized workflow and use audit history to verify it.",
+          },
+        ]}
+      />
 
       <div className="policies-filters" role="group" aria-label="Filter by management level">
         {LEVEL_FILTERS.map((value) => (

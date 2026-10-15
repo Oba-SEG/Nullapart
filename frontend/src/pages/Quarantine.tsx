@@ -7,6 +7,9 @@ import { api, type ApiError } from "../api/client";
 import { StatusPill } from "../components/StatusPill";
 import { severityTone } from "../lib/status";
 import { StepUpPrompt } from "../components/StepUpPrompt";
+import { ControlRail } from "../components/ControlRail";
+import { WorkspaceHeader } from "../components/WorkspaceHeader";
+import { WorkflowGuide } from "../components/WorkflowGuide";
 import { Button } from "../components/primitives/Button";
 import { Dialog } from "../components/primitives/Dialog";
 import { randomUuid } from "../lib/ids";
@@ -81,17 +84,72 @@ export function Quarantine() {
       return matchesText && matchesSeverity;
     });
   }, [cases.data, search, severity]);
+  const casesAvailable = cases.isSuccess;
+  const casesState = cases.isError ? "Unavailable" : "Loading";
 
   return (
     <div className="quarantine-page">
-      <header className="page-header">
-        <div>
-          <h1 className="page-title">Quarantine</h1>
-          <p className="quarantine-subtitle">
-            Tenant-scoped security holds with normalized, content-safe evidence.
-          </p>
-        </div>
-      </header>
+      <WorkspaceHeader
+        eyebrow="Security disposition"
+        title="Quarantine"
+        description="Review tenant-scoped security holds using normalized, content-safe evidence. Release remains step-up protected and auditable at case level."
+        scope="Case disposition controls"
+      />
+
+      <ControlRail
+        title="Quarantine review queue"
+        summary="Work highest-severity active cases first. Opening a case is required before any exceptional release decision."
+        signals={[
+          {
+            label: "Cases",
+            value: casesAvailable ? filtered.length : casesState,
+            detail: casesAvailable
+              ? "Cases matching the current severity filter."
+              : "No case queue is inferred until the query succeeds.",
+          },
+          {
+            label: "Critical",
+            value: casesAvailable
+              ? filtered.filter((item) =>
+                  item.findings.some((finding) => finding.severity === "critical"),
+                ).length
+              : casesState,
+            detail: casesAvailable
+              ? "Filtered cases carrying a critical published finding."
+              : "Critical finding state is unavailable until the case query succeeds.",
+            tone: casesAvailable ? "attention" : "neutral",
+          },
+          {
+            label: "Release eligible",
+            value: casesAvailable
+              ? filtered.filter((item) => item.release_allowed && !item.released_at).length
+              : casesState,
+            detail: casesAvailable
+              ? "Cases that may enter the step-up release workflow."
+              : "Release eligibility is unavailable until the case query succeeds.",
+            tone: casesAvailable ? "attention" : "neutral",
+          },
+        ]}
+      />
+
+      <WorkflowGuide
+        title="Resolve a security disposition safely"
+        description="A release is an exceptional, tenant-scoped decision. Investigate the case before requesting the step-up and idempotent release operation."
+        steps={[
+          {
+            label: "Triage",
+            detail: "Prioritize severity, findings and retention state from the case list.",
+          },
+          {
+            label: "Investigate",
+            detail: "Open the case to review safe metadata and its audit linkage.",
+          },
+          {
+            label: "Release only if justified",
+            detail: "Complete step-up and record the authorized, idempotent release.",
+          },
+        ]}
+      />
 
       <section className="quarantine-controls" aria-label="Quarantine filters">
         <label className="search-box">

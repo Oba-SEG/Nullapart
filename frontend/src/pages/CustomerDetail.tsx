@@ -6,6 +6,8 @@ import { useId, useState } from "react";
 import { api, type ApiError } from "../api/client";
 import { hasPermission, hasRole, loadSession } from "../auth/session";
 import { StepUpPrompt } from "../components/StepUpPrompt";
+import { ControlRail } from "../components/ControlRail";
+import { WorkflowGuide } from "../components/WorkflowGuide";
 import { Button } from "../components/primitives/Button";
 import { Dialog } from "../components/primitives/Dialog";
 import { Input } from "../components/primitives/Input";
@@ -326,6 +328,52 @@ export function CustomerDetail() {
           </>
         ) : null}
       </header>
+
+      {customer ? (
+        <ControlRail
+          title="Customer control state"
+          summary="The current record determines which lifecycle and trust configuration actions remain meaningful."
+          signals={[
+            {
+              label: "Lifecycle",
+              value: customer.lifecycle,
+              detail: "Current server-recorded customer lifecycle.",
+              tone: customer.lifecycle === "active" ? "healthy" : "attention",
+            },
+            {
+              label: "Domains",
+              value: customer.domain_count,
+              detail: "Configured domains associated with this tenant boundary.",
+            },
+            {
+              label: "Transitions",
+              value: LIFECYCLE_TRANSITIONS[customer.lifecycle].length,
+              detail: "Allowed lifecycle transition options exposed by policy.",
+            },
+          ]}
+        />
+      ) : null}
+
+      {customer ? (
+        <WorkflowGuide
+          title="Manage the customer boundary"
+          description="Make lifecycle and trust changes here before relying on tenant-specific policy or connector operations."
+          steps={[
+            {
+              label: "Confirm identity",
+              detail: "Verify the customer record and its current lifecycle.",
+            },
+            {
+              label: "Configure trust",
+              detail: "Manage domains and source IP groups through the permitted forms.",
+            },
+            {
+              label: "Record change",
+              detail: "Provide required reasons so every state transition is auditable.",
+            },
+          ]}
+        />
+      ) : null}
 
       {mayChangeLifecycle && customer ? (
         <section className="card customer-detail-panel" aria-labelledby="lifecycle-heading">

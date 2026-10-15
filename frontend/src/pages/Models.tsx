@@ -27,6 +27,9 @@ import {
 import { hasPermission, loadSession } from "../auth/session";
 import { StepUpPrompt } from "../components/StepUpPrompt";
 import { StatusPill } from "../components/StatusPill";
+import { WorkspaceHeader } from "../components/WorkspaceHeader";
+import { WorkflowGuide } from "../components/WorkflowGuide";
+import { ControlRail } from "../components/ControlRail";
 import { Button } from "../components/primitives/Button";
 import { Dialog } from "../components/primitives/Dialog";
 import { Input } from "../components/primitives/Input";
@@ -302,6 +305,8 @@ export function Models() {
 
   const modelRows = useMemo(() => models.data?.models ?? [], [models.data]);
   const activeModel = modelRows.find((model) => model.activated_at && !model.deactivated_at);
+  const modelsAvailable = models.isSuccess;
+  const modelsState = models.isError ? "Unavailable" : "Loading";
 
   const shadowQueries = useQueries({
     queries: modelRows.map((model) => ({
@@ -441,20 +446,63 @@ export function Models() {
 
   return (
     <div className="models-page">
-      <header className="page-header models-command-header">
-        <div>
-          <h1 className="page-title">Inline ML control plane</h1>
-          <p className="page-subtitle">
-            Register candidate artifacts, record shadow evidence, approve with step-up, activate the
-            one runtime model and rehearse rollback. Customer trace pages still hide these internal
-            model details.
-          </p>
-        </div>
-        <div className="models-runtime-chip" aria-label="Active inline ML model">
-          <span>Active runtime</span>
-          <strong>{activeModel ? modelKey(activeModel) : "none"}</strong>
-        </div>
-      </header>
+      <WorkspaceHeader
+        eyebrow="Model governance"
+        title="Inline ML control plane"
+        description="Register candidates, record shadow evidence, approve with step-up and activate exactly one runtime model. Customer trace pages never expose these internal model details."
+        scope="Restricted model release controls"
+        actions={
+          <div className="models-runtime-chip" aria-label="Active inline ML model">
+            <span>Active runtime</span>
+            <strong>{activeModel ? modelKey(activeModel) : "none"}</strong>
+          </div>
+        }
+      />
+
+      <ControlRail
+        title="Model release state"
+        summary="The current runtime is visible here so candidate evidence and rollback decisions are evaluated against a concrete deployment state."
+        signals={[
+          {
+            label: "Registered",
+            value: modelsAvailable ? modelRows.length : modelsState,
+            detail: modelsAvailable
+              ? "Candidate and historical model artifacts in the registry."
+              : "Registry state has not produced an authoritative result yet.",
+          },
+          {
+            label: "Runtime",
+            value: modelsAvailable ? (activeModel ? "1 active" : "none") : modelsState,
+            detail: modelsAvailable
+              ? "Exactly one model may serve at a time."
+              : "Runtime model state is unavailable until the registry query succeeds.",
+            tone: modelsAvailable ? (activeModel ? "healthy" : "attention") : "neutral",
+          },
+          {
+            label: "Shadow evidence",
+            value: modelsAvailable ? Array.from(shadowByModel.values()).flat().length : modelsState,
+            detail: modelsAvailable
+              ? "Recorded comparison evaluations across registered models."
+              : "Shadow evidence is unavailable until the registry query succeeds.",
+          },
+        ]}
+      />
+
+      <WorkflowGuide
+        title="Promote a model with evidence"
+        description="The release path is intentionally constrained so an unverified artifact cannot become runtime behavior."
+        steps={[
+          { label: "Register", detail: "Record the candidate artifact and immutable digest." },
+          {
+            label: "Evaluate",
+            detail: "Capture shadow evidence against the active runtime model.",
+          },
+          {
+            label: "Approve & activate",
+            detail: "Step up to promote one approved model, retaining a bounded rollback target.",
+          },
+        ]}
+      />
 
       <section className="models-summary" aria-label="Inline ML operating boundaries">
         <article className="card models-boundary-card">

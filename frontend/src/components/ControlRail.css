@@ -1,0 +1,99 @@
+.control-rail {
+  display: grid;
+  grid-template-columns: minmax(13rem, 0.9fr) minmax(0, 2.2fr) auto;
+  gap: var(--spacing-5);
+  align-items: stretch;
+  margin: 0 0 var(--spacing-6);
+  padding: var(--spacing-4) var(--spacing-5);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-glass);
+  box-shadow: var(--shadow-sm);
+}
+
+.control-rail-intro > p {
+  margin: 0 0 var(--spacing-1);
+  color: var(--color-primary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.control-rail h2 {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-lg);
+}
+
+.control-rail-intro > span,
+.control-signal > span {
+  display: block;
+  margin-top: var(--spacing-1);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-normal);
+}
+
+.control-rail-signals {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--spacing-3);
+  margin: 0;
+}
+
+.control-signal {
+  min-width: 0;
+  padding-left: var(--spacing-3);
+  border-left: 2px solid var(--color-border-strong);
+}
+
+.control-signal-healthy {
+  border-color: var(--color-success);
+}
+
+.control-signal-attention {
+  border-color: var(--color-warning);
+}
+
+.control-signal dt {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+.control-signal dd {
+  margin: var(--spacing-1) 0 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text-primary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+}
+
+.control-rail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--spacing-2);
+}
+
+@media (max-width: 1020px) {
+  .control-rail {
+    grid-template-columns: 1fr;
+  }
+
+  .control-rail-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 640px) {
+  .control-rail {
+    padding: var(--spacing-4);
+  }
+
+  .control-rail-signals {
+    grid-template-columns: 1fr;
+  }
+}

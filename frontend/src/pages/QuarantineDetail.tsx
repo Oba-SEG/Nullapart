@@ -5,6 +5,9 @@ import { useState } from "react";
 
 import { api, type ApiError } from "../api/client";
 import { StepUpPrompt } from "../components/StepUpPrompt";
+import { ControlRail } from "../components/ControlRail";
+import { WorkspaceHeader } from "../components/WorkspaceHeader";
+import { WorkflowGuide } from "../components/WorkflowGuide";
 import { Button } from "../components/primitives/Button";
 import { Dialog } from "../components/primitives/Dialog";
 import { randomUuid } from "../lib/ids";
@@ -100,18 +103,66 @@ export function QuarantineDetail() {
 
   return (
     <div className="quarantine-page">
-      <header className="page-header">
-        <div>
-          <Link to="/quarantine" className="quarantine-back">
-            <ArrowLeft size={16} aria-hidden="true" /> Back to quarantine
-          </Link>
-          <h1 className="page-title">Quarantine case</h1>
-          <p className="quarantine-subtitle">
-            Tenant-scoped case detail with retention, audit linkage and capability-level scanner
-            results. Raw MIME and active email HTML are never rendered here.
-          </p>
-        </div>
-      </header>
+      <Link to="/quarantine" className="quarantine-back">
+        <ArrowLeft size={16} aria-hidden="true" /> Back to quarantine
+      </Link>
+      <WorkspaceHeader
+        eyebrow="Security disposition"
+        title="Quarantine case"
+        description="Review tenant-scoped retention, audit linkage and capability-level scanner results. Raw MIME and active email HTML are never rendered here."
+        scope="Case-level release controls"
+      />
+      <WorkflowGuide
+        title="Verify before release"
+        description="The release control remains unavailable until the case is eligible; it is never a substitute for investigation."
+        steps={[
+          {
+            label: "Read findings",
+            detail: "Compare the disposition reason with scanner capability results.",
+          },
+          {
+            label: "Confirm impact",
+            detail: "Review retention, recipient count and prior audit events.",
+          },
+          {
+            label: "Release safely",
+            detail:
+              "Use the recorded step-up workflow only when the exceptional release is justified.",
+          },
+        ]}
+      />
+
+      {data ? (
+        <ControlRail
+          title="Case decision state"
+          summary="Use this server-reported case state to determine whether investigation is complete before considering the exceptional release action."
+          signals={[
+            {
+              label: "Findings",
+              value: data.findings.length,
+              detail: "Published normalized findings for this case.",
+              tone: data.findings.some(
+                (finding) => finding.severity === "critical" || finding.severity === "high",
+              )
+                ? "attention"
+                : "neutral",
+            },
+            {
+              label: "Required scanners",
+              value: `${data.scanner_results.filter((result) => result.required && result.status === "healthy").length}/${data.scanner_results.filter((result) => result.required).length}`,
+              detail: "Required capability results that completed healthy.",
+            },
+            {
+              label: "Release",
+              value: data.released_at ? "released" : data.release_allowed ? "eligible" : "blocked",
+              detail: data.released_at
+                ? "The release is already recorded in the case audit trail."
+                : "Eligibility does not remove step-up or justification requirements.",
+              tone: data.released_at ? "healthy" : "attention",
+            },
+          ]}
+        />
+      ) : null}
 
       {detail.isPending && (
         <div className="quarantine-state" role="status">

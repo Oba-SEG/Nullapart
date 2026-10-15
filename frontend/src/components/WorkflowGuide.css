@@ -1,0 +1,102 @@
+.workflow-guide {
+  display: grid;
+  grid-template-columns: minmax(13rem, 0.8fr) minmax(0, 2fr) auto;
+  gap: var(--spacing-5);
+  align-items: center;
+  margin: 0 0 var(--spacing-6);
+  padding: var(--spacing-5);
+  color: var(--color-text-primary);
+  border: 1px solid
+    color-mix(in srgb, var(--color-primary) 28%, var(--color-border));
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(
+      105deg,
+      color-mix(in srgb, var(--color-bg-secondary) 94%, transparent),
+      color-mix(in srgb, var(--color-bg-elevated) 88%, transparent)
+    ),
+    url("/brand/generated/nullapart-wave-command-bg.png") center / cover;
+  box-shadow: var(--shadow-panel);
+}
+
+.workflow-guide-eyebrow {
+  margin: 0 0 var(--spacing-2);
+  color: var(--color-primary);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.workflow-guide h2 {
+  margin: 0;
+  font-size: clamp(1rem, 1.8vw, 1.25rem);
+}
+
+.workflow-guide-intro > p:last-child,
+.workflow-guide-steps p {
+  margin: var(--spacing-2) 0 0;
+  color: var(--color-text-secondary);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.workflow-guide-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--spacing-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workflow-guide-steps li {
+  display: flex;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+
+.workflow-guide-steps li > span {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 1.8rem;
+  height: 1.8rem;
+  color: var(--color-text-inverse);
+  border-radius: 999px;
+  background: var(--color-primary);
+  font-size: 0.65rem;
+  font-weight: 900;
+}
+
+.workflow-guide-steps strong {
+  display: block;
+  font-size: 0.8rem;
+}
+
+.workflow-guide-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+  justify-content: flex-end;
+}
+
+@media (max-width: 1020px) {
+  .workflow-guide {
+    grid-template-columns: 1fr;
+  }
+
+  .workflow-guide-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 680px) {
+  .workflow-guide {
+    padding: var(--spacing-4);
+  }
+
+  .workflow-guide-steps {
+    grid-template-columns: 1fr;
+  }
+}

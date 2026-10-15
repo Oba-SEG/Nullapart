@@ -11,6 +11,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import { api } from "../api/client";
+import { ControlRail } from "../components/ControlRail";
 import { StatusPill } from "../components/StatusPill";
 import type { StatusTone } from "../lib/status";
 import "./Dashboard.css";
@@ -166,7 +167,7 @@ export function Dashboard() {
     {
       to: "/operations",
       icon: FileWarning,
-      label: "Clear dead letters",
+      label: "Inspect dead letters",
       detail:
         deadLetters !== null
           ? `${deadLetters} durable event${deadLetters === 1 ? "" : "s"} need review`
@@ -190,6 +191,53 @@ export function Dashboard() {
           Refresh
         </button>
       </header>
+
+      <ControlRail
+        title="Deployment priority queue"
+        summary="These are navigation signals, not mutating controls. Open the linked operational workspace to investigate or act."
+        signals={[
+          {
+            label: "Quarantine",
+            value: quarantine.isSuccess
+              ? quarantined
+              : quarantine.isError
+                ? "Unavailable"
+                : "Loading",
+            detail: quarantine.isSuccess
+              ? "Active held messages; open the case queue to triage."
+              : "No quarantine health state is inferred until the case query succeeds.",
+            tone: quarantine.isSuccess ? (quarantined ? "attention" : "healthy") : "neutral",
+          },
+          {
+            label: "Outbox backlog",
+            value: runtime.isSuccess
+              ? (outbox?.unpublished_count ?? "—")
+              : runtime.isError
+                ? "Unavailable"
+                : "Loading",
+            detail: runtime.isSuccess
+              ? "Durable events pending publication; inspect runtime operations."
+              : "No runtime health state is inferred until the snapshot query succeeds.",
+            tone: runtime.isSuccess
+              ? outbox?.unpublished_count
+                ? "attention"
+                : "healthy"
+              : "neutral",
+          },
+          {
+            label: "Dead letters",
+            value: runtime.isSuccess
+              ? (deadLetters ?? "—")
+              : runtime.isError
+                ? "Unavailable"
+                : "Loading",
+            detail: runtime.isSuccess
+              ? "Items requiring investigation; no action is performed from this dashboard."
+              : "No dead-letter state is inferred until the runtime snapshot query succeeds.",
+            tone: runtime.isSuccess ? (deadLetters ? "attention" : "healthy") : "neutral",
+          },
+        ]}
+      />
 
       {failed ? (
         <div className="dashboard-error" role="alert">

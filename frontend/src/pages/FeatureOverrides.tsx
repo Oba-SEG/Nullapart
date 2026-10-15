@@ -18,6 +18,9 @@ import {
 } from "../api/policies";
 import { hasPermission, loadSession } from "../auth/session";
 import { StepUpPrompt } from "../components/StepUpPrompt";
+import { WorkspaceHeader } from "../components/WorkspaceHeader";
+import { WorkflowGuide } from "../components/WorkflowGuide";
+import { ControlRail } from "../components/ControlRail";
 import { Button } from "../components/primitives/Button";
 import { Dialog } from "../components/primitives/Dialog";
 import { Input } from "../components/primitives/Input";
@@ -152,6 +155,8 @@ export function FeatureOverrides() {
   }
 
   const rows = features.data?.features ?? [];
+  const featuresAvailable = features.isSuccess;
+  const featuresState = features.isError ? "Unavailable" : "Loading";
   const reasonError = editing === null ? undefined : overrideReasonError(editing.reason);
   const reasonVisible =
     editing !== null && (showErrors || editing.reason.length > 0) && reasonError !== undefined;
@@ -165,16 +170,58 @@ export function FeatureOverrides() {
 
   return (
     <div className="features-page">
-      <header className="features-header">
-        <div>
-          <h1 className="features-title">Feature overrides</h1>
-          <p className="features-subtitle">
-            Feature switches are server-authoritative configuration. Overrides are scoped, audited
-            and never a substitute for authorization; mandatory security floors and kill switches
-            cannot be defeated from this page.
-          </p>
-        </div>
-      </header>
+      <WorkspaceHeader
+        eyebrow="Controlled rollout"
+        title="Feature overrides"
+        description="Set a bounded, reasoned override only where your role permits it. Mandatory security floors and emergency kill switches cannot be defeated from this workspace."
+        scope="Server-enforced feature controls"
+      />
+
+      <ControlRail
+        title="Effective configuration"
+        summary="Start with the winning scope. Only the server exposes an edit action when your role can write that override."
+        signals={[
+          {
+            label: "Features",
+            value: featuresAvailable ? rows.length : featuresState,
+            detail: featuresAvailable
+              ? "Server-published feature definitions."
+              : "Feature definitions have not produced an authoritative result yet.",
+          },
+          {
+            label: "Mandatory",
+            value: featuresAvailable ? rows.filter((row) => row.mandatory).length : featuresState,
+            detail: featuresAvailable
+              ? "Security floors that cannot be overridden."
+              : "Mandatory-floor state is unavailable until the feature query succeeds.",
+            tone: featuresAvailable ? "attention" : "neutral",
+          },
+          {
+            label: "Kill switches",
+            value: featuresAvailable ? rows.filter((row) => row.kill_switch).length : featuresState,
+            detail: featuresAvailable
+              ? "Emergency controls retained as explicit server state."
+              : "Kill-switch state is unavailable until the feature query succeeds.",
+            tone: featuresAvailable ? "attention" : "neutral",
+          },
+        ]}
+      />
+
+      <WorkflowGuide
+        title="Make a reversible configuration change"
+        description="Feature configuration is a release control, not an authorization bypass."
+        steps={[
+          { label: "Inspect", detail: "Compare default, effective value and the winning scope." },
+          {
+            label: "Justify",
+            detail: "Choose an allowed scope and record a reason with an expiry where appropriate.",
+          },
+          {
+            label: "Verify",
+            detail: "Confirm the resolved value after the server accepts the audited update.",
+          },
+        ]}
+      />
 
       {notice ? (
         <p className="features-notice" role="status">

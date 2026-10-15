@@ -5,6 +5,9 @@ import { useState, type FormEvent } from "react";
 
 import type { ApiError } from "../api/client";
 import { traceSearch, type TraceSearchResult } from "../api/trace";
+import { ControlRail } from "../components/ControlRail";
+import { WorkspaceHeader } from "../components/WorkspaceHeader";
+import { WorkflowGuide } from "../components/WorkflowGuide";
 import "./Messages.css";
 
 const MIN_QUERY_LENGTH = 3;
@@ -68,15 +71,67 @@ export function Messages() {
 
   return (
     <div className="messages-page">
-      <header className="page-header">
-        <div>
-          <h1 className="page-title">Messages</h1>
-          <p className="messages-subtitle">
-            Search the mail trace index by transaction ID, sender, recipient or message ID. Results
-            are authorized server-side for your session scope.
-          </p>
-        </div>
-      </header>
+      <WorkspaceHeader
+        eyebrow="Trace investigation"
+        title="Messages"
+        description="Search the mail trace index by transaction ID, sender, recipient or message ID. Results are authorized server-side for your current scope."
+        scope="Metadata-only search"
+      />
+
+      <ControlRail
+        title="Trace search state"
+        summary="Search is intentionally metadata-first. Results become actionable only after the server authorizes the current query and scope."
+        signals={[
+          {
+            label: "Query",
+            value: !submitted
+              ? "not run"
+              : search.isError
+                ? "failed"
+                : search.isFetching
+                  ? "searching"
+                  : "complete",
+            detail: !submitted
+              ? "Enter an identifier before a trace result set exists."
+              : search.isError
+                ? "The current search did not produce an authorized trace result."
+                : "A server-authorized trace lookup is in progress or complete.",
+          },
+          {
+            label: "Results",
+            value: search.isSuccess ? results.length : search.isError ? "Unavailable" : "—",
+            detail: search.isSuccess
+              ? "Trace records returned within the current authorized scope."
+              : "Result count is not inferred before a successful server response.",
+          },
+          {
+            label: "Content",
+            value: "isolated",
+            detail: "Any permitted message content remains in the sandboxed record view.",
+            tone: "healthy",
+          },
+        ]}
+      />
+
+      <WorkflowGuide
+        title="Trace mail without rendering untrusted content"
+        description="Search transaction metadata first, then open a single trace only when its delivery and scanner context is relevant to the investigation."
+        steps={[
+          {
+            label: "Search",
+            detail: "Use identifiers and metadata to narrow the transaction set.",
+          },
+          {
+            label: "Trace",
+            detail: "Open one result to inspect authentication, delivery and scanner outcomes.",
+          },
+          {
+            label: "Escalate",
+            detail:
+              "Follow linked quarantine or policy workflows when the trace indicates a required action.",
+          },
+        ]}
+      />
 
       <form className="messages-search" onSubmit={handleSubmit} noValidate>
         <label className="search-box messages-search-field">

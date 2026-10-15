@@ -6,6 +6,9 @@ import { api, type ApiError } from "../api/client";
 import { hasPermission, loadSession } from "../auth/session";
 import { StepUpPrompt } from "../components/StepUpPrompt";
 import { StatusPill } from "../components/StatusPill";
+import { ControlRail } from "../components/ControlRail";
+import { WorkspaceHeader } from "../components/WorkspaceHeader";
+import { WorkflowGuide } from "../components/WorkflowGuide";
 import { Button } from "../components/primitives/Button";
 import { Input } from "../components/primitives/Input";
 import { Select } from "../components/primitives/Select";
@@ -330,23 +333,64 @@ export function DeepAi() {
 
   return (
     <div className="deep-ai-page">
-      <header className="page-header deep-ai-header">
-        <div>
-          <h1 className="page-title">Regional Deep AI</h1>
-          <p className="deep-ai-subtitle">
-            Versioned skills, scoped artifact grants, validated findings and training governance for{" "}
-            {data.deployment_id}.
-          </p>
-        </div>
-        <StatusPill
-          tone={data.summary.approved_regional_benchmarks > 0 ? "clean" : "review"}
-          label={
-            data.summary.approved_regional_benchmarks > 0
-              ? "regional benchmark recorded"
-              : "benchmark required"
-          }
-        />
-      </header>
+      <WorkspaceHeader
+        eyebrow="Model governance"
+        title="Regional Deep AI"
+        description={`Versioned skills, scoped artifact grants, validated findings and training governance for ${data.deployment_id}.`}
+        scope="Regional AI controls"
+        actions={
+          <StatusPill
+            tone={data.summary.approved_regional_benchmarks > 0 ? "clean" : "review"}
+            label={
+              data.summary.approved_regional_benchmarks > 0
+                ? "regional benchmark recorded"
+                : "benchmark required"
+            }
+          />
+        }
+      />
+
+      <ControlRail
+        title="Regional AI governance state"
+        summary="Use only server-reported model, grant and benchmark state when deciding whether a regional skill can be trusted for its approved scope."
+        signals={[
+          {
+            label: "Approved benchmarks",
+            value: data.summary.approved_regional_benchmarks,
+            detail: "Regional benchmark records accepted for this deployment.",
+            tone: data.summary.approved_regional_benchmarks > 0 ? "healthy" : "attention",
+          },
+          {
+            label: "Artifact grants",
+            value: data.summary.active_artifact_grants,
+            detail: "Active customer-scoped artifact grants.",
+          },
+          {
+            label: "Skills",
+            value: data.skills.length,
+            detail: "Versioned skill definitions available to this deployment.",
+          },
+        ]}
+      />
+
+      <WorkflowGuide
+        title="Constrain regional AI handling"
+        description="Regional model configuration and customer grants are explicit controls; they do not give a model ambient access to messages, providers or infrastructure."
+        steps={[
+          {
+            label: "Review deployment",
+            detail: "Confirm the target regional AI deployment and its permitted capability set.",
+          },
+          {
+            label: "Grant narrowly",
+            detail: "Apply customer grants only to the required scope with an auditable reason.",
+          },
+          {
+            label: "Verify status",
+            detail: "Refresh the server-reported deployment state after configuration changes.",
+          },
+        ]}
+      />
 
       <section className="deep-ai-summary" aria-label="Deep AI summary">
         <div className="deep-ai-summary-card">

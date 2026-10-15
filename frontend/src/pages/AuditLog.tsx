@@ -5,6 +5,9 @@ import { useMemo, useState } from "react";
 import { api, type ApiError } from "../api/client";
 import { loadSession } from "../auth/session";
 import { StepUpPrompt } from "../components/StepUpPrompt";
+import { ControlRail } from "../components/ControlRail";
+import { WorkspaceHeader } from "../components/WorkspaceHeader";
+import { WorkflowGuide } from "../components/WorkflowGuide";
 import { Button } from "../components/primitives/Button";
 import { Dialog } from "../components/primitives/Dialog";
 import "./AuditLog.css";
@@ -162,19 +165,73 @@ export function AuditLog() {
 
   return (
     <div className="audit-page">
-      <header className="page-header">
-        <div>
-          <h1 className="page-title">Audit log</h1>
-          <p className="audit-subtitle">
-            Administrative and security events, scoped to your authorized view. Details are rendered
-            as redacted key/value pairs — raw event JSON is never returned.
-          </p>
-        </div>
-        <Button onClick={() => void exportCsv()} disabled={!canExport || events.length === 0}>
-          <Download size={16} aria-hidden="true" />
-          Export CSV
-        </Button>
-      </header>
+      <WorkspaceHeader
+        eyebrow="Evidence & accountability"
+        title="Audit log"
+        description="Investigate administrative and security events within your permitted scope. Records stay redacted, append-only and never expose raw event JSON."
+        scope="Audited read access"
+        actions={
+          <Button onClick={() => void exportCsv()} disabled={!canExport || events.length === 0}>
+            <Download size={16} aria-hidden="true" />
+            Export CSV
+          </Button>
+        }
+      />
+
+      <ControlRail
+        title="Evidence queue"
+        summary="Filters scope the records in view; exports remain a separate, step-up-protected evidence operation."
+        signals={[
+          {
+            label: "Records",
+            value: page.isSuccess ? events.length : page.isError ? "Unavailable" : "Loading",
+            detail: page.isSuccess
+              ? "Audit events loaded under the current filters."
+              : "No evidence count is inferred before a successful audit query.",
+          },
+          {
+            label: "Checkpoint",
+            value: checkpoint.isSuccess
+              ? checkpoint.data.state
+              : checkpoint.isError
+                ? "Unavailable"
+                : "Loading",
+            detail: checkpoint.isSuccess
+              ? "Integrity checkpoint state for this deployment."
+              : "Checkpoint health is unavailable until the server response succeeds.",
+            tone: checkpoint.isSuccess
+              ? checkpoint.data.state === "current"
+                ? "healthy"
+                : "attention"
+              : "neutral",
+          },
+          {
+            label: "Export",
+            value: canExport ? "permitted" : "restricted",
+            detail: "CSV export is separately permissioned and audited.",
+          },
+        ]}
+      />
+
+      <WorkflowGuide
+        title="Turn records into an investigation trail"
+        description="Search the append-only record, inspect the permitted event context, then export only the scoped evidence you are authorized to handle."
+        steps={[
+          {
+            label: "Filter",
+            detail: "Narrow by actor, action and time window before reviewing individual records.",
+          },
+          {
+            label: "Inspect",
+            detail:
+              "Open event context without exposing protected message content or raw event payloads.",
+          },
+          {
+            label: "Export",
+            detail: "Create a scoped CSV only when evidence must leave the console.",
+          },
+        ]}
+      />
 
       {canExport && (
         <p className="audit-hint">

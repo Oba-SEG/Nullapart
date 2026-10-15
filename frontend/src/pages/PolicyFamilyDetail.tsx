@@ -40,6 +40,8 @@ import {
 } from "../api/policies";
 import { hasPermission, loadSession } from "../auth/session";
 import { StepUpPrompt } from "../components/StepUpPrompt";
+import { ControlRail } from "../components/ControlRail";
+import { WorkflowGuide } from "../components/WorkflowGuide";
 import { Button } from "../components/primitives/Button";
 import { Dialog } from "../components/primitives/Dialog";
 import { Input } from "../components/primitives/Input";
@@ -340,6 +342,54 @@ export function PolicyFamilyDetail() {
           </>
         ) : null}
       </header>
+
+      {family ? (
+        <ControlRail
+          title="Revision release state"
+          summary="Policy work is always versioned. The currently active revision and management level determine the allowed next action."
+          signals={[
+            {
+              label: "Revisions",
+              value: revisions.length,
+              detail: "Published revisions visible to the current scope.",
+            },
+            {
+              label: "Active revision",
+              value: family.active_revision?.revision_number ?? "none",
+              detail: "Server-selected revision currently in effect.",
+              tone: family.active_revision ? "healthy" : "attention",
+            },
+            {
+              label: "Security floor",
+              value: family.security_floor ? "enforced" : "none",
+              detail: "A floor cannot be weakened by a family revision.",
+              tone: family.security_floor ? "attention" : "neutral",
+            },
+          ]}
+        />
+      ) : null}
+
+      {family ? (
+        <WorkflowGuide
+          title="Change policy through a revision"
+          description="The current family status determines the allowed next operation; direct unversioned edits are intentionally unavailable."
+          steps={[
+            {
+              label: "Review",
+              detail: "Inspect published revisions and the applicable management level.",
+            },
+            {
+              label: "Draft",
+              detail: "Prepare the intended revision with its reason and validation evidence.",
+            },
+            {
+              label: "Publish",
+              detail:
+                "Use the server-authorized publish path and confirm the resulting audit record.",
+            },
+          ]}
+        />
+      ) : null}
 
       <section className="card policy-detail-panel" aria-labelledby="revisions-heading">
         <h2 id="revisions-heading">Revision history</h2>

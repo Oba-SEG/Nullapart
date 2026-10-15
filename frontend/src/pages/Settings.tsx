@@ -6,6 +6,9 @@ import { hasPermission, loadSession, logout } from "../auth/session";
 import { readStoredTheme, setTheme, subscribeTheme, type Theme } from "../lib/theme";
 import { useSyncExternalStore } from "react";
 import { Button } from "../components/primitives/Button";
+import { ControlRail } from "../components/ControlRail";
+import { WorkspaceHeader } from "../components/WorkspaceHeader";
+import { WorkflowGuide } from "../components/WorkflowGuide";
 import "./Settings.css";
 
 interface RuntimeSnapshot {
@@ -42,14 +45,50 @@ export function Settings() {
 
   return (
     <div className="settings-page">
-      <header className="page-header">
-        <div>
-          <h1 className="page-title">Settings</h1>
-          <p className="settings-subtitle">
-            Display preference for this browser and details of your current session.
-          </p>
-        </div>
-      </header>
+      <WorkspaceHeader
+        eyebrow="Console preferences"
+        title="Settings"
+        description="Control local display preferences and review the authenticated session that is operating this console. Browser preferences never affect server-side access."
+        scope="Local browser preferences"
+      />
+
+      <ControlRail
+        title="Session and local preference state"
+        summary="Only the display mode is stored in this browser. Identity, permissions and runtime status are supplied by the authenticated server session."
+        signals={[
+          { label: "Theme", value: theme, detail: "Current browser-local console preference." },
+          {
+            label: "Permissions",
+            value: session?.permissions?.length ?? "—",
+            detail: "Permissions reported by the active session.",
+          },
+          {
+            label: "Runtime",
+            value: canSeeRuntime ? "permitted" : "restricted",
+            detail: "Runtime detail follows the current server-authorized role.",
+            tone: canSeeRuntime ? "healthy" : "neutral",
+          },
+        ]}
+      />
+
+      <WorkflowGuide
+        title="Separate console preference from authority"
+        description="This page makes it explicit which settings live in the browser and which runtime information is read from the authenticated server session."
+        steps={[
+          {
+            label: "Set appearance",
+            detail: "Choose the local display mode for this browser profile.",
+          },
+          {
+            label: "Confirm session",
+            detail: "Review the active identity and any customer-entry context.",
+          },
+          {
+            label: "Inspect runtime",
+            detail: "Use live runtime detail only when your role permits it.",
+          },
+        ]}
+      />
 
       <div className="settings-grid">
         <section className="card settings-card" aria-labelledby="settings-appearance-heading">
