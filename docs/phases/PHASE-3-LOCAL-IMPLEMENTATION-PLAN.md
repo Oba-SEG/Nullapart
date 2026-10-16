@@ -98,9 +98,13 @@ dependency.
       `crates/mail-core/src/admin_rbac.rs`; `local_control.rs` removed;
       quarantine routes moved onto the same boundary
       (`crates/mail-core/src/quarantine_api.rs`).
-- [x] Reverse-proxy identity handoff: nginx forwards
-      `X-Nullapart-Local-User $remote_user` to Mail Core
-      (`frontend/nginx.conf`); login exchanges it for the server-side session.
+- [x] Reverse-proxy identity handoff: only the exact local `POST /auth/login`
+      endpoint accepts HTTP Basic credentials, consumes them at Nginx, forwards
+      `X-Nullapart-Local-User $remote_user` behind the private workload bearer,
+      and exchanges it for the server-side session. Every other proxied request
+      clears that caller-controlled header; the branded login and OIDC `GET`
+      entrypoint never produce a browser-native credential prompt
+      (`frontend/nginx.conf`, `frontend/src/auth/session.ts`).
 - [x] Runtime role grants for the new tables in
       `infrastructure/containers/provision-local-runtime-role.sh`.
 - [x] Tests: 20 unit tests in `admin_rbac.rs` (bootstrap, CSRF, expiry,
@@ -227,13 +231,15 @@ Scope decisions embedded in this increment (unchanged from the draft):
       failed callbacks (verification failure, unknown subject) write audited
       denials; a completed step-up writes `session_step_up`; impersonation
       and audit-scope attribution are untouched.
-- [x] Frontend: hybrid login. `POST /auth/login` still serves proxy-header
-      mode; in OIDC mode it answers with a redirect marker and `beginLogin`
-      performs a real top-level navigation to `GET /api/v1/auth/login`, so the
-      flow cookie, authorize redirect and IdP UI behave like any other
-      authorization-code client. The callback returns to the app with the
-      session already established, logout performs RP-initiated logout, and
-      the session projection, banner and permission guards are unchanged.
+- [x] Frontend: hybrid login. In proxy-header mode a deliberate local-console
+      form sends Basic credentials only on the exact login POST; credentials
+      are never persisted and Nginx removes the header before Mail Core. The
+      separate configured-identity-provider action performs a real top-level
+      `GET /api/v1/auth/login`, so OIDC flow cookies, authorization redirect
+      and IdP UI behave like any other authorization-code client. The callback
+      returns to the app with the session already established, logout performs
+      RP-initiated logout, and the session projection, banner and permission
+      guards are unchanged.
 - [x] Tests: unit coverage (flow state machine, PKCE/nonce/state and
       signature failures, audience/`azp` handling, UserInfo fallback and
       subject binding, mode switch, mapping/bootstrap/link/refusal paths) and

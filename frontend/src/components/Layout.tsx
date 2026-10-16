@@ -19,7 +19,7 @@ import {
   SlidersHorizontal,
   Users,
 } from "lucide-react";
-import { hasPermission, loadSession, logout } from "../auth/session";
+import { hasPermission, isSystemAdmin, loadSession, logout } from "../auth/session";
 import { getSessionPresentation } from "../lib/session-presentation";
 import { ImpersonationBanner } from "./ImpersonationBanner";
 import { ThemeToggle } from "./ThemeToggle";
@@ -74,6 +74,7 @@ export function Layout() {
   const current = session.data ?? null;
   const sessionPresentation = getSessionPresentation(current, session.isError);
   const can = (permission: string) => hasPermission(current, permission);
+  const systemAdmin = isSystemAdmin(current);
 
   return (
     <div className="layout">
@@ -92,12 +93,13 @@ export function Layout() {
         <div className="sidebar-boundary" aria-label="Operator session context">
           <img src={sessionPresentation.asset} alt="" className="sidebar-boundary-mark" />
           <span>
-            <strong>Operator boundary</strong>
+            <strong>{systemAdmin ? "Platform authority" : "Operator boundary"}</strong>
             <small>{sessionPresentation.boundaryLabel}</small>
           </span>
         </div>
 
         <nav ref={navRef} className="sidebar-nav" aria-label="Primary">
+          <p className="nav-section-label">{systemAdmin ? "System command" : "Security desk"}</p>
           <Link
             to="/"
             className="nav-link"
@@ -105,8 +107,50 @@ export function Layout() {
             activeProps={{ className: "nav-link active" }}
           >
             <LayoutDashboard size={17} aria-hidden="true" />
-            <span>Dashboard</span>
+            <span>{systemAdmin ? "Command center" : "Security desk"}</span>
           </Link>
+          {can("operations:view") ? (
+            <Link
+              to="/operations"
+              className="nav-link"
+              activeProps={{ className: "nav-link active" }}
+            >
+              <Server size={17} aria-hidden="true" />
+              <span>Runtime control</span>
+            </Link>
+          ) : null}
+          {can("scanner:operations:view") ? (
+            <Link
+              to="/scanner-operations"
+              className="nav-link"
+              activeProps={{ className: "nav-link active" }}
+            >
+              <Radar size={17} aria-hidden="true" />
+              <span>Scanner fabric</span>
+            </Link>
+          ) : null}
+          {can("domain-security:view") ? (
+            <Link
+              to="/domain-security"
+              className="nav-link"
+              activeProps={{ className: "nav-link active" }}
+            >
+              <ShieldCheck size={17} aria-hidden="true" />
+              <span>Domain posture</span>
+            </Link>
+          ) : null}
+          {can("outbound-intelligence:view") ? (
+            <Link
+              to="/outbound-intelligence"
+              className="nav-link"
+              activeProps={{ className: "nav-link active" }}
+            >
+              <Send size={17} aria-hidden="true" />
+              <span>Outbound protection</span>
+            </Link>
+          ) : null}
+
+          <p className="nav-section-label">Tenant security</p>
           {can("trace:view") ? (
             <Link
               to="/messages"
@@ -127,36 +171,18 @@ export function Layout() {
               <span>Quarantine</span>
             </Link>
           ) : null}
-          {can("scanner:operations:view") ? (
+          {can("admin:customers:view") ? (
             <Link
-              to="/scanner-operations"
+              to="/customers"
               className="nav-link"
               activeProps={{ className: "nav-link active" }}
             >
-              <Radar size={17} aria-hidden="true" />
-              <span>Scanner operations</span>
+              <Building2 size={17} aria-hidden="true" />
+              <span>Customer estate</span>
             </Link>
           ) : null}
-          {can("domain-security:view") ? (
-            <Link
-              to="/domain-security"
-              className="nav-link"
-              activeProps={{ className: "nav-link active" }}
-            >
-              <ShieldCheck size={17} aria-hidden="true" />
-              <span>Domain security</span>
-            </Link>
-          ) : null}
-          {can("outbound-intelligence:view") ? (
-            <Link
-              to="/outbound-intelligence"
-              className="nav-link"
-              activeProps={{ className: "nav-link active" }}
-            >
-              <Send size={17} aria-hidden="true" />
-              <span>Outbound intelligence</span>
-            </Link>
-          ) : null}
+
+          <p className="nav-section-label">Governance</p>
           {can("deep-ai:view") ? (
             <Link to="/deep-ai" className="nav-link" activeProps={{ className: "nav-link active" }}>
               <Bot size={17} aria-hidden="true" />
@@ -183,16 +209,6 @@ export function Layout() {
               <span>Audit log</span>
             </Link>
           ) : null}
-          {can("admin:customers:view") ? (
-            <Link
-              to="/customers"
-              className="nav-link"
-              activeProps={{ className: "nav-link active" }}
-            >
-              <Building2 size={17} aria-hidden="true" />
-              <span>Customers</span>
-            </Link>
-          ) : null}
           {can("policies:view") ? (
             <Link
               to="/policies"
@@ -209,16 +225,8 @@ export function Layout() {
               <span>Models</span>
             </Link>
           ) : null}
-          {can("operations:view") ? (
-            <Link
-              to="/operations"
-              className="nav-link"
-              activeProps={{ className: "nav-link active" }}
-            >
-              <Server size={17} aria-hidden="true" />
-              <span>Operations</span>
-            </Link>
-          ) : null}
+
+          {systemAdmin ? <p className="nav-section-label">Platform access</p> : null}
           {can("admin:users:manage") || can("admin:impersonate") ? (
             <Link
               to="/admin-users"
@@ -231,7 +239,7 @@ export function Layout() {
           ) : null}
           <Link to="/settings" className="nav-link" activeProps={{ className: "nav-link active" }}>
             <Settings size={17} aria-hidden="true" />
-            <span>Settings</span>
+            <span>{systemAdmin ? "Platform settings" : "Workspace settings"}</span>
           </Link>
         </nav>
 
@@ -260,7 +268,7 @@ export function Layout() {
         <header className="command-context" aria-label="Current operator context">
           <div className="command-context-product">
             <img src="/brand/logos/logo-mark@2x.png" alt="" />
-            <span>Nullapart Control</span>
+            <span>{systemAdmin ? "Nullapart System Control" : "Nullapart Security Desk"}</span>
             <span className="command-context-state">{sessionPresentation.stateLabel}</span>
           </div>
           <div className="command-context-scope">

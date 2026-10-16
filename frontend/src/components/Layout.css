@@ -124,6 +124,19 @@
   z-index: 1;
 }
 
+.nav-section-label {
+  margin: var(--spacing-3) var(--spacing-3) var(--spacing-1);
+  color: rgba(214, 255, 158, 0.58);
+  font-size: 0.61rem;
+  font-weight: var(--font-weight-bold);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.nav-section-label:first-child {
+  margin-top: var(--spacing-1);
+}
+
 .sidebar-nav .nav-link {
   display: flex;
   align-items: center;
@@ -438,6 +451,10 @@
     padding-bottom: var(--spacing-1);
     scrollbar-width: thin;
     scrollbar-color: rgba(250, 250, 250, 0.3) transparent;
+  }
+
+  .nav-section-label {
+    display: none;
   }
 
   .sidebar-nav::-webkit-scrollbar {

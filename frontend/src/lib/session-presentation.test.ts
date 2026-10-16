@@ -26,13 +26,48 @@ describe("getSessionPresentation", () => {
     });
   });
 
-  it("derives the scope label only from a verified server session", () => {
+  it("makes verified system authority distinct from a customer workspace", () => {
     expect(getSessionPresentation(authenticatedSession, false)).toMatchObject({
-      stateLabel: "Authenticated",
-      scopeLabel: "Platform scope",
+      stateLabel: "System control",
+      scopeLabel: "System-wide authority",
+      mode: "system",
     });
     expect(
-      getSessionPresentation({ ...authenticatedSession, customerId: "customer-a" }, false),
-    ).toMatchObject({ scopeLabel: "Customer scope" });
+      getSessionPresentation(
+        {
+          ...authenticatedSession,
+          roles: ["customer_admin"],
+          customerId: "customer-a",
+        },
+        false,
+      ),
+    ).toMatchObject({
+      stateLabel: "Operator session",
+      scopeLabel: "Customer workspace",
+      mode: "customer",
+    });
+  });
+
+  it("makes an audited customer entry unambiguously different from system control", () => {
+    expect(
+      getSessionPresentation(
+        {
+          ...authenticatedSession,
+          customerId: "customer-a",
+          impersonation: {
+            id: "entry-1",
+            customerId: "customer-a",
+            customerDisplayName: "Acme Mail",
+            reason: "Investigating a reported delivery failure.",
+            startedAt: "2099-01-01T00:00:00Z",
+          },
+        },
+        false,
+      ),
+    ).toMatchObject({
+      stateLabel: "Customer entry active",
+      scopeLabel: "Customer entry · Acme Mail",
+      mode: "customer-entry",
+    });
   });
 });

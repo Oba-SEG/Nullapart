@@ -6,7 +6,7 @@
  * the CSRF token for mutating requests is held in memory (auth/csrf).
  */
 
-import { api, markSessionSeen } from "../api/client";
+import { api, markSessionSeen, type ApiError } from "../api/client";
 import { clearCsrfToken, setCsrfToken } from "./csrf";
 import { randomUuid } from "../lib/ids";
 
@@ -80,6 +80,35 @@ function errorCode(error: unknown): string {
     : "";
 }
 
+function basicAuthorization(username: string, password: string): string {
+  // RFC 7617 uses a byte sequence. Encoding UTF-8 explicitly avoids silently
+  // corrupting a non-ASCII local operator name before Nginx validates it.
+  const bytes = new TextEncoder().encode(`${username}:${password}`);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return `Basic ${btoa(binary)}`;
+}
+
+function loginError(response: Response, correlationId: string, body: unknown): ApiError {
+  const errorBody = (body ?? {}) as {
+    code?: string;
+    error?: string;
+    message?: string;
+    trace_id?: string;
+  };
+  return {
+    code: errorBody.code ?? errorBody.error ?? `HTTP_${response.status}`,
+    // Do not distinguish an unknown local console identity from a wrong
+    // password. Nginx deliberately emits the same response for both.
+    message:
+      response.status === 401
+        ? "The local console credentials were not accepted."
+        : (errorBody.message ?? response.statusText),
+    traceId: errorBody.trace_id ?? correlationId,
+    retryable: response.status === 429 || response.status >= 500,
+  };
+}
+
 /**
  * Same-origin navigation entry point for a full-page login. The BFF answers
  * with either a session cookie (proxy-header mode) or a redirect to the IdP;
@@ -105,20 +134,72 @@ export async function exchangeLogin(returnTo = "/"): Promise<string> {
   return target;
 }
 
-export async function beginLogin(returnTo = "/"): Promise<void> {
+/**
+ * Exchanges the local development gateway credentials for the same opaque,
+ * HttpOnly application session used by OIDC. The Basic value exists only for
+ * this request: Nginx validates it and replaces the upstream Authorization
+ * header with its private workload token before Mail Core sees the request.
+ */
+export async function exchangeLocalLogin(
+  username: string,
+  password: string,
+  returnTo = "/",
+): Promise<string> {
   const target = safeReturnTo(returnTo);
-  try {
-    await exchangeLogin(target);
-  } catch (error) {
-    if (errorCode(error) === "AUTH_REDIRECT") {
-      // OIDC mode: the POST was side-effect free, so start the flow with a
-      // real top-level navigation (flow cookie, authorize redirect, IdP UI).
-      window.location.assign(loginEntryUrl(target));
-      return;
-    }
-    throw error;
+  const correlationId = randomUuid();
+  const response = await fetch("/api/v1/auth/login", {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      Authorization: basicAuthorization(username, password),
+      "X-Correlation-ID": correlationId,
+    },
+    credentials: "same-origin",
+    redirect: "manual",
+  });
+
+  if (response.type === "opaqueredirect") {
+    throw {
+      code: "AUTH_REDIRECT",
+      message: "Authentication continues in the identity provider",
+      traceId: correlationId,
+      retryable: false,
+    } satisfies ApiError;
   }
+
+  const body: unknown = await response.json().catch(() => null);
+  if (!response.ok) throw loginError(response, correlationId, body);
+
+  const envelope = body as { data?: Session };
+  if (!envelope?.data) {
+    throw {
+      code: "INVALID_API_ENVELOPE",
+      message: "The server returned an invalid response envelope",
+      traceId: correlationId,
+      retryable: false,
+    } satisfies ApiError;
+  }
+  sessionFromResponse(envelope.data);
+  return target;
+}
+
+export async function beginLocalLogin(
+  username: string,
+  password: string,
+  returnTo = "/",
+): Promise<void> {
+  const target = await exchangeLocalLogin(username, password, returnTo);
   window.location.assign(target);
+}
+
+/**
+ * Starts the provider-owned, full-page OIDC flow. This is intentionally a
+ * navigation rather than a fetch: the GET entrypoint is unauthenticated at
+ * the local gateway, while the local credential exchange is POST-only.
+ */
+export function beginLogin(returnTo = "/"): void {
+  const target = safeReturnTo(returnTo);
+  window.location.assign(loginEntryUrl(target));
 }
 
 export interface LogoutResult {

@@ -3,10 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearCsrfToken, getCsrfToken, setCsrfToken } from "./csrf";
 import {
   beginLogin,
+  beginLocalLogin,
   beginStepUp,
   canImpersonate,
   endImpersonation,
   exchangeLogin,
+  exchangeLocalLogin,
   isStepUpRequired,
   loadSession,
   logout,
@@ -21,10 +23,6 @@ function jsonResponse(status: number, body: unknown) {
     statusText: status === 401 ? "Unauthorized" : "Response",
     json: async () => body,
   };
-}
-
-function redirectResponse() {
-  return { type: "opaqueredirect", status: 0, json: async () => null };
 }
 
 function stubLocation() {
@@ -111,27 +109,61 @@ describe("browser session boundary", () => {
     await expect(exchangeLogin("/audit-log")).resolves.toBe("/audit-log");
   });
 
-  it("beginLogin navigates straight to the target once the session exists", async () => {
-    const assign = stubLocation();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => jsonResponse(200, sessionEnvelope("csrf-login"))),
+  it("exchanges local gateway credentials only on the login request", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(200, sessionEnvelope("csrf-local-login")));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(exchangeLocalLogin("operator", "correct horse", "/operations")).resolves.toBe(
+      "/operations",
     );
 
-    await beginLogin("/audit-log");
-
-    expect(assign).toHaveBeenCalledWith("/audit-log");
-    expect(getCsrfToken()).toBe("csrf-login");
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/v1/auth/login");
+    expect(init.method).toBe("POST");
+    expect((init.headers as Record<string, string>).Authorization).toBe(
+      "Basic b3BlcmF0b3I6Y29ycmVjdCBob3JzZQ==",
+    );
+    expect(init.credentials).toBe("same-origin");
+    expect(init.redirect).toBe("manual");
+    expect(getCsrfToken()).toBe("csrf-local-login");
   });
 
-  it("beginLogin falls back to a full-page login entry when the POST is a redirect", async () => {
+  it("does not disclose whether local gateway credentials were unknown or incorrect", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(401, { message: "Unauthorized" })),
+    );
+
+    await expect(exchangeLocalLogin("operator", "wrong")).rejects.toMatchObject({
+      code: "HTTP_401",
+      message: "The local console credentials were not accepted.",
+    });
+  });
+
+  it("beginLocalLogin navigates only after the proxy-backed session exists", async () => {
     const assign = stubLocation();
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => redirectResponse()),
+      vi.fn(async () => jsonResponse(200, sessionEnvelope("csrf-local-login"))),
     );
 
-    await beginLogin("https://evil.example");
+    await beginLocalLogin("operator", "correct horse", "/operations");
+
+    expect(assign).toHaveBeenCalledWith("/operations");
+  });
+
+  it("beginLogin starts a full-page identity-provider entry with a sanitized target", () => {
+    const assign = stubLocation();
+
+    beginLogin("/audit-log");
+
+    expect(assign).toHaveBeenCalledWith("/api/v1/auth/login?return_to=%2Faudit-log");
+  });
+
+  it("beginLogin rejects an external identity-provider return target", () => {
+    const assign = stubLocation();
+
+    beginLogin("https://evil.example");
 
     expect(assign).toHaveBeenCalledWith("/api/v1/auth/login?return_to=%2F");
   });

@@ -105,11 +105,10 @@ docker compose --env-file .env.local -f compose.local.yml up -d mailcore
 ```
 
 Verification (HTTP level, through the reverse proxy at
-`${NULLAPART_BIND_ADDRESS:-127.0.0.1}:${NULLAPART_FRONTEND_PORT:-53080}`, which
-adds its own HTTP basic auth):
+`${NULLAPART_BIND_ADDRESS:-127.0.0.1}:${NULLAPART_FRONTEND_PORT:-53080}`):
 
-- `POST /api/v1/auth/login` → `303` to `GET /api/v1/auth/login` → `303` to the
-  IdP authorize URL (PKCE S256, `state`, `nonce`) plus the short-lived
+- `GET /api/v1/auth/login` → `303` to the IdP authorize URL (PKCE S256,
+  `state`, `nonce`) plus the short-lived
   `nullapart_oidc_flow` cookie;
 - after the IdP login and MFA, `/api/v1/auth/oidc/callback` returns `303` and
   sets `nullapart_session`; `GET /api/v1/auth/session` → `200` for the linked
@@ -121,10 +120,15 @@ adds its own HTTP basic auth):
 - an IdP user with no local row gets `403 Account is not provisioned`, an
   audited `session_login` `denied` row, and no bootstrap.
 
-`NULLAPART_IDENTITY_PROVIDER=proxy_header` (the default) restores the header
-exchange, where `POST /api/v1/auth/login` answers `200` with a session. The
-mode is configuration, never authorization: `oidc` only becomes usable when
-the `NULLAPART_OIDC_*` family is complete.
+`NULLAPART_IDENTITY_PROVIDER=proxy_header` (the default) enables the local
+console form. Only `POST /api/v1/auth/login` requires HTTP Basic credentials;
+Nginx consumes them, passes `$remote_user` as the trusted local identity, and
+replaces the upstream `Authorization` header with the private workload bearer.
+It returns `200` with the same HttpOnly session cookie used by the OIDC flow.
+The login page and all other API requests do not trigger a browser Basic-auth
+prompt; their identity comes from the server-managed session. The mode is
+configuration, never authorization: `oidc` only becomes usable when the
+`NULLAPART_OIDC_*` family is complete.
 
 ## Scope
 

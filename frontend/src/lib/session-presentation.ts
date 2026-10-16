@@ -1,4 +1,4 @@
-import type { Session } from "../auth/session";
+import { isSystemAdmin, type Session } from "../auth/session";
 
 export type SessionPresentation = {
   asset:
@@ -8,6 +8,7 @@ export type SessionPresentation = {
   boundaryLabel: string;
   scopeLabel: string;
   stateLabel: string;
+  mode: "system" | "customer" | "customer-entry" | "unverified";
 };
 
 /**
@@ -20,11 +21,30 @@ export function getSessionPresentation(
   queryFailed: boolean,
 ): SessionPresentation {
   if (session?.authenticated) {
+    if (isSystemAdmin(session) && session.impersonation) {
+      return {
+        asset: "/brand/status/status-review-256.png",
+        boundaryLabel: "Audited customer entry",
+        scopeLabel: `Customer entry · ${session.impersonation.customerDisplayName}`,
+        stateLabel: "Customer entry active",
+        mode: "customer-entry",
+      };
+    }
+    if (isSystemAdmin(session)) {
+      return {
+        asset: "/brand/status/status-clean-256.png",
+        boundaryLabel: "System administrator",
+        scopeLabel: "System-wide authority",
+        stateLabel: "System control",
+        mode: "system",
+      };
+    }
     return {
       asset: "/brand/status/status-clean-256.png",
       boundaryLabel: "Server-managed session",
-      scopeLabel: session.customerId ? "Customer scope" : "Platform scope",
-      stateLabel: "Authenticated",
+      scopeLabel: session.customerId ? "Customer workspace" : "Platform workspace",
+      stateLabel: "Operator session",
+      mode: "customer",
     };
   }
 
@@ -34,6 +54,7 @@ export function getSessionPresentation(
       boundaryLabel: "Session status unavailable",
       scopeLabel: "Authentication requires verification",
       stateLabel: "Attention required",
+      mode: "unverified",
     };
   }
 
@@ -42,5 +63,6 @@ export function getSessionPresentation(
     boundaryLabel: "Verifying session",
     scopeLabel: "Authentication is being verified",
     stateLabel: "Verifying",
+    mode: "unverified",
   };
 }

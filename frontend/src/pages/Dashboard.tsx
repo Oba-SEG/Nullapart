@@ -11,8 +11,10 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import { api } from "../api/client";
+import { isSystemAdmin, loadSession } from "../auth/session";
 import { ControlRail } from "../components/ControlRail";
 import { StatusPill } from "../components/StatusPill";
+import { WorkspaceHeader } from "../components/WorkspaceHeader";
 import type { StatusTone } from "../lib/status";
 import "./Dashboard.css";
 
@@ -85,6 +87,12 @@ function Skeleton({ width }: { width?: string }) {
 }
 
 export function Dashboard() {
+  const session = useQuery({
+    queryKey: ["session"],
+    queryFn: ({ signal }) => loadSession(signal),
+    staleTime: 60_000,
+    retry: false,
+  });
   const runtime = useQuery({
     queryKey: ["operations-runtime"],
     queryFn: ({ signal }) => api.get<RuntimeSnapshot>("/operations/runtime", signal),
@@ -126,6 +134,8 @@ export function Dashboard() {
   const quarantined = quarantine.data?.length ?? null;
   const nodeStatus = scanner.data?.node.status ?? null;
   const oldestAge = outbox ? formatAge(outbox.oldest_unpublished_age_seconds) : null;
+  const systemAdmin = isSystemAdmin(session.data ?? null);
+  const workspaceTitle = systemAdmin ? "System command center" : "Security operations desk";
   const commandActions = [
     {
       to: "/quarantine",
@@ -177,24 +187,32 @@ export function Dashboard() {
 
   return (
     <div className="dashboard">
-      <header className="dashboard-header">
-        <div>
-          <h1 className="page-title">Dashboard</h1>
-          <p className="dashboard-subtitle">
-            {data
-              ? `Deployment ${data.deployment_id} · config revision ${data.config.db_revision ?? "unknown"}`
-              : "Live state of this deployment"}
-          </p>
-        </div>
-        <button type="button" className="btn btn-ghost dashboard-reload" onClick={retry}>
-          <RefreshCw size={14} aria-hidden="true" />
-          Refresh
-        </button>
-      </header>
+      <WorkspaceHeader
+        eyebrow={systemAdmin ? "Platform authority" : "Customer security operations"}
+        title={workspaceTitle}
+        description={
+          systemAdmin
+            ? "Investigate the deployment, govern the security posture, and enter a customer only through the audited customer-entry workflow."
+            : "Investigate mail-security signals and proceed only through the controls authorized for this workspace."
+        }
+        scope={systemAdmin ? "System-wide authority" : "Customer workspace"}
+        actions={
+          <button type="button" className="btn btn-ghost dashboard-reload" onClick={retry}>
+            <RefreshCw size={14} aria-hidden="true" />
+            Refresh signals
+          </button>
+        }
+      >
+        <p className="dashboard-subtitle">
+          {data
+            ? `Deployment ${data.deployment_id} · config revision ${data.config.db_revision ?? "unknown"}`
+            : "Live system evidence loads from the authorized operations APIs."}
+        </p>
+      </WorkspaceHeader>
 
       <ControlRail
-        title="Deployment priority queue"
-        summary="These are navigation signals, not mutating controls. Open the linked operational workspace to investigate or act."
+        title={systemAdmin ? "Platform priority queue" : "Security priority queue"}
+        summary="These signals are linked to the authorized workspace where an investigation or controlled action can occur."
         signals={[
           {
             label: "Quarantine",
@@ -284,9 +302,13 @@ export function Dashboard() {
       <section className="card command-panel" aria-labelledby="command-panel-heading">
         <div className="section-head command-panel-head">
           <div>
-            <span className="eyebrow">Admin command map</span>
+            <span className="eyebrow">
+              {systemAdmin ? "System command map" : "Security command map"}
+            </span>
             <h2 id="command-panel-heading" className="section-title">
-              What needs action now
+              {systemAdmin
+                ? "Choose an authorized system workflow"
+                : "Choose an authorized workflow"}
             </h2>
           </div>
           <Link to="/operations" className="section-link">
