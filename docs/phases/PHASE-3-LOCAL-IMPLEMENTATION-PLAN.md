@@ -924,3 +924,38 @@ decision required before any identity-provider integration is recorded.
   checkpoint writer scheduling, and checkpoint verification drills remain
   Phase 9 operations-hardening work. Phase 3 now implements and verifies the
   Control Plane status surface and least-privilege read path.
+
+### Local control-login and system-admin UX correction (2026-10-16)
+
+- **Problem corrected**: the prior global Nginx Basic-auth boundary caused a
+  browser-native credential prompt before the branded login experience, while
+  the console shell presented a system administrator like an ordinary customer
+  operator. The remote checkout also contained only 7 of the 57 verified
+  branded asset files, so image URLs fell back to the SPA document instead of
+  serving artwork.
+- **Implemented boundary**: only `POST /api/v1/auth/login` accepts local
+  Basic credentials. Nginx validates and consumes that header, forwards the
+  trusted local user only for the exact exchange while overwriting upstream
+  `Authorization` with the private workload bearer, and clears the local-user
+  header from all other API requests. `GET /api/v1/auth/login` remains the
+  top-level OIDC entrypoint. The React local form holds credentials only in
+  component memory and receives the existing opaque HttpOnly session; it does
+  not write credentials or tokens to browser storage.
+- **Implemented system mode**: a verified `system_admin` is labelled
+  `System-wide authority` and receives a grouped System command / Tenant
+  security / Governance / Platform access navigation and a System command
+  center. A customer entry is separately labelled `Customer entry active` so
+  it cannot be mistaken for platform authority. These are affordances only;
+  Mail Core continues to authorize every route and mutation.
+- **Gates**: `pnpm --dir frontend check-all` passed (127 tests, asset manifest
+  30/30 categories). The pre-existing `Models.tsx` fast-refresh ESLint warning
+  remains a warning only and was not suppressed or changed by this work.
+- **Live evidence on `192.168.8.4`**: frontend rebuilt/recreated and
+  `nginx -t` passed. `GET /login` returned 200 without `WWW-Authenticate`;
+  unauthenticated `GET /auth/session` and a forged local-user header both
+  returned 401; unauthenticated local login POST returned 401 with the Basic
+  challenge; valid local credentials returned 200 and the HttpOnly session
+  cookie, which then authorized `/auth/session`. All 57 local brand files were
+  synchronized to the remote checkout and the logo response is `image/png`.
+  A live browser visual check confirmed the complete artwork, system-admin
+  navigation and light-theme header contrast.
