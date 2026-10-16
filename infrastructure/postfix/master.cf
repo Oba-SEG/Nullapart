@@ -18,6 +18,7 @@ smtp      inet  n       -       n       -       -       smtpd
 # ==============================================================================
 10026 inet  n       -       n       -       -       smtpd
   -o content_filter=
+  -o smtpd_milters=
   -o receive_override_options=no_unknown_recipient_checks
   -o smtpd_relay_restrictions=permit_mynetworks,reject
   -o smtpd_recipient_restrictions=permit_mynetworks,reject
@@ -27,12 +28,13 @@ smtp      inet  n       -       n       -       -       smtpd
 # ==============================================================================
 # Outbound SMTP (private, used by Mail Core for delivery)
 # ==============================================================================
-127.0.0.1:10027 inet  n       -       n       -       -       smtpd
+10027 inet  n       -       n       -       -       smtpd
   -o content_filter=
   -o receive_override_options=no_unknown_recipient_checks,no_header_body_checks
   -o smtpd_relay_restrictions=permit_mynetworks,reject
   -o smtpd_recipient_restrictions=permit_mynetworks,reject
-  -o mynetworks=127.0.0.0/8
+  -o mynetworks=172.30.0.10/32
+  -o smtpd_client_restrictions=permit_mynetworks,reject
 
 # ==============================================================================
 # Mail Core after-queue content filter

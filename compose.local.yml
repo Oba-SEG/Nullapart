@@ -120,6 +120,8 @@ services:
       dockerfile: docker/Dockerfile.rspamd
     mem_limit: 768m
     cpus: 1.0
+    volumes:
+      - ${NULLAPART_DKIM_KEY_DIR:-./infrastructure/containers/dkim-unconfigured}:/run/nullapart/dkim:ro
     networks: [backend]
 
   postfix:

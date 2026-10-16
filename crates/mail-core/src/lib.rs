@@ -29,6 +29,7 @@ pub mod operations_api;
 pub mod outbound;
 pub mod outbound_intelligence;
 pub mod outbound_intelligence_api;
+pub mod outbound_submission;
 pub mod partition;
 pub mod phase2_handoff;
 pub mod phase2_persistence;

@@ -284,7 +284,11 @@ Cross-tenant instances must be independently deliverable/dispositionable after p
 
 ## Work package 9 — Outbound foundation
 
-**Status:** ✅ COMPLETE — `crates/mail-core/src/outbound.rs`
+**Status:** 🟡 PARTIAL — authorization/intelligence foundation in
+`crates/mail-core/src/outbound.rs`; private signed-submission boundary in
+`crates/mail-core/src/outbound_submission.rs`; no authenticated connector,
+durable outbound queue/ledger implementation, routing worker, retry/DSN
+correlation, or customer delivery path is wired yet.
 
 Implement initial trusted outbound intake.
 
@@ -300,6 +304,11 @@ Required:
 - signing hooks;
 - direct-MX/smart-host routing;
 - downstream retry and DSN correlation.
+
+The private signing listener and submission helper are not a generic public
+relay API and must not be treated as one. Customer-facing submission needs an
+explicitly reviewed connector trust model and a durable, idempotent delivery
+workflow before it can be exposed.
 
 No generic public relay API.
 

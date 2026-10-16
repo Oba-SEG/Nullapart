@@ -38,3 +38,7 @@ Thumbs.db
 
 # Local-only runtime credential material written by compose.local.yml
 infrastructure/containers/.zitadel-bootstrap/
+
+# DKIM private keys are provisioned only through the deployment secret
+# boundary. The adjacent map templates are safe to track; no key is.
+infrastructure/containers/dkim-unconfigured/keys/

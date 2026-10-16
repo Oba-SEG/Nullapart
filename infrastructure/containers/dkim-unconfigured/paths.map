@@ -1,0 +1,2 @@
+# Runtime provisioner writes one line per authorized sending domain:
+# customer.example /run/nullapart/dkim/keys/customer.example.selector-name.key

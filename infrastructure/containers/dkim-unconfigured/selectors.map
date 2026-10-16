@@ -1,0 +1,2 @@
+# Runtime provisioner writes one line per authorized sending domain:
+# customer.example selector-name

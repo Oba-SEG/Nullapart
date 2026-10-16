@@ -552,14 +552,21 @@ mailbox-provider logo display has been validated. The observer intentionally
 does not dereference customer-controlled URLs to avoid SSRF and untrusted SVG
 parsing in the control plane.
 
-The Phase 1 outbound admission model reports DKIM signing as unavailable until
-a future private outbound submission path has selected a tenant-authorized
-domain key from the approved secret boundary and submitted mail to a configured
-signing MTA/milter. Sender-domain validation alone is not signing evidence.
+The Phase 1 outbound admission model reports DKIM signing as unavailable by
+default. A narrow private submission component now permits only a
+hash-bound message with a matching tenant-authorized, provisioned signer to
+reach the isolated Postfix/Rspamd signing listener. Its signer metadata is
+trusted deployment configuration; the key itself remains outside Git and Mail
+Core. Each SMTP attempt requires a durable idempotency ledger claim; an
+ambiguous or in-progress attempt must defer rather than resend. The component
+is intentionally not a customer-facing connector, durable outbound queue, or
+public API, so it does not by itself complete outbound delivery.
+
 Actual customer outbound signing remains an operational Phase 1/SMTP
-commissioning prerequisite: private authenticated submission, key provisioning
-outside Git, selector DNS, SPF authorization, aligned DMARC, and a real
-external-message verification test.
+commissioning prerequisite: authenticated connector and durable queue wiring,
+key provisioning outside Git, selector DNS, SPF authorization, aligned DMARC,
+and a recorded external-message verification test. Sender-domain validation
+alone is not signing evidence.
 
 ## Failure-report privacy controls
 

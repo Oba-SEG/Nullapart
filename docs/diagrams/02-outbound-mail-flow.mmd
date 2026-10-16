@@ -8,6 +8,7 @@ flowchart TD
     Scan[Security Scanner Fabric]
     Behaviour[Outbound Behaviour Analysis]
     Policy[Outbound Policy]
+    Submit[Private Authorized Submission]
     Signing[DKIM / Transport Controls]
     Route{Route}
     Smart[Smart Host]
@@ -25,6 +26,6 @@ flowchart TD
     Bulk --> Queue --> Scan --> Behaviour --> Policy
     Policy -->|Block| Block
     Policy -->|Defer / Throttle / Hold| Defer
-    Policy -->|Allow| Signing --> Route
+    Policy -->|Allow| Submit --> Signing --> Route
     Route --> Smart --> Internet
     Route --> Direct --> Internet

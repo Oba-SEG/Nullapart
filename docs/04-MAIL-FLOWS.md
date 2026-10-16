@@ -160,6 +160,12 @@ Security scanning / behaviour
 Policy
   |
   v
+Private signed-outbound submission
+  |- hash-bound message from authorized connector worker
+  |- matching tenant-authorized signer required
+  |- isolated Postfix listener; Rspamd key never enters Mail Core
+  |
+  v
 DKIM / transport policy
   |
   v
@@ -174,6 +180,11 @@ Outbound sending domains must be tenant-authorized:
 - `SEND_ONLY` — outbound-authorized domain, Support-created only.
 
 Trusted Microsoft/XOORG context may contribute only when received through a validated configured Microsoft connector/path. An arbitrary external `X-OriginatorOrg` header is untrusted.
+
+The signed-outbound listener is an internal hop, not a customer submission
+endpoint. It accepts only the Mail Core workload source and does not accept a
+null envelope sender. DSN and quarantine reinjection use separate listeners
+and must never be repurposed for customer outbound signing.
 
 ## Bulk sending
 
