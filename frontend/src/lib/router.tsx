@@ -158,6 +158,13 @@ const adminUsersRoute = createRoute({
   component: lazyRouteComponent(() => import("../pages/AdminUsers"), "AdminUsers"),
 });
 
+const rolesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/roles",
+  beforeLoad: () => requirePermission("admin:users:manage"),
+  component: lazyRouteComponent(() => import("../pages/Roles"), "Roles"),
+});
+
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
@@ -222,6 +229,7 @@ const routeTree = rootRoute.addChildren([
   operationsRoute,
   auditLogRoute,
   adminUsersRoute,
+  rolesRoute,
   settingsRoute,
   customersRoute,
   customerDetailRoute,

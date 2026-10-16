@@ -20,7 +20,7 @@ export function WorkspaceHeader({
   eyebrow,
   title,
   description,
-  scope = "Server-authorized controls",
+  scope = "Allowed for your role",
   actions,
   children,
 }: WorkspaceHeaderProps) {

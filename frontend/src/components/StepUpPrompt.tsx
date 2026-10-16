@@ -1,5 +1,6 @@
 import { beginStepUp, isStepUpRequired } from "../auth/session";
 import { Button } from "./primitives/Button";
+import { Hint } from "./primitives/Hint";
 
 interface StepUpPromptProps {
   error: unknown;
@@ -18,9 +19,11 @@ export function StepUpPrompt({ error }: StepUpPromptProps) {
   return (
     <div className="step-up-prompt" role="status">
       <span className="step-up-text">Re-authentication is required for this action.</span>
-      <Button type="button" size="sm" onClick={() => beginStepUp()}>
-        Re-authenticate
-      </Button>
+      <Hint label="Your sign-in is still valid. Only this action needs a fresh check-in for safety.">
+        <Button type="button" size="sm" onClick={() => beginStepUp()}>
+          Re-authenticate
+        </Button>
+      </Hint>
     </div>
   );
 }

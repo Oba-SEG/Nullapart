@@ -1,29 +1,28 @@
 .control-rail {
   display: grid;
-  grid-template-columns: minmax(13rem, 0.9fr) minmax(0, 2.2fr) auto;
+  grid-template-columns: minmax(190px, 0.8fr) minmax(0, 2.6fr) auto;
   gap: var(--spacing-5);
-  align-items: stretch;
-  margin: 0 0 var(--spacing-6);
-  padding: var(--spacing-4) var(--spacing-5);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-xl);
-  background: var(--color-bg-glass);
-  box-shadow: var(--shadow-sm);
+  align-items: center;
+  padding: var(--spacing-3) 0;
+  border-bottom: 1px solid var(--color-border);
 }
 
 .control-rail-intro > p {
-  margin: 0 0 var(--spacing-1);
+  margin: 0;
   color: var(--color-primary);
-  font-size: var(--font-size-xs);
+  font-size: 0.6rem;
   font-weight: var(--font-weight-bold);
-  letter-spacing: 0.12em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
 }
 
 .control-rail h2 {
-  margin: 0;
+  margin: var(--spacing-1) 0 0;
   color: var(--color-text-primary);
-  font-size: var(--font-size-lg);
+  font-family: var(--font-family-display);
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 .control-rail-intro > span,
@@ -31,34 +30,42 @@
   display: block;
   margin-top: var(--spacing-1);
   color: var(--color-text-tertiary);
-  font-size: var(--font-size-xs);
-  line-height: var(--line-height-normal);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.control-rail-intro > span {
+  font-size: 0.68rem;
 }
 
 .control-rail-signals {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--spacing-3);
   margin: 0;
+  border-left: 1px solid var(--color-border);
 }
 
 .control-signal {
   min-width: 0;
-  padding-left: var(--spacing-3);
-  border-left: 2px solid var(--color-border-strong);
+  padding: var(--spacing-1) var(--spacing-4);
+  border-right: 1px solid var(--color-border);
 }
 
 .control-signal-healthy {
-  border-color: var(--color-success);
+  box-shadow: inset 0 2px 0 var(--color-success);
 }
 
 .control-signal-attention {
-  border-color: var(--color-warning);
+  box-shadow: inset 0 2px 0 var(--color-warning);
 }
 
 .control-signal dt {
+  padding-top: var(--spacing-2);
   color: var(--color-text-tertiary);
-  font-size: var(--font-size-xs);
+  font-size: 0.64rem;
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .control-signal dd {
@@ -66,8 +73,9 @@
   overflow-wrap: anywhere;
   color: var(--color-text-primary);
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-lg);
+  font-size: 1.15rem;
   font-weight: var(--font-weight-bold);
+  letter-spacing: -0.02em;
 }
 
 .control-rail-actions {
@@ -89,11 +97,14 @@
 }
 
 @media (max-width: 640px) {
-  .control-rail {
-    padding: var(--spacing-4);
-  }
-
   .control-rail-signals {
     grid-template-columns: 1fr;
+    border-top: 1px solid var(--color-border);
+  }
+
+  .control-signal {
+    min-height: 0;
+    padding: var(--spacing-2) var(--spacing-3);
+    border-bottom: 1px solid var(--color-border);
   }
 }

@@ -6,6 +6,7 @@ import {
   Building2,
   BrainCircuit,
   Cable,
+  KeyRound,
   LayoutDashboard,
   LogOut,
   Mail,
@@ -93,13 +94,13 @@ export function Layout() {
         <div className="sidebar-boundary" aria-label="Operator session context">
           <img src={sessionPresentation.asset} alt="" className="sidebar-boundary-mark" />
           <span>
-            <strong>{systemAdmin ? "Platform authority" : "Operator boundary"}</strong>
+            <strong>{systemAdmin ? "System access" : "Operator boundary"}</strong>
             <small>{sessionPresentation.boundaryLabel}</small>
           </span>
         </div>
 
         <nav ref={navRef} className="sidebar-nav" aria-label="Primary">
-          <p className="nav-section-label">{systemAdmin ? "System command" : "Security desk"}</p>
+          <p className="nav-section-label">{systemAdmin ? "System overview" : "Security desk"}</p>
           <Link
             to="/"
             className="nav-link"
@@ -107,7 +108,7 @@ export function Layout() {
             activeProps={{ className: "nav-link active" }}
           >
             <LayoutDashboard size={17} aria-hidden="true" />
-            <span>{systemAdmin ? "Command center" : "Security desk"}</span>
+            <span>{systemAdmin ? "Overview" : "Security desk"}</span>
           </Link>
           {can("operations:view") ? (
             <Link
@@ -116,7 +117,7 @@ export function Layout() {
               activeProps={{ className: "nav-link active" }}
             >
               <Server size={17} aria-hidden="true" />
-              <span>Runtime control</span>
+              <span>Runtime status</span>
             </Link>
           ) : null}
           {can("scanner:operations:view") ? (
@@ -126,7 +127,7 @@ export function Layout() {
               activeProps={{ className: "nav-link active" }}
             >
               <Radar size={17} aria-hidden="true" />
-              <span>Scanner fabric</span>
+              <span>Scanner nodes</span>
             </Link>
           ) : null}
           {can("domain-security:view") ? (
@@ -136,7 +137,7 @@ export function Layout() {
               activeProps={{ className: "nav-link active" }}
             >
               <ShieldCheck size={17} aria-hidden="true" />
-              <span>Domain posture</span>
+              <span>Domain security</span>
             </Link>
           ) : null}
           {can("outbound-intelligence:view") ? (
@@ -150,7 +151,7 @@ export function Layout() {
             </Link>
           ) : null}
 
-          <p className="nav-section-label">Tenant security</p>
+          <p className="nav-section-label">Customer mail</p>
           {can("trace:view") ? (
             <Link
               to="/messages"
@@ -178,7 +179,7 @@ export function Layout() {
               activeProps={{ className: "nav-link active" }}
             >
               <Building2 size={17} aria-hidden="true" />
-              <span>Customer estate</span>
+              <span>Customers</span>
             </Link>
           ) : null}
 
@@ -226,7 +227,7 @@ export function Layout() {
             </Link>
           ) : null}
 
-          {systemAdmin ? <p className="nav-section-label">Platform access</p> : null}
+          {systemAdmin ? <p className="nav-section-label">Administration</p> : null}
           {can("admin:users:manage") || can("admin:impersonate") ? (
             <Link
               to="/admin-users"
@@ -235,6 +236,12 @@ export function Layout() {
             >
               <Users size={17} aria-hidden="true" />
               <span>Admin users</span>
+            </Link>
+          ) : null}
+          {can("admin:users:manage") ? (
+            <Link to="/roles" className="nav-link" activeProps={{ className: "nav-link active" }}>
+              <KeyRound size={17} aria-hidden="true" />
+              <span>Roles</span>
             </Link>
           ) : null}
           <Link to="/settings" className="nav-link" activeProps={{ className: "nav-link active" }}>
@@ -268,7 +275,7 @@ export function Layout() {
         <header className="command-context" aria-label="Current operator context">
           <div className="command-context-product">
             <img src="/brand/logos/logo-mark@2x.png" alt="" />
-            <span>{systemAdmin ? "Nullapart System Control" : "Nullapart Security Desk"}</span>
+            <span>{systemAdmin ? "Nullapart System console" : "Nullapart Security Desk"}</span>
             <span className="command-context-state">{sessionPresentation.stateLabel}</span>
           </div>
           <div className="command-context-scope">

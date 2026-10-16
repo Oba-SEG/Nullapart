@@ -1,28 +1,30 @@
+/* One-line contextual guide, not a banner. The prose lives in the DOM for
+ * screen readers; the visual strip carries the ordered steps compactly. */
 .workflow-guide {
-  display: grid;
-  grid-template-columns: minmax(13rem, 0.8fr) minmax(0, 2fr) auto;
-  gap: var(--spacing-5);
-  align-items: center;
-  margin: 0 0 var(--spacing-6);
-  padding: var(--spacing-5);
-  color: var(--color-text-primary);
-  border: 1px solid
-    color-mix(in srgb, var(--color-primary) 28%, var(--color-border));
-  border-radius: var(--radius-lg);
-  background:
-    linear-gradient(
-      105deg,
-      color-mix(in srgb, var(--color-bg-secondary) 94%, transparent),
-      color-mix(in srgb, var(--color-bg-elevated) 88%, transparent)
-    ),
-    url("/brand/generated/nullapart-wave-command-bg.png") center / cover;
-  box-shadow: var(--shadow-panel);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--spacing-2) var(--spacing-5);
+  margin: 0 0 var(--spacing-5);
+  padding: var(--spacing-2) var(--spacing-4);
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+}
+
+.workflow-guide-intro {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--spacing-3);
+  min-width: 0;
 }
 
 .workflow-guide-eyebrow {
-  margin: 0 0 var(--spacing-2);
+  margin: 0;
   color: var(--color-primary);
-  font-size: 0.7rem;
+  font-size: 0.6rem;
   font-weight: 800;
   letter-spacing: 0.13em;
   text-transform: uppercase;
@@ -30,21 +32,33 @@
 
 .workflow-guide h2 {
   margin: 0;
-  font-size: clamp(1rem, 1.8vw, 1.25rem);
+  color: var(--color-text-primary);
+  font-size: 0.82rem;
+  font-weight: var(--font-weight-semibold);
 }
 
-.workflow-guide-intro > p:last-child,
-.workflow-guide-steps p {
-  margin: var(--spacing-2) 0 0;
-  color: var(--color-text-secondary);
-  font-size: 0.86rem;
-  line-height: 1.45;
+/* The long description sentence stays available to assistive tech and
+ * collapses to its own line only when space allows it to read well. */
+.workflow-guide-intro > p:last-child {
+  display: none;
+  margin: 0;
+}
+
+@media (min-width: 1200px) {
+  .workflow-guide-intro > p:last-child {
+    display: block;
+    flex: 0 1 34ch;
+    color: var(--color-text-tertiary);
+    font-size: 0.74rem;
+    line-height: 1.4;
+  }
 }
 
 .workflow-guide-steps {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--spacing-3);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--spacing-2) var(--spacing-4);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -52,26 +66,30 @@
 
 .workflow-guide-steps li {
   display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
   gap: var(--spacing-2);
   min-width: 0;
 }
 
 .workflow-guide-steps li > span {
-  display: grid;
-  flex: 0 0 auto;
-  place-items: center;
-  width: 1.8rem;
-  height: 1.8rem;
-  color: var(--color-text-inverse);
-  border-radius: 999px;
-  background: var(--color-primary);
-  font-size: 0.65rem;
-  font-weight: 900;
+  color: var(--color-primary);
+  font-family: var(--font-family-mono);
+  font-size: 0.66rem;
+  font-weight: var(--font-weight-bold);
 }
 
 .workflow-guide-steps strong {
-  display: block;
-  font-size: 0.8rem;
+  color: var(--color-text-primary);
+  font-size: 0.78rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.workflow-guide-steps p {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: 0.74rem;
+  line-height: 1.4;
 }
 
 .workflow-guide-actions {
@@ -79,24 +97,23 @@
   flex-wrap: wrap;
   gap: var(--spacing-2);
   justify-content: flex-end;
+  margin-left: auto;
 }
 
 @media (max-width: 1020px) {
-  .workflow-guide {
-    grid-template-columns: 1fr;
-  }
-
   .workflow-guide-actions {
     justify-content: flex-start;
+    margin-left: 0;
   }
 }
 
 @media (max-width: 680px) {
   .workflow-guide {
-    padding: var(--spacing-4);
+    padding: var(--spacing-3);
   }
 
   .workflow-guide-steps {
-    grid-template-columns: 1fr;
+    flex-direction: column;
+    align-items: flex-start;
   }
 }

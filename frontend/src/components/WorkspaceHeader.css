@@ -1,93 +1,61 @@
 .workspace-header {
-  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--spacing-8);
-  align-items: end;
-  min-height: 188px;
-  overflow: hidden;
-  padding: clamp(1.4rem, 2.4vw, 2.2rem);
-  background:
-    linear-gradient(
-      90deg,
-      rgba(2, 8, 7, 0.94) 0%,
-      rgba(2, 8, 7, 0.76) 46%,
-      rgba(2, 8, 7, 0.28)
-    ),
-    url("/brand/web/website-header-1600x320.png") right center / auto 100%
-      no-repeat,
-    radial-gradient(
-      circle at 14% 8%,
-      rgba(168, 255, 0, 0.15),
-      transparent 22rem
-    ),
-    var(--color-bg-glass-strong);
-  border: 1px solid var(--color-border-lime);
-  border-radius: calc(var(--radius-2xl) + 0.25rem);
-  box-shadow: var(--shadow-panel-lime);
-  isolation: isolate;
-}
-
-.workspace-header::after {
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  content: "";
-  background-image: var(--brand-grid);
-  background-size: 32px 32px;
-  mask-image: linear-gradient(90deg, #000, transparent 74%);
-  opacity: 0.44;
+  gap: var(--spacing-4) var(--spacing-6);
+  align-items: center;
+  padding: 0 0 var(--spacing-4);
+  border-bottom: 1px solid var(--color-border);
 }
 
 .workspace-header-copy {
-  max-width: 68ch;
+  max-width: 760px;
+  min-width: 0;
 }
 
 .workspace-eyebrow {
   display: flex;
   align-items: center;
-  gap: var(--spacing-2);
-  margin-bottom: var(--spacing-3);
+  gap: 0.5rem;
+  margin-bottom: var(--spacing-1);
   color: var(--color-primary);
-  font-size: 0.68rem;
+  font-size: 0.63rem;
   font-weight: var(--font-weight-bold);
-  letter-spacing: 0.16em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
 }
 
 .workspace-eyebrow::before {
-  width: 0.58rem;
-  height: 0.58rem;
+  width: 0.4rem;
+  height: 0.4rem;
   content: "";
-  background: var(--lime);
-  border-radius: 2px;
-  box-shadow: var(--shadow-glow-lime);
+  background: var(--color-primary);
+  border-radius: 50%;
 }
 
 .workspace-title {
   margin: 0;
-  /* This header always uses dark artwork, including in the light console
-     theme, so its foreground must not inherit light-theme ink tokens. */
-  color: #fbfff9;
-  font-size: clamp(1.8rem, 3.2vw, 2.8rem);
-  font-weight: var(--font-weight-extrabold);
-  letter-spacing: -0.045em;
-  line-height: 1;
+  color: var(--color-text-primary);
+  font-family: var(--font-family-display);
+  font-size: clamp(1.55rem, 2.6vw, 2.15rem);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.08;
   text-wrap: balance;
 }
 
 .workspace-description {
-  max-width: 62ch;
-  margin-top: var(--spacing-3);
-  color: rgba(241, 255, 239, 0.78);
+  max-width: 72ch;
+  margin-top: var(--spacing-1);
+  color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
-  line-height: var(--line-height-relaxed);
+  line-height: 1.5;
   text-wrap: pretty;
 }
 
 .workspace-header-detail {
-  margin-top: var(--spacing-4);
-  color: rgba(241, 255, 239, 0.66);
+  margin-top: var(--spacing-2);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
 }
 
 .workspace-header-detail .dashboard-subtitle {
@@ -95,29 +63,29 @@
 }
 
 .workspace-header-actions {
-  display: grid;
-  justify-items: end;
-  gap: var(--spacing-4);
-  min-width: max-content;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--spacing-2);
 }
 
 .workspace-scope {
   display: inline-flex;
   align-items: center;
-  gap: var(--spacing-2);
-  padding: 0.42rem 0.66rem;
-  color: rgba(241, 255, 239, 0.88);
-  background: rgba(2, 8, 7, 0.55);
-  border: 1px solid rgba(0, 245, 212, 0.44);
-  border-radius: var(--radius-full);
-  font-size: 0.68rem;
-  font-weight: var(--font-weight-semibold);
-  letter-spacing: 0.045em;
+  gap: 0.45rem;
+  padding: 0.3rem 0.55rem;
+  color: var(--color-chip-accent-text);
+  background: var(--color-chip-accent-bg);
+  border: 1px solid var(--color-chip-accent-border);
+  border-radius: var(--radius-sm);
+  font-size: 0.6rem;
+  font-weight: var(--font-weight-bold);
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
 .workspace-scope svg {
-  color: var(--cyan);
+  color: var(--color-success);
 }
 
 .workspace-action-row {
@@ -130,18 +98,15 @@
 @media (max-width: 760px) {
   .workspace-header {
     grid-template-columns: 1fr;
-    gap: var(--spacing-5);
-    min-height: 0;
-    background:
-      linear-gradient(180deg, rgba(2, 8, 7, 0.93), rgba(2, 8, 7, 0.68)),
-      url("/brand/web/website-header-1600x320.png") right top / auto 100%
-        no-repeat,
-      var(--color-bg-glass-strong);
+    gap: var(--spacing-3);
+    padding-bottom: var(--spacing-4);
   }
 
   .workspace-header-actions {
-    justify-items: start;
-    min-width: 0;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-start;
   }
 
   .workspace-action-row {
