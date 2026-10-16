@@ -5,13 +5,15 @@ import { useMemo, useState } from "react";
 
 import { api, type ApiError } from "../api/client";
 import { StatusPill } from "../components/StatusPill";
-import { severityTone } from "../lib/status";
+import { findingCategoryLabel } from "../lib/labels";
+import { severityLabel, severityTone } from "../lib/status";
 import { StepUpPrompt } from "../components/StepUpPrompt";
 import { ControlRail } from "../components/ControlRail";
 import { WorkspaceHeader } from "../components/WorkspaceHeader";
 import { WorkflowGuide } from "../components/WorkflowGuide";
 import { Button } from "../components/primitives/Button";
 import { Dialog } from "../components/primitives/Dialog";
+import { Hint } from "../components/primitives/Hint";
 import { randomUuid } from "../lib/ids";
 import { notify } from "../lib/notify";
 import { humanizeToken } from "../lib/text";
@@ -50,6 +52,9 @@ export function Quarantine() {
   const [severity, setSeverity] = useState("all");
   const [selected, setSelected] = useState<QuarantineCase | null>(null);
   const [releaseReason, setReleaseReason] = useState("");
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkReason, setBulkReason] = useState("");
 
   const cases = useQuery({
     queryKey: ["quarantine"],
@@ -69,6 +74,40 @@ export function Quarantine() {
       await queryClient.invalidateQueries({ queryKey: ["quarantine"] });
     },
   });
+  const bulkRelease = useMutation({
+    mutationFn: async ({ items, reason }: { items: QuarantineCase[]; reason: string }) => {
+      const failed: string[] = [];
+      for (const item of items) {
+        try {
+          await api.post(
+            `/quarantine/${encodeURIComponent(item.tenant_message_id)}/release`,
+            { release_reason: reason },
+            { idempotencyKey: randomUuid() },
+          );
+        } catch (error) {
+          // Step-up must surface immediately and abort the batch; every
+          // completed release in the batch is already durable and audited.
+          if ((error as ApiError).code === "STEP_UP_REQUIRED") throw error;
+          failed.push(item.tenant_message_id);
+        }
+      }
+      return failed;
+    },
+    onSuccess: (failed) => {
+      if (failed.length === 0) {
+        notify("Selected messages released. Every release was recorded in the audit log.");
+      } else {
+        notify(
+          `${failed.length} of the selected messages could not be released. Each attempt is recorded in the audit log.`,
+          "error",
+        );
+      }
+      setBulkOpen(false);
+      setBulkReason("");
+      setSelectedIds(new Set());
+      void queryClient.invalidateQueries({ queryKey: ["quarantine"] });
+    },
+  });
 
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -84,28 +123,56 @@ export function Quarantine() {
       return matchesText && matchesSeverity;
     });
   }, [cases.data, search, severity]);
+  const eligibleFiltered = useMemo(
+    () => filtered.filter((item) => item.release_allowed && !item.released_at),
+    [filtered],
+  );
+  const selectedCases = useMemo(
+    () => filtered.filter((item) => selectedIds.has(item.tenant_message_id)),
+    [filtered, selectedIds],
+  );
+  const releaseableSelected = useMemo(
+    () => selectedCases.filter((item) => item.release_allowed && !item.released_at),
+    [selectedCases],
+  );
+  const allEligibleSelected =
+    eligibleFiltered.length > 0 &&
+    eligibleFiltered.every((item) => selectedIds.has(item.tenant_message_id));
+
+  function toggleSelected(id: string, checked: boolean) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (checked) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+  }
+
   const casesAvailable = cases.isSuccess;
   const casesState = cases.isError ? "Unavailable" : "Loading";
 
   return (
     <div className="quarantine-page">
       <WorkspaceHeader
-        eyebrow="Security disposition"
+        eyebrow="Mail on hold"
         title="Quarantine"
-        description="Review tenant-scoped security holds using normalized, content-safe evidence. Release remains step-up protected and auditable at case level."
-        scope="Case disposition controls"
+        description="Review held mail using safe metadata: headers and scanner results, never the message body. Releasing a message returns it to delivery."
+        scope="Release decisions"
       />
 
       <ControlRail
         title="Quarantine review queue"
-        summary="Work highest-severity active cases first. Opening a case is required before any exceptional release decision."
+        summary="Work the highest-severity cases first. Open a case before releasing anything."
         signals={[
           {
             label: "Cases",
             value: casesAvailable ? filtered.length : casesState,
             detail: casesAvailable
-              ? "Cases matching the current severity filter."
-              : "No case queue is inferred until the query succeeds.",
+              ? "Held messages that match the current severity filter."
+              : "The count appears once held mail finishes loading.",
           },
           {
             label: "Critical",
@@ -115,38 +182,39 @@ export function Quarantine() {
                 ).length
               : casesState,
             detail: casesAvailable
-              ? "Filtered cases carrying a critical published finding."
-              : "Critical finding state is unavailable until the case query succeeds.",
+              ? "Cases with a critical scanner finding."
+              : "The count appears once held mail finishes loading.",
             tone: casesAvailable ? "attention" : "neutral",
           },
           {
-            label: "Release eligible",
+            label: "Ready to release",
             value: casesAvailable
               ? filtered.filter((item) => item.release_allowed && !item.released_at).length
               : casesState,
             detail: casesAvailable
-              ? "Cases that may enter the step-up release workflow."
-              : "Release eligibility is unavailable until the case query succeeds.",
+              ? "Cases you can release now."
+              : "The count appears once held mail finishes loading.",
             tone: casesAvailable ? "attention" : "neutral",
           },
         ]}
       />
 
       <WorkflowGuide
-        title="Resolve a security disposition safely"
-        description="A release is an exceptional, tenant-scoped decision. Investigate the case before requesting the step-up and idempotent release operation."
+        title="Release held mail safely"
+        description="Releasing a message returns it to delivery. Investigate the case first. You will re-authenticate and record why."
         steps={[
           {
             label: "Triage",
-            detail: "Prioritize severity, findings and retention state from the case list.",
+            detail: "Sort by severity, findings and how long the message has been held.",
           },
           {
             label: "Investigate",
-            detail: "Open the case to review safe metadata and its audit linkage.",
+            detail: "Open the case to review its safe metadata and history.",
           },
           {
             label: "Release only if justified",
-            detail: "Complete step-up and record the authorized, idempotent release.",
+            detail:
+              "Release only when the reason is clear. You will re-authenticate and record why.",
           },
         ]}
       />
@@ -159,7 +227,7 @@ export function Quarantine() {
             className="search-input"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search sender, transaction, or reason"
+            placeholder="Search by sender, transaction, or reason"
           />
         </label>
         <label>
@@ -173,11 +241,35 @@ export function Quarantine() {
             <option value="info">Informational</option>
           </select>
         </label>
+        {releaseableSelected.length > 0 ? (
+          <div className="quarantine-bulk-bar">
+            <span>
+              {releaseableSelected.length} message
+              {releaseableSelected.length === 1 ? "" : "s"} ready to release
+            </span>
+            <Hint label="Releasing returns these held messages to delivery. Each release is recorded in the audit log.">
+              <Button
+                size="sm"
+                variant="danger"
+                onClick={() => {
+                  setBulkOpen(true);
+                  setBulkReason("");
+                  bulkRelease.reset();
+                }}
+              >
+                Release selected
+              </Button>
+            </Hint>
+            <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())}>
+              Clear selection
+            </Button>
+          </div>
+        ) : null}
       </section>
 
       {cases.isPending && (
         <div className="quarantine-state" role="status">
-          Loading quarantined messages…
+          Loading held mail…
         </div>
       )}
       {cases.isError && (
@@ -186,26 +278,64 @@ export function Quarantine() {
         </div>
       )}
       {cases.isSuccess && filtered.length === 0 && (
-        <div className="quarantine-state">No active quarantine cases match these filters.</div>
+        <div className="quarantine-state quarantine-empty">
+          <p className="quarantine-empty-title">No held messages match these filters.</p>
+          <p className="quarantine-empty-detail">
+            Messages appear here as soon as the gateway holds them. To review delivered mail, open
+            Messages.
+          </p>
+          <Link to="/messages" className="btn btn-ghost">
+            Open Messages
+          </Link>
+        </div>
       )}
 
       {filtered.length > 0 && (
         <div className="card quarantine-table-wrap">
           <table className="quarantine-table">
-            <caption className="sr-only">Active tenant quarantine cases</caption>
+            <caption className="sr-only">Active held messages</caption>
             <thead>
               <tr>
+                <th scope="col" className="quarantine-select-col">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all ready-to-release messages"
+                    checked={allEligibleSelected}
+                    onChange={(event) => {
+                      setSelectedIds(
+                        event.target.checked
+                          ? new Set(eligibleFiltered.map((item) => item.tenant_message_id))
+                          : new Set(),
+                      );
+                    }}
+                  />
+                </th>
                 <th>Message</th>
                 <th>Sender</th>
                 <th>Findings</th>
                 <th>Reason</th>
                 <th>Quarantined</th>
-                <th>Action</th>
+                <th>
+                  <Hint label="Release returns a held message to delivery. It is only available for cases marked ready to release.">
+                    <span className="hint-term">Action</span>
+                  </Hint>
+                </th>
               </tr>
             </thead>
             <tbody>
               {filtered.map((item) => (
                 <tr key={item.tenant_message_id}>
+                  <td className="quarantine-select-col">
+                    <input
+                      type="checkbox"
+                      aria-label={`Select message ${item.tenant_message_id}`}
+                      checked={selectedIds.has(item.tenant_message_id)}
+                      disabled={!item.release_allowed || Boolean(item.released_at)}
+                      onChange={(event) =>
+                        toggleSelected(item.tenant_message_id, event.target.checked)
+                      }
+                    />
+                  </td>
                   <td>
                     <Link
                       to="/quarantine/$tenant_message_id"
@@ -223,16 +353,18 @@ export function Quarantine() {
                   </td>
                   <td>
                     {item.findings.length === 0 ? (
-                      <span>Held without publishable finding detail</span>
+                      <span>Held with no finding detail</span>
                     ) : (
                       item.findings.map((finding) => (
                         <div className="quarantine-finding-summary" key={finding.id}>
                           <div className="finding-head">
                             <StatusPill
                               tone={severityTone(finding.severity)}
-                              label={finding.severity}
+                              label={severityLabel(finding.severity)}
                             />
-                            <span className="finding-category">Category: {finding.category}</span>
+                            <span className="finding-category">
+                              Category: {findingCategoryLabel(finding.category)}
+                            </span>
                           </div>
                           <span className="quarantine-finding-description">
                             Finding: {finding.description}
@@ -245,7 +377,14 @@ export function Quarantine() {
                     {humanizeToken(item.reason_code)}
                     <span className="quarantine-meta">{item.reason_code}</span>
                   </td>
-                  <td>{new Date(item.quarantined_at).toLocaleString()}</td>
+                  <td>
+                    {new Date(item.quarantined_at).toLocaleString()}
+                    {item.released_at ? (
+                      <span className="quarantine-released-chip">
+                        Released {new Date(item.released_at).toLocaleString()}
+                      </span>
+                    ) : null}
+                  </td>
                   <td>
                     <Button
                       size="sm"
@@ -269,8 +408,8 @@ export function Quarantine() {
 
       <aside className="quarantine-state">
         <ShieldAlert size={20} aria-hidden="true" />
-        Raw MIME and active email HTML are never rendered here. Findings are server-normalized
-        summaries only.
+        The message body is never shown here. Findings are safe summaries of headers and scanner
+        results only.
       </aside>
 
       <Dialog
@@ -280,7 +419,7 @@ export function Quarantine() {
           setReleaseReason("");
           release.reset();
         }}
-        title="Release quarantined message"
+        title="Release held message"
       >
         {selected && (
           <form
@@ -292,20 +431,20 @@ export function Quarantine() {
             }}
           >
             <p>
-              Release requires a step-up authenticated session and creates an immutable audit and
-              delivery record.
+              Releasing returns this message to delivery. You will re-authenticate, and the release
+              is recorded in the audit log.
             </p>
             <ul>
               <li>Message: {selected.tenant_message_id}</li>
               <li>Sender: {selected.sender}</li>
-              <li>Reason: {selected.reason_code}</li>
+              <li>Reason: {humanizeToken(selected.reason_code)}</li>
             </ul>
             <label>
               Release reason
               <textarea
                 value={releaseReason}
                 onChange={(event) => setReleaseReason(event.target.value)}
-                placeholder="Why is this release authorized?"
+                placeholder="Why are you releasing this message?"
                 maxLength={500}
                 required
                 rows={4}
@@ -333,10 +472,71 @@ export function Quarantine() {
                 releaseReason.trim().length === 0 ? "quarantine-release-hint" : undefined
               }
             >
-              Confirm authorized release
+              Release message
             </Button>
           </form>
         )}
+      </Dialog>
+
+      <Dialog
+        open={bulkOpen}
+        onClose={() => {
+          setBulkOpen(false);
+          setBulkReason("");
+          bulkRelease.reset();
+        }}
+        title="Release selected messages"
+      >
+        <form
+          className="quarantine-dialog"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const reason = bulkReason.trim();
+            if (reason && releaseableSelected.length > 0) {
+              bulkRelease.mutate({ items: releaseableSelected, reason });
+            }
+          }}
+        >
+          <p>
+            Each message is released with the same reason and recorded in the audit log. Released
+            messages return to delivery and cannot be pulled back here.
+          </p>
+          <ul>
+            {releaseableSelected.map((item) => (
+              <li key={item.tenant_message_id}>
+                {item.tenant_message_id} <span>from {item.sender}</span>
+              </li>
+            ))}
+          </ul>
+          <label>
+            Release reason
+            <textarea
+              value={bulkReason}
+              onChange={(event) => setBulkReason(event.target.value)}
+              placeholder="Why are you releasing these messages?"
+              maxLength={500}
+              required
+              rows={4}
+            />
+          </label>
+          {bulkRelease.isError && (
+            <>
+              <p className="quarantine-state error" role="alert">
+                {errorMessage(bulkRelease.error)} Messages released before this point stay released.
+              </p>
+              <StepUpPrompt error={bulkRelease.error} />
+            </>
+          )}
+          <Button
+            type="submit"
+            variant="danger"
+            loading={bulkRelease.isPending}
+            disabled={bulkReason.trim().length === 0 || releaseableSelected.length === 0}
+          >
+            Release {releaseableSelected.length} selected message
+            {releaseableSelected.length === 1 ? "" : "s"}
+          </Button>
+        </form>
       </Dialog>
     </div>
   );

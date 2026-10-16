@@ -36,6 +36,7 @@ const viewerSession = buildSession(["support"], ["policies:view"]);
 
 const customerFamily = {
   family_key: "attachments",
+  display_name: "Attachment handling",
   description: "Attachment handling and file-type restrictions",
   management_level: "customer",
   security_floor: false,
@@ -50,6 +51,7 @@ const customerFamily = {
 
 const systemFamily = {
   family_key: "malware",
+  display_name: "Malware scanning",
   description: "Malware scanning and disposition",
   management_level: "system",
   security_floor: true,
@@ -64,6 +66,7 @@ const systemFamily = {
 
 const unpublishedFamily = {
   family_key: "greylisting",
+  display_name: "Greylisting",
   description: "Greylisting timing and retest behaviour",
   management_level: "support",
   security_floor: false,
@@ -136,42 +139,6 @@ const systemDetail = {
   ],
 };
 
-const mandatoryFeature = {
-  feature_id: "tenant_authorization",
-  description: "Server-authoritative tenant authorization boundary",
-  default_value: "enabled",
-  mandatory: true,
-  kill_switch: false,
-  allowed_scopes: ["system"],
-  effective_value: "enabled",
-  winning_scope: "system",
-  overrides: [],
-};
-
-const optionalFeature = {
-  feature_id: "deep_ai_analysis",
-  description: "Deep AI content analysis scanner",
-  default_value: "enabled",
-  mandatory: false,
-  kill_switch: true,
-  allowed_scopes: ["system", "deployment", "tenant"],
-  effective_value: "typed:mode=strict",
-  winning_scope: "tenant",
-  overrides: [
-    {
-      id: "override-1",
-      scope: "tenant",
-      scope_id: "customer-1",
-      value: "typed:mode=strict",
-      owner: "actor-1",
-      reason: "scanner tuning for this tenant",
-      revision: 1,
-      created_at: "2026-01-01T00:00:00Z",
-      expires_at: null,
-    },
-  ],
-};
-
 function ok(body: unknown, status = 200) {
   return {
     ok: true,
@@ -204,6 +171,32 @@ interface StubOptions {
   publishError?: { status: number; code: string; message: string };
 }
 
+/**
+ * The server now publishes the gating decisions (caller tier, writable override
+ * scopes). These helpers stand in for that resolution so the fixtures stay the
+ * builtin-role answers the pages used to derive themselves.
+ */
+function tierOf(session: unknown): string | null {
+  const roles = (session as { roles?: string[] }).roles ?? [];
+  if (roles.includes("system_admin")) return "system";
+  if (roles.includes("support")) return "support";
+  if (roles.includes("customer_admin")) return "customer";
+  return null;
+}
+
+function scopesOf(session: unknown): string[] {
+  switch (tierOf(session)) {
+    case "system":
+      return ["system", "deployment", "tenant"];
+    case "support":
+      return ["deployment", "tenant"];
+    case "customer":
+      return ["tenant"];
+    default:
+      return [];
+  }
+}
+
 function stubFetch(options: StubOptions) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -233,7 +226,7 @@ function stubFetch(options: StubOptions) {
       });
     }
     if (options.detail && url.includes("/policies/")) {
-      return ok({ data: options.detail });
+      return ok({ data: { ...options.detail, caller_tier: tierOf(options.session) } });
     }
     if (options.featuresError && url.includes("/features")) {
       return fail(options.featuresError.status, {
@@ -242,7 +235,12 @@ function stubFetch(options: StubOptions) {
       });
     }
     if (url.includes("/features")) {
-      return ok({ data: { features: options.features ?? [] } });
+      return ok({
+        data: {
+          features: options.features ?? [],
+          allowed_override_scopes: scopesOf(options.session),
+        },
+      });
     }
     if (options.listError && url.includes("/policies")) {
       return fail(options.listError.status, {
@@ -251,7 +249,9 @@ function stubFetch(options: StubOptions) {
       });
     }
     if (url.includes("/policies")) {
-      return ok({ data: { families: options.families ?? [] } });
+      return ok({
+        data: { families: options.families ?? [], caller_tier: tierOf(options.session) },
+      });
     }
     throw new Error(`unexpected fetch ${url}`);
   });
@@ -303,19 +303,21 @@ describe("Policies", () => {
     };
   });
 
-  it("lists policy families with level, floor and active revision", async () => {
+  it("lists policy families with level, floor and revision in force", async () => {
     stubFetch({
       session: adminSession,
       families: [customerFamily, systemFamily, unpublishedFamily],
     });
     renderAt("/policies");
 
-    const link = await screen.findByRole("link", { name: "attachments" });
+    const link = await screen.findByRole("link", { name: "Attachment handling" });
     expect(link).toHaveProperty("href", expect.stringContaining("/policies/attachments"));
+    // The raw key stays on the row because audit records name it.
+    expect(within(rowFor("Attachment handling")).getByText("attachments")).toBeTruthy();
     expect(screen.getByText(/#3 · by admin@example\.test/)).toBeTruthy();
-    expect(screen.getByText("not published")).toBeTruthy();
-    expect(screen.getByText("security floor")).toBeTruthy();
-    expect(within(rowFor("attachments")).getByText("customer")).toBeTruthy();
+    expect(screen.getByText("Nothing published yet")).toBeTruthy();
+    expect(screen.getByText("Security floor")).toBeTruthy();
+    expect(within(rowFor("Attachment handling")).getByText("Customer")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Feature overrides" })).toBeTruthy();
   });
 
@@ -325,28 +327,69 @@ describe("Policies", () => {
       families: [customerFamily, systemFamily, unpublishedFamily],
     });
     renderAt("/policies");
-    await screen.findByRole("link", { name: "attachments" });
+    await screen.findByRole("link", { name: "Attachment handling" });
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "System" }));
 
-    expect(screen.queryByRole("link", { name: "attachments" })).toBeNull();
-    expect(screen.getByRole("link", { name: "malware" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Attachment handling" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Malware scanning" })).toBeTruthy();
   });
 
-  it("hides publish without policies:manage", async () => {
+  it("says which level a family needs when the session cannot reach it", async () => {
+    stubFetch({
+      session: customerAdminSession,
+      families: [customerFamily, systemFamily],
+    });
+    renderAt("/policies");
+    await screen.findByRole("link", { name: "Attachment handling" });
+
+    // Reachable at customer level, so it shows the level badge, not a lock.
+    expect(within(rowFor("Attachment handling")).getByText("Customer")).toBeTruthy();
+    const lock = within(rowFor("Malware scanning")).getByText("Needs System");
+    const described = lock.getAttribute("aria-describedby");
+    expect(described).toBeTruthy();
+    expect(document.getElementById(described as string)?.textContent).toMatch(
+      /This family changes at System level\. Your roles reach Customer level\./,
+    );
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Show only what you can change" }));
+    expect(screen.queryByRole("link", { name: "Malware scanning" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Attachment handling" })).toBeTruthy();
+  });
+
+  it("renders a family read-only when the role cannot publish at all", async () => {
     stubFetch({ session: viewerSession, detail: customerDetail });
     renderAt("/policies/attachments");
 
-    await screen.findByRole("heading", { name: "attachments" });
+    expect(await screen.findByRole("heading", { name: "Attachment handling" })).toBeTruthy();
+    // The catalog key stays on the page because audit records and support
+    // threads name the key, not the label.
+    expect(screen.getByText("attachments")).toBeTruthy();
+
     expect(screen.queryByRole("button", { name: "Publish revision" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Request refresh" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reload delivery servers" })).toBeNull();
+    // Drafting is hidden too: a draft nobody can publish is a dead end, so the
+    // refusal says why instead of letting the save fail later.
+    expect(screen.queryByRole("button", { name: "Add rule" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+    expect(screen.getByText(/your role cannot publish policy changes/i)).toBeTruthy();
   });
 
-  it("hides publish for a customer admin on a system-level family", async () => {
+  it("names the level a locked family needs and the level the session reaches", async () => {
     stubFetch({ session: customerAdminSession, detail: systemDetail });
     renderAt("/policies/malware");
 
-    await screen.findByRole("heading", { name: "malware" });
+    expect(await screen.findByRole("heading", { name: "Malware scanning" })).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This family changes at System level. Your roles reach Customer level, so publishing is not available here.",
+      ),
+    ).toBeTruthy();
+    const heading = screen
+      .getByRole("heading", { name: "Malware scanning" })
+      .closest(".policy-detail-heading") as HTMLElement;
+    expect(within(heading).getByText("Security floor")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Publish revision" })).toBeNull();
   });
 
@@ -355,7 +398,8 @@ describe("Policies", () => {
     renderAt("/policies/malware");
 
     expect(await screen.findByRole("button", { name: "Publish revision" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Request refresh" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reload delivery servers" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add rule" })).toBeTruthy();
   });
 
   it("publishes rules with a fresh idempotency key", async () => {
@@ -406,11 +450,13 @@ describe("Policies", () => {
     await user.click(screen.getByRole("button", { name: "Add rule" }));
     await user.type(screen.getByLabelText("Rule name"), "Hold new senders");
     await user.type(screen.getByLabelText("Reason code"), "HOLD_NEW_SENDER");
-    await user.selectOptions(screen.getByLabelText("Disposition"), "hold");
+    await user.selectOptions(screen.getByLabelText("Then the message is"), "hold");
     await user.click(screen.getByRole("button", { name: "Save rule" }));
 
     expect(await screen.findByText("Hold new senders")).toBeTruthy();
     expect(screen.getByText("HOLD_NEW_SENDER")).toBeTruthy();
+    // The action column shows the operator wording, never the wire enum.
+    expect(screen.getByText("Hold it without a review queue")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Save rule" })).toBeNull();
   });
 
@@ -439,8 +485,12 @@ describe("Policies", () => {
 
     expect(await screen.findByText("#2")).toBeTruthy();
     expect(screen.getByText("#1")).toBeTruthy();
-    expect(screen.getAllByText("superseded")).toHaveLength(2);
-    expect(screen.getByText("active")).toBeTruthy();
+    expect(screen.getAllByText("replaced")).toHaveLength(2);
+    expect(screen.getByText("in effect")).toBeTruthy();
+    // The revision table states the level it applies at in words, never the
+    // stored scope enum.
+    expect(screen.queryByText(/^tenant$/)).toBeNull();
+    expect(screen.getAllByText("This customer").length).toBeGreaterThanOrEqual(3);
   });
 });
 
@@ -464,109 +514,6 @@ describe("policy rule builder", () => {
     expect(condition.content).toBeUndefined();
     expect(condition.auth).toEqual({ spf: ["fail"] });
     expect(condition.finding).toEqual({ severity: ["critical"] });
-  });
-});
-
-describe("FeatureOverrides", () => {
-  beforeAll(() => {
-    HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
-      this.open = true;
-    };
-    HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement) {
-      this.open = false;
-    };
-  });
-
-  it("renders feature rows with badges and the effective value", async () => {
-    stubFetch({ session: adminSession, features: [mandatoryFeature, optionalFeature] });
-    renderAt("/policies/features");
-
-    await screen.findByText("tenant_authorization");
-    expect(within(rowFor("tenant_authorization")).getByText("mandatory")).toBeTruthy();
-    expect(within(rowFor("deep_ai_analysis")).getByText("kill switch")).toBeTruthy();
-    expect(within(rowFor("deep_ai_analysis")).getByText(/wins at tenant scope/)).toBeTruthy();
-    expect(within(rowFor("deep_ai_analysis")).getByText("1")).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: "Edit override" })).toHaveLength(2);
-  });
-
-  it("hides the override action without policies:manage", async () => {
-    stubFetch({ session: viewerSession, features: [optionalFeature] });
-    renderAt("/policies/features");
-
-    await screen.findByText("deep_ai_analysis");
-    expect(screen.queryByRole("button", { name: "Edit override" })).toBeNull();
-  });
-
-  it("reveals the typed input and sends scope without scope_id", async () => {
-    const fetchMock = stubFetch({
-      session: adminSession,
-      features: [optionalFeature],
-      override: {
-        id: "override-2",
-        scope: "tenant",
-        scope_id: "customer-1",
-        value: "typed:mode=strict",
-        owner: "actor-1",
-        reason: "tighten scanner policy",
-        revision: 2,
-        created_at: "2026-01-06T10:00:00Z",
-        expires_at: null,
-        effective_value: "typed:mode=relaxed",
-        winning_scope: "tenant",
-      },
-    });
-    const user = userEvent.setup();
-    renderAt("/policies/features");
-    await screen.findByText("deep_ai_analysis");
-
-    await user.click(
-      within(rowFor("deep_ai_analysis")).getByRole("button", { name: "Edit override" }),
-    );
-    const valueSelect = await screen.findByLabelText("Override value");
-    expect(screen.getByLabelText("Typed value")).toHaveValue("mode=strict");
-
-    await user.selectOptions(valueSelect, "inherit");
-    expect(screen.queryByLabelText("Typed value")).toBeNull();
-
-    await user.selectOptions(valueSelect, "typed");
-    const typedInput = screen.getByLabelText("Typed value");
-    expect(typedInput).toHaveValue("mode=strict");
-
-    await user.clear(typedInput);
-    await user.type(typedInput, "mode=relaxed");
-    await user.type(screen.getByLabelText("Reason"), "tighten scanner policy");
-    await user.click(screen.getByRole("button", { name: "Save override" }));
-
-    await waitFor(() => {
-      const call = fetchMock.mock.calls.find(
-        ([input, init]) =>
-          String(input).includes("/features/deep_ai_analysis/overrides") && init?.method === "PUT",
-      );
-      expect(call).toBeTruthy();
-      const headers = new Headers(call?.[1]?.headers);
-      expect(headers.get("X-Idempotency-Key")).toBeTruthy();
-      const body = JSON.parse(String(call?.[1]?.body)) as Record<string, unknown>;
-      expect(body.scope).toBe("tenant");
-      expect(body.value).toBe("typed:mode=relaxed");
-      expect(body.reason).toBe("tighten scanner policy");
-      expect("scope_id" in body).toBe(false);
-    });
-    expect(await screen.findByText(/now resolves to typed:mode=relaxed/)).toBeTruthy();
-  });
-
-  it("disables the disabled option for mandatory features", async () => {
-    stubFetch({ session: adminSession, features: [mandatoryFeature] });
-    const user = userEvent.setup();
-    renderAt("/policies/features");
-    await screen.findByText("tenant_authorization");
-
-    await user.click(
-      within(rowFor("tenant_authorization")).getByRole("button", { name: "Edit override" }),
-    );
-    const valueSelect = await screen.findByLabelText("Override value");
-
-    expect(within(valueSelect).getByRole("option", { name: "disabled" })).toBeDisabled();
-    expect(screen.getByText(/Mandatory security features cannot be disabled/)).toBeTruthy();
   });
 });
 

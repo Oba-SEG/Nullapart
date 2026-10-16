@@ -10,9 +10,12 @@ import { WorkspaceHeader } from "../components/WorkspaceHeader";
 import { WorkflowGuide } from "../components/WorkflowGuide";
 import { Button } from "../components/primitives/Button";
 import { Dialog } from "../components/primitives/Dialog";
+import { Hint } from "../components/primitives/Hint";
 import { randomUuid } from "../lib/ids";
+import { findingCategoryLabel } from "../lib/labels";
 import { notify } from "../lib/notify";
 import { humanizeToken } from "../lib/text";
+import { requirementLabel, resultLabel, scannerStatusLabel, severityLabel } from "../lib/status";
 import "./Quarantine.css";
 
 interface QuarantineFinding {
@@ -107,27 +110,27 @@ export function QuarantineDetail() {
         <ArrowLeft size={16} aria-hidden="true" /> Back to quarantine
       </Link>
       <WorkspaceHeader
-        eyebrow="Security disposition"
-        title="Quarantine case"
-        description="Review tenant-scoped retention, audit linkage and capability-level scanner results. Raw MIME and active email HTML are never rendered here."
-        scope="Case-level release controls"
+        eyebrow="Mail on hold"
+        title="Held message"
+        description="Review how long this message was held, who acted on it and the scanner results. The message body is never shown here."
+        scope="Release controls"
       />
       <WorkflowGuide
         title="Verify before release"
-        description="The release control remains unavailable until the case is eligible; it is never a substitute for investigation."
+        description="The release control is only available for eligible cases. It never replaces investigation."
         steps={[
           {
             label: "Read findings",
-            detail: "Compare the disposition reason with scanner capability results.",
+            detail: "Compare the hold reason with the scanner results.",
           },
           {
             label: "Confirm impact",
-            detail: "Review retention, recipient count and prior audit events.",
+            detail: "Review how long it was held, the recipient count and prior actions.",
           },
           {
             label: "Release safely",
             detail:
-              "Use the recorded step-up workflow only when the exceptional release is justified.",
+              "Release only when it is clearly justified. You will re-authenticate and record why.",
           },
         ]}
       />
@@ -135,12 +138,12 @@ export function QuarantineDetail() {
       {data ? (
         <ControlRail
           title="Case decision state"
-          summary="Use this server-reported case state to determine whether investigation is complete before considering the exceptional release action."
+          summary="Use this case state to confirm the investigation is complete before releasing."
           signals={[
             {
               label: "Findings",
               value: data.findings.length,
-              detail: "Published normalized findings for this case.",
+              detail: "Scanner findings recorded for this message.",
               tone: data.findings.some(
                 (finding) => finding.severity === "critical" || finding.severity === "high",
               )
@@ -148,16 +151,16 @@ export function QuarantineDetail() {
                 : "neutral",
             },
             {
-              label: "Required scanners",
+              label: "Required checks",
               value: `${data.scanner_results.filter((result) => result.required && result.status === "healthy").length}/${data.scanner_results.filter((result) => result.required).length}`,
-              detail: "Required capability results that completed healthy.",
+              detail: "Required scanner checks that completed cleanly.",
             },
             {
               label: "Release",
-              value: data.released_at ? "released" : data.release_allowed ? "eligible" : "blocked",
+              value: data.released_at ? "Released" : data.release_allowed ? "Ready" : "Blocked",
               detail: data.released_at
-                ? "The release is already recorded in the case audit trail."
-                : "Eligibility does not remove step-up or justification requirements.",
+                ? "This message was already released and recorded."
+                : "Even when ready, you will re-authenticate and record why.",
               tone: data.released_at ? "healthy" : "attention",
             },
           ]}
@@ -180,24 +183,26 @@ export function QuarantineDetail() {
           <div className="case-action-bar">
             <div className="case-action-context">
               <span className="case-action-id">{data.tenant_message_id}</span>
-              <span className="case-action-reason">{data.reason_code}</span>
+              <span className="case-action-reason">{humanizeToken(data.reason_code)}</span>
             </div>
             {data.released_at ? (
               <span className="case-action-released">
                 Released {new Date(data.released_at).toLocaleString()}
               </span>
             ) : (
-              <Button
-                variant="danger"
-                disabled={!data.release_allowed}
-                onClick={() => {
-                  setReleaseReason("");
-                  release.reset();
-                  setDialogOpen(true);
-                }}
-              >
-                Release message
-              </Button>
+              <Hint label="Releasing returns this message to delivery. You will re-authenticate first, and the release is recorded.">
+                <Button
+                  variant="danger"
+                  disabled={!data.release_allowed}
+                  onClick={() => {
+                    setReleaseReason("");
+                    release.reset();
+                    setDialogOpen(true);
+                  }}
+                >
+                  Release message
+                </Button>
+              </Hint>
             )}
           </div>
 
@@ -250,15 +255,15 @@ export function QuarantineDetail() {
           <section className="card" aria-label="Scanner results">
             <h2 className="quarantine-section-title">Scanner results</h2>
             {data.scanner_results.length === 0 ? (
-              <p className="quarantine-subtitle">No normalized scanner results are retained.</p>
+              <p className="quarantine-subtitle">No scanner results are recorded.</p>
             ) : (
               <table className="quarantine-table">
-                <caption className="sr-only">Normalized scanner results for this case</caption>
+                <caption className="sr-only">Scanner results for this message</caption>
                 <thead>
                   <tr>
-                    <th>Capability</th>
+                    <th>Scanner check</th>
                     <th>Status</th>
-                    <th>Class</th>
+                    <th>Requirement</th>
                     <th>Duration</th>
                     <th>Completed</th>
                   </tr>
@@ -267,8 +272,8 @@ export function QuarantineDetail() {
                   {data.scanner_results.map((result) => (
                     <tr key={`${result.capability}-${result.completed_at}`}>
                       <td>{result.capability}</td>
-                      <td>{result.status}</td>
-                      <td>{result.required ? "required" : "optional"}</td>
+                      <td>{scannerStatusLabel(result.status)}</td>
+                      <td>{requirementLabel(result.required ? "required" : "optional")}</td>
                       <td>
                         {result.duration_ms === null || result.duration_ms === undefined
                           ? "—"
@@ -291,7 +296,7 @@ export function QuarantineDetail() {
                 {data.findings.map((finding) => (
                   <li key={finding.id}>
                     <span className={`severity severity-${finding.severity}`}>
-                      {finding.severity}: {finding.category}
+                      {severityLabel(finding.severity)}: {findingCategoryLabel(finding.category)}
                     </span>
                     <span className="quarantine-finding-description">
                       Finding: {finding.description}
@@ -313,7 +318,7 @@ export function QuarantineDetail() {
               <ul className="quarantine-audit">
                 {data.audit.map((entry) => (
                   <li key={`${entry.action}-${entry.created_at}`}>
-                    <strong>{entry.action}</strong> — {entry.result}
+                    <strong>{humanizeToken(entry.action)}</strong> · {resultLabel(entry.result)}
                     <span className="quarantine-meta">
                       {entry.actor_login} · {new Date(entry.created_at).toLocaleString()}
                     </span>
@@ -331,8 +336,8 @@ export function QuarantineDetail() {
 
           <aside className="quarantine-state">
             <ShieldAlert size={20} aria-hidden="true" />
-            Scanner entries are product capabilities only. Engine names, versions, endpoints and
-            message content are never returned by this API.
+            Each result names a product capability only. Engine names, versions, endpoints and
+            message content are never shown.
           </aside>
 
           <Dialog
@@ -342,7 +347,7 @@ export function QuarantineDetail() {
               setReleaseReason("");
               release.reset();
             }}
-            title="Release quarantined message"
+            title="Release held message"
           >
             <form
               className="quarantine-dialog"
@@ -353,20 +358,20 @@ export function QuarantineDetail() {
               }}
             >
               <p>
-                Release requires a step-up authenticated session and creates an immutable audit and
-                delivery record.
+                Releasing returns this message to delivery. You will re-authenticate, and the
+                release is recorded in the audit log.
               </p>
               <ul>
                 <li>Message: {data.tenant_message_id}</li>
                 <li>Sender: {data.sender}</li>
-                <li>Reason: {data.reason_code}</li>
+                <li>Reason: {humanizeToken(data.reason_code)}</li>
               </ul>
               <label>
                 Release reason
                 <textarea
                   value={releaseReason}
                   onChange={(event) => setReleaseReason(event.target.value)}
-                  placeholder="Why is this release authorized?"
+                  placeholder="Why are you releasing this message?"
                   maxLength={500}
                   required
                   rows={4}
@@ -394,7 +399,7 @@ export function QuarantineDetail() {
                   releaseReason.trim().length === 0 ? "quarantine-detail-release-hint" : undefined
                 }
               >
-                Confirm authorized release
+                Release message
               </Button>
             </form>
           </Dialog>

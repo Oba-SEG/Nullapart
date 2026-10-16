@@ -7,7 +7,7 @@ import {
   RotateCcw,
   ShieldAlert,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 
 import { type ApiError } from "../api/client";
 import {
@@ -34,7 +34,9 @@ import { Button } from "../components/primitives/Button";
 import { Dialog } from "../components/primitives/Dialog";
 import { Input } from "../components/primitives/Input";
 import { Select } from "../components/primitives/Select";
+import { Hint } from "../components/primitives/Hint";
 import { randomUuid } from "../lib/ids";
+import { approvalStateLabel, HINTS, shadowResultLabel } from "../lib/labels";
 import { notify } from "../lib/notify";
 import type { StatusTone } from "../lib/status";
 import "./Models.css";
@@ -78,20 +80,30 @@ interface ShadowComparisonFields {
 type MetricSpec = {
   label: string;
   key: string;
-  hint?: string;
+  hint: string;
 };
 
+/**
+ * A score and a duration need different wording: one hint for all four fields
+ * told an operator to type 0.98 into the latency box.
+ */
+const SCORE_HINT = "Between 0 and 1, for example 0.98.";
+const LATENCY_HINT = "Whole milliseconds, for example 420.";
+
 const REGISTER_METRIC_FIELDS: MetricSpec[] = [
-  { label: "Macro F1", key: "macro_f1" },
-  { label: "ROC-AUC", key: "macro_roc_auc" },
-  { label: "Ham FP rate", key: "ham_false_positive_rate" },
-  { label: "p95 latency (ms)", key: "latency_p95_ms" },
+  { label: "Macro F1", key: "macro_f1", hint: SCORE_HINT },
+  { label: "ROC-AUC", key: "macro_roc_auc", hint: SCORE_HINT },
+  {
+    label: "Clean-mail false positive rate",
+    key: "ham_false_positive_rate",
+    hint: "Share of legitimate mail the model flagged, between 0 and 1.",
+  },
+  { label: "95th percentile latency (ms)", key: "latency_p95_ms", hint: LATENCY_HINT },
 ];
 
-const SHADOW_METRIC_FIELDS: MetricSpec[] = [{ label: "Macro F1 delta", key: "macro_f1_delta" }];
-
-const METRIC_HINT =
-  "Finite number, e.g. 0.98. Reported to policy as evidence, never as a disposition.";
+const SHADOW_METRIC_FIELDS: MetricSpec[] = [
+  { label: "Macro F1 change", key: "macro_f1_delta", hint: SCORE_HINT },
+];
 
 const COMPARISON_DECISION_OPTIONS = [
   { value: "manual_review", label: "Manual review" },
@@ -197,9 +209,9 @@ function metricValue(model: InlineModel, keys: string[]): string {
 }
 
 function activationLabel(model: InlineModel): string {
-  if (model.activated_at && !model.deactivated_at) return "active";
-  if (model.deactivated_at) return "inactive";
-  return "not active";
+  if (model.activated_at && !model.deactivated_at) return "Active";
+  if (model.deactivated_at) return "Inactive";
+  return "Not active";
 }
 
 function approvalTone(model: InlineModel): StatusTone {
@@ -220,7 +232,7 @@ function latestShadowSummary(evaluations: ShadowEvaluation[] | undefined): strin
   const compared = latest.active_model_id
     ? ` vs ${latest.active_model_id}/${latest.active_model_version ?? "unknown"}`
     : "";
-  return `${latest.result.replaceAll("_", " ")}${compared} · ${latest.evaluation_set_id}`;
+  return `${shadowResultLabel(latest.result)}${compared} · ${latest.evaluation_set_id}`;
 }
 
 function errorMessage(error: unknown, fallback: string): string {
@@ -229,6 +241,17 @@ function errorMessage(error: unknown, fallback: string): string {
     return String((error as ApiError).message);
   }
   return fallback;
+}
+
+/**
+ * Explains a control that is switched off. A disabled button tells an operator
+ * nothing about why, so the reason rides on a tooltip and the control stays
+ * visible: seeing the action is how an operator learns the card can be acted on
+ * once the model reaches the right state.
+ */
+function Explained({ lock, children }: { lock: string; children: ReactNode }) {
+  if (lock === "") return <>{children}</>;
+  return <Hint label={lock}>{children}</Hint>;
 }
 
 function modelKey(model: InlineModel): string {
@@ -472,7 +495,7 @@ export function Models() {
           },
           {
             label: "Runtime",
-            value: modelsAvailable ? (activeModel ? "1 active" : "none") : modelsState,
+            value: modelsAvailable ? (activeModel ? "One active" : "None active") : modelsState,
             detail: modelsAvailable
               ? "Exactly one model may serve at a time."
               : "Runtime model state is unavailable until the registry query succeeds.",
@@ -645,7 +668,7 @@ export function Models() {
                       step="any"
                       inputMode="decimal"
                       value={raw}
-                      hint={METRIC_HINT}
+                      hint={field.hint}
                       error={error}
                       onChange={(event) =>
                         setRegisterDraft((draft) => ({
@@ -725,8 +748,8 @@ export function Models() {
               value={shadowDraft.result}
               options={[
                 { value: "inconclusive", label: "Inconclusive" },
-                { value: "candidate_better", label: "Candidate better" },
-                { value: "candidate_worse", label: "Candidate worse" },
+                { value: "candidate_better", label: "Candidate performed better" },
+                { value: "candidate_worse", label: "Candidate performed worse" },
                 { value: "rollback_rehearsed", label: "Rollback rehearsed" },
               ]}
               onChange={(event) =>
@@ -750,7 +773,7 @@ export function Models() {
                       step="any"
                       inputMode="decimal"
                       value={raw}
-                      hint={METRIC_HINT}
+                      hint={field.hint}
                       error={error}
                       onChange={(event) =>
                         setShadowDraft((draft) => ({
@@ -796,7 +819,10 @@ export function Models() {
       ) : (
         <div className="card models-readonly-note">
           <ShieldAlert size={18} aria-hidden="true" />
-          <span>Your session can view model evidence but cannot change runtime state.</span>
+          <span>
+            Your roles allow you to review model evidence, not to approve, activate or roll back a
+            model. Those actions need the model management permission.
+          </span>
         </div>
       )}
 
@@ -816,6 +842,25 @@ export function Models() {
               model.approval_state === "approved" &&
               !(model.activated_at && !model.deactivated_at);
             const canRollback = canManage && rollbackAllowed(model);
+            const approveLock =
+              model.approval_state === "pending"
+                ? ""
+                : `This model is already ${approvalStateLabel(model.approval_state).toLowerCase()}.`;
+            const activateLock =
+              model.approval_state !== "approved"
+                ? "Only an approved model can score live mail. Approve it first."
+                : model.activated_at && !model.deactivated_at
+                  ? "This model is already the active one."
+                  : "";
+            const rollbackLock = rollbackAllowed(model)
+              ? ""
+              : "Rollback targets the model that was active immediately before the current one.";
+            const rejectLock =
+              canApprove && rejectReason(model).trim().length >= 10
+                ? ""
+                : canApprove
+                  ? "Give a reason of at least 10 characters."
+                  : approveLock || "Only a model awaiting approval can be rejected.";
             return (
               <article className="card model-card" key={model.id}>
                 <div className="model-card-head">
@@ -826,10 +871,12 @@ export function Models() {
                     </h2>
                   </div>
                   <div className="model-pills">
-                    <StatusPill
-                      tone={approvalTone(model)}
-                      label={model.approval_state.replaceAll("_", " ")}
-                    />
+                    <Hint label={HINTS.modelApproval}>
+                      <StatusPill
+                        tone={approvalTone(model)}
+                        label={approvalStateLabel(model.approval_state)}
+                      />
+                    </Hint>
                     <StatusPill tone={activationTone(model)} label={activationLabel(model)} />
                   </div>
                 </div>
@@ -880,37 +927,43 @@ export function Models() {
                 {canManage ? (
                   <div className="model-control-deck" aria-label={`Actions for ${key}`}>
                     <div className="model-primary-actions">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="primary"
-                        disabled={!canApprove}
-                        loading={action.isPending}
-                        onClick={() => requestAction({ type: "approve", model })}
-                      >
-                        Approve
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="clean"
-                        disabled={!canActivate}
-                        loading={action.isPending}
-                        onClick={() => requestAction({ type: "activate", model })}
-                      >
-                        <Power size={14} aria-hidden="true" />
-                        Activate
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="danger"
-                        disabled={!canRollback}
-                        loading={action.isPending}
-                        onClick={() => requestAction({ type: "rollback", model })}
-                      >
-                        Roll back to this
-                      </Button>
+                      <Explained lock={approveLock}>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="primary"
+                          disabled={!canApprove}
+                          loading={action.isPending}
+                          onClick={() => requestAction({ type: "approve", model })}
+                        >
+                          Approve
+                        </Button>
+                      </Explained>
+                      <Explained lock={activateLock}>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="clean"
+                          disabled={!canActivate}
+                          loading={action.isPending}
+                          onClick={() => requestAction({ type: "activate", model })}
+                        >
+                          <Power size={14} aria-hidden="true" />
+                          Activate
+                        </Button>
+                      </Explained>
+                      <Explained lock={rollbackLock}>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="danger"
+                          disabled={!canRollback}
+                          loading={action.isPending}
+                          onClick={() => requestAction({ type: "rollback", model })}
+                        >
+                          Roll back to this
+                        </Button>
+                      </Explained>
                     </div>
                     <div className="model-reject-row">
                       <Input
@@ -924,22 +977,24 @@ export function Models() {
                         }
                         disabled={!canReject}
                       />
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        disabled={!canReject || rejectReason(model).trim().length < 10}
-                        loading={action.isPending}
-                        onClick={() =>
-                          action.mutate({
-                            type: "reject",
-                            model,
-                            reason: rejectReason(model).trim(),
-                          })
-                        }
-                      >
-                        Reject
-                      </Button>
+                      <Explained lock={rejectLock}>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          disabled={!canReject || rejectReason(model).trim().length < 10}
+                          loading={action.isPending}
+                          onClick={() =>
+                            action.mutate({
+                              type: "reject",
+                              model,
+                              reason: rejectReason(model).trim(),
+                            })
+                          }
+                        >
+                          Reject
+                        </Button>
+                      </Explained>
                     </div>
                     {action.isError ? (
                       <div className="models-error" role="alert">

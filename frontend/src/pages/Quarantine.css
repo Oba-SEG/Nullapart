@@ -19,6 +19,37 @@
   gap: var(--spacing-4);
 }
 
+.quarantine-select-col {
+  width: 2.5rem;
+  text-align: center;
+}
+
+.quarantine-select-col input {
+  accent-color: var(--color-primary);
+}
+
+.quarantine-bulk-bar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  flex-wrap: wrap;
+  padding: var(--spacing-2) var(--spacing-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+  box-shadow: var(--shadow-sm);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.quarantine-released-chip {
+  display: block;
+  margin-top: var(--spacing-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-success);
+}
+
 .quarantine-table-wrap {
   overflow-x: auto;
   padding: 0;
@@ -145,6 +176,31 @@ aside.quarantine-state svg {
 
 .quarantine-state.error {
   color: var(--color-error);
+}
+
+/* Empty queue: say what will appear here and where triage continues. */
+.quarantine-empty {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.quarantine-empty-title {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  margin: 0;
+}
+
+.quarantine-empty-detail {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  margin: 0;
+  max-width: 56ch;
+}
+
+.quarantine-empty .btn {
+  margin-top: var(--spacing-2);
 }
 
 .quarantine-dialog {

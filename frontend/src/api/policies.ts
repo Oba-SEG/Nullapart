@@ -103,6 +103,8 @@ export interface RevisionSummary {
 
 export interface PolicyFamily {
   family_key: string;
+  /** Catalog label seeded by migration 039; the key stays for audit evidence. */
+  display_name: string;
   description: string;
   management_level: ManagementLevel;
   security_floor: boolean;
@@ -120,10 +122,14 @@ export interface PolicyRevision extends RevisionSummary {
 export interface PolicyDetail {
   family: PolicyFamily;
   revisions: PolicyRevision[];
+  /** Resolved server-side from this session's roles; null when it carries none. */
+  caller_tier: ManagementLevel | null;
 }
 
 export interface PolicyList {
   families: PolicyFamily[];
+  /** Resolved server-side from this session's roles; null when it carries none. */
+  caller_tier: ManagementLevel | null;
 }
 
 export interface PublishResult {
@@ -152,6 +158,8 @@ export interface FeatureOverride {
 
 export interface Feature {
   feature_id: string;
+  /** Catalog label written for operators; the id is what audit records name. */
+  display_name: string;
   description: string;
   default_value: string;
   mandatory: boolean;
@@ -164,6 +172,11 @@ export interface Feature {
 
 export interface FeatureList {
   features: Feature[];
+  /**
+   * Override scopes the server will accept from this session, resolved by the
+   * same tier ladder the write path enforces.
+   */
+  allowed_override_scopes: OverrideScope[];
 }
 
 export interface OverrideWriteResult extends FeatureOverride {
@@ -559,22 +572,34 @@ export function summarizeCondition(condition: RuleCondition): string {
 // Authorization affordances (server-side authorization stays authoritative)
 // ---------------------------------------------------------------------------
 
-export function managementTierAllows(level: ManagementLevel, roles: string[]): boolean {
-  if (level === "system") return roles.includes("system_admin");
-  if (level === "support") return roles.includes("system_admin") || roles.includes("support");
-  return (
-    roles.includes("system_admin") || roles.includes("support") || roles.includes("customer_admin")
-  );
+/**
+ * The server resolves which management tier a session carries from the roles it
+ * issued, including deployment-defined roles, and publishes that tier alongside
+ * the data. The console reads it instead of re-deriving a tier from builtin
+ * role keys, which silently locked out custom roles the server authorizes.
+ */
+export const TIER_RANK: Record<ManagementLevel, number> = {
+  customer: 0,
+  support: 1,
+  system: 2,
+};
+
+export function tierAllows(caller: ManagementLevel | null, required: ManagementLevel): boolean {
+  if (caller === null) return false;
+  return TIER_RANK[caller] >= TIER_RANK[required];
 }
 
-export function overrideScopeAllowed(scope: OverrideScope, roles: string[]): boolean {
-  if (scope === "system") return roles.includes("system_admin");
-  if (scope === "deployment") return roles.includes("system_admin") || roles.includes("support");
-  return true;
-}
-
-export function scopesForRoles(allowed: OverrideScope[], roles: string[]): OverrideScope[] {
-  return allowed.filter((scope) => overrideScopeAllowed(scope, roles));
+/**
+ * Scopes this session may write for a feature: the scopes the feature allows,
+ * kept only where the server also placed them in the session's own list. An
+ * empty result is a real lock, so the caller states the reason rather than
+ * hiding the control.
+ */
+export function writableScopes(
+  allowed: OverrideScope[],
+  sessionScopes: OverrideScope[],
+): OverrideScope[] {
+  return allowed.filter((scope) => sessionScopes.includes(scope));
 }
 
 // ---------------------------------------------------------------------------

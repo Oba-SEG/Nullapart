@@ -93,7 +93,7 @@ describe("QuarantineDetail", () => {
     expect(await screen.findByText("Attachment content analysis")).toBeTruthy();
     expect(screen.getByText(/security-admin@example\.test/)).toBeTruthy();
     expect(screen.getByText("standard")).toBeTruthy();
-    expect(screen.getByText("high: malware")).toBeTruthy();
+    expect(screen.getByText("High: Malware")).toBeTruthy();
     expect(screen.getByText(/Engine names, versions, endpoints/i)).toBeTruthy();
     const body = document.body.textContent ?? "";
     expect(body).not.toContain("attachment-analysis");

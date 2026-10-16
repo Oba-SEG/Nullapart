@@ -54,6 +54,11 @@ function renderInRouter() {
       path: "/messages/$messageId",
       component: () => <div>Message detail route</div>,
     }),
+    createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/quarantine/$tenant_message_id",
+      component: () => null,
+    }),
   ]);
   const router = createRouter({
     routeTree,
@@ -115,7 +120,7 @@ describe("Messages", () => {
     expect(within(row).getByText("sender@example.test")).toBeTruthy();
     expect(within(row).getByText("<msg-1001@example.test>")).toBeTruthy();
     expect(within(row).getByText("2")).toBeTruthy();
-    expect(within(row).getByText("quarantine")).toBeTruthy();
+    expect(within(row).getByText("Held for review")).toBeTruthy();
     expect(screen.getByText(/Showing 1 of 4 matches/)).toBeTruthy();
 
     const call = fetchMock.mock.calls.find(

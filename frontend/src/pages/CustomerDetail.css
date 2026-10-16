@@ -91,6 +91,18 @@
   font-size: var(--font-size-sm);
 }
 
+/* States the server's published capability withheld, in place of a form that
+   could only be refused. */
+.customer-detail-lock {
+  background-color: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  max-width: 70ch;
+  padding: var(--spacing-3);
+}
+
 .customer-detail-error {
   color: var(--color-error);
   font-size: var(--font-size-sm);

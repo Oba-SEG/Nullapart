@@ -16,12 +16,12 @@ import {
   draftErrors,
   draftFromRule,
   isDraftValid,
-  managementTierAllows,
   newRuleDraft,
   resequenceRules,
   ruleFromDraft,
   sortByEvaluationOrder,
   summarizeCondition,
+  tierAllows,
   type AuthResult,
   type ConditionScope,
   type Disposition,
@@ -44,9 +44,22 @@ import { ControlRail } from "../components/ControlRail";
 import { WorkflowGuide } from "../components/WorkflowGuide";
 import { Button } from "../components/primitives/Button";
 import { Dialog } from "../components/primitives/Dialog";
+import { Hint } from "../components/primitives/Hint";
 import { Input } from "../components/primitives/Input";
 import { Select } from "../components/primitives/Select";
 import { randomUuid } from "../lib/ids";
+import {
+  AUTH_RESULT_LABELS,
+  CONDITION_SCOPE_LABELS,
+  FINDING_CATEGORY_LABELS,
+  FINDING_SEVERITY_LABELS,
+  HINTS,
+  MANAGEMENT_LEVEL_LABELS,
+  NOTIFY_TARGET_LABELS,
+  OVERRIDE_SCOPE_LABELS,
+  POLICY_DISPOSITION_LABELS,
+  SCANNER_LABELS,
+} from "../lib/labels";
 import "./PolicyFamilyDetail.css";
 
 const TRI_OPTIONS = [
@@ -137,10 +150,18 @@ interface CheckGroupProps<T extends string> {
   legend: string;
   values: T[];
   options: T[];
+  /** Operator-facing wording per option; falls back to the wire value. */
+  labels?: Record<T, string>;
   onToggle: (value: T) => void;
 }
 
-function CheckGroup<T extends string>({ legend, values, options, onToggle }: CheckGroupProps<T>) {
+function CheckGroup<T extends string>({
+  legend,
+  values,
+  options,
+  labels,
+  onToggle,
+}: CheckGroupProps<T>) {
   return (
     <fieldset className="policy-detail-checkset">
       <legend>{legend}</legend>
@@ -152,7 +173,7 @@ function CheckGroup<T extends string>({ legend, values, options, onToggle }: Che
               checked={values.includes(option)}
               onChange={() => onToggle(option)}
             />
-            {option}
+            {labels?.[option] ?? option}
           </label>
         ))}
       </div>
@@ -178,11 +199,13 @@ export function PolicyFamilyDetail() {
   });
 
   const current = session.data ?? null;
-  const roles = current?.roles ?? [];
   const canManage = hasPermission(current, "policies:manage");
   const family = detail.data?.family ?? null;
+  // The tier comes from the server with the family, never re-derived from role
+  // names here, so a custom role reaches the same conclusion in UI and API.
+  const callerTier = detail.data?.caller_tier ?? null;
   const mayPublish =
-    canManage && family !== null && managementTierAllows(family.management_level, roles);
+    canManage && family !== null && tierAllows(callerTier, family.management_level);
 
   const activeRevisionNumber = family?.active_revision?.revision_number ?? null;
   const revisions = detail.data?.revisions ?? [];
@@ -220,7 +243,9 @@ export function PolicyFamilyDetail() {
     onSuccess: async (created) => {
       setPublishOpen(false);
       setPublishNotice(
-        `Published revision #${created.revision_number} with ${created.rules_count} rules.`,
+        `Published revision #${created.revision_number} with ${created.rules_count} rule${
+          created.rules_count === 1 ? "" : "s"
+        }.`,
       );
       await queryClient.invalidateQueries({ queryKey: ["policy-family", familyKey] });
       await queryClient.invalidateQueries({ queryKey: ["policies"] });
@@ -234,7 +259,8 @@ export function PolicyFamilyDetail() {
       }),
     onSuccess: (result) =>
       setRefreshNotice(
-        `Policy refresh requested at ${new Date(result.refresh_requested_at).toLocaleString()}.`,
+        `Reload requested at ${new Date(result.refresh_requested_at).toLocaleString()}. ` +
+          "Delivery servers pick up the published revision on their next reload.",
       ),
   });
 
@@ -302,7 +328,20 @@ export function PolicyFamilyDetail() {
     showErrors || (editing !== null && editing.reasonCode.length > 0)
       ? errors.reasonCode
       : undefined;
-  const scopeLevel = family?.management_level === "system" ? "system" : "tenant";
+  const scopeName =
+    family?.management_level === "system"
+      ? OVERRIDE_SCOPE_LABELS.system
+      : OVERRIDE_SCOPE_LABELS.tenant;
+
+  // The tier in these sentences comes from the server, so the reason an
+  // operator reads is the same reason the API applied.
+  const lockReason = family
+    ? canManage
+      ? callerTier === null
+        ? `This family changes at ${MANAGEMENT_LEVEL_LABELS[family.management_level]} level. Your roles do not carry a policy level, so nothing here can be published.`
+        : `This family changes at ${MANAGEMENT_LEVEL_LABELS[family.management_level]} level. Your roles reach ${MANAGEMENT_LEVEL_LABELS[callerTier]} level, so publishing is not available here.`
+      : "You can read this family, but your role cannot publish policy changes. Ask a system administrator if it needs new rules."
+    : "";
 
   return (
     <div className="policy-detail-page">
@@ -328,17 +367,24 @@ export function PolicyFamilyDetail() {
         {family ? (
           <>
             <div className="policy-detail-heading">
-              <h1 className="policy-detail-title">{family.family_key}</h1>
+              <h1 className="policy-detail-title">{family.display_name}</h1>
               <span
                 className={`policy-detail-badge policy-detail-level-${family.management_level}`}
               >
-                {family.management_level}
+                {MANAGEMENT_LEVEL_LABELS[family.management_level]}
               </span>
               {family.security_floor ? (
-                <span className="policy-detail-badge policy-detail-floor">security floor</span>
+                <Hint label={HINTS.securityFloor}>
+                  <span className="policy-detail-badge policy-detail-floor">Security floor</span>
+                </Hint>
               ) : null}
             </div>
             <p className="policy-detail-hint">{family.description}</p>
+            <p className="policy-detail-key">
+              <Hint label={HINTS.internalIdentifier}>
+                <code>{family.family_key}</code>
+              </Hint>
+            </p>
           </>
         ) : null}
       </header>
@@ -346,23 +392,32 @@ export function PolicyFamilyDetail() {
       {family ? (
         <ControlRail
           title="Revision release state"
-          summary="Policy work is always versioned. The currently active revision and management level determine the allowed next action."
+          summary="Policy work is always versioned. The active revision and your access level decide what you can do next."
           signals={[
+            {
+              label: "Your level",
+              value: callerTier === null ? "None" : MANAGEMENT_LEVEL_LABELS[callerTier],
+              detail:
+                callerTier === null
+                  ? "Your roles do not include a policy level, so nothing here can be published."
+                  : `You can publish families that need the ${MANAGEMENT_LEVEL_LABELS[callerTier]} level or lower.`,
+              tone: callerTier === null ? "attention" : "neutral",
+            },
             {
               label: "Revisions",
               value: revisions.length,
-              detail: "Published revisions visible to the current scope.",
+              detail: "Revisions published for this policy family.",
             },
             {
-              label: "Active revision",
+              label: "In effect",
               value: family.active_revision?.revision_number ?? "none",
-              detail: "Server-selected revision currently in effect.",
+              detail: "The revision mail is being filtered with right now.",
               tone: family.active_revision ? "healthy" : "attention",
             },
             {
               label: "Security floor",
               value: family.security_floor ? "enforced" : "none",
-              detail: "A floor cannot be weakened by a family revision.",
+              detail: "A published revision in this family cannot switch the floor off.",
               tone: family.security_floor ? "attention" : "neutral",
             },
           ]}
@@ -372,20 +427,20 @@ export function PolicyFamilyDetail() {
       {family ? (
         <WorkflowGuide
           title="Change policy through a revision"
-          description="The current family status determines the allowed next operation; direct unversioned edits are intentionally unavailable."
+          description="Editing the rule table changes a draft only. Nothing reaches live mail until a revision is published, and there is no other way in."
           steps={[
             {
               label: "Review",
-              detail: "Inspect published revisions and the applicable management level.",
+              detail: "Check what is in effect now and which level this family needs to change it.",
             },
             {
               label: "Draft",
-              detail: "Prepare the intended revision with its reason and validation evidence.",
+              detail: "Build the rule set you want below. Edits stay on this page until published.",
             },
             {
               label: "Publish",
               detail:
-                "Use the server-authorized publish path and confirm the resulting audit record.",
+                "Publish the revision. It takes effect immediately and is recorded against your account.",
             },
           ]}
         />
@@ -403,7 +458,7 @@ export function PolicyFamilyDetail() {
               <thead>
                 <tr>
                   <th scope="col">Revision</th>
-                  <th scope="col">Scope</th>
+                  <th scope="col">Applies to</th>
                   <th scope="col">Published by</th>
                   <th scope="col">Published</th>
                   <th scope="col">Status</th>
@@ -414,16 +469,16 @@ export function PolicyFamilyDetail() {
                 {revisions.map((revision) => (
                   <tr key={revision.revision_number}>
                     <td>#{revision.revision_number}</td>
-                    <td>{revision.scope_level}</td>
+                    <td>{OVERRIDE_SCOPE_LABELS[revision.scope_level]}</td>
                     <td>{revision.published_by}</td>
                     <td>{new Date(revision.published_at).toLocaleString()}</td>
                     <td>
                       {revision.revision_number === activeRevisionNumber ? (
                         <span className="policy-detail-status policy-detail-status-active">
-                          active
+                          in effect
                         </span>
                       ) : (
-                        <span className="policy-detail-status">superseded</span>
+                        <span className="policy-detail-status">replaced</span>
                       )}
                     </td>
                     <td>{revisionRulesLabel(revision)}</td>
@@ -438,48 +493,45 @@ export function PolicyFamilyDetail() {
       <section className="card policy-detail-panel" aria-labelledby="rules-heading">
         <div className="policy-detail-panel-head">
           <h2 id="rules-heading">Rules</h2>
-          <div className="policy-detail-actions">
-            <Button
-              type="button"
-              variant="primary"
-              disabled={rules === null}
-              onClick={() => openEditor()}
-            >
-              Add rule
-            </Button>
-            {mayPublish ? (
-              <>
-                <Button
-                  type="button"
-                  disabled={rules === null}
-                  onClick={() => {
-                    setPublishNotice(null);
-                    publish.reset();
-                    setPublishOpen(true);
-                  }}
-                >
-                  Publish revision
-                </Button>
-                <Button
-                  type="button"
-                  loading={refresh.isPending}
-                  disabled={refresh.isPending}
-                  onClick={() => {
-                    setRefreshNotice(null);
-                    refresh.mutate();
-                  }}
-                >
-                  Request refresh
-                </Button>
-              </>
-            ) : null}
-          </div>
+          {mayPublish ? (
+            <div className="policy-detail-actions">
+              <Button
+                type="button"
+                variant="primary"
+                disabled={rules === null}
+                onClick={() => openEditor()}
+              >
+                Add rule
+              </Button>
+              <Button
+                type="button"
+                disabled={rules === null}
+                onClick={() => {
+                  setPublishNotice(null);
+                  publish.reset();
+                  setPublishOpen(true);
+                }}
+              >
+                Publish revision
+              </Button>
+              <Button
+                type="button"
+                loading={refresh.isPending}
+                disabled={refresh.isPending}
+                onClick={() => {
+                  setRefreshNotice(null);
+                  refresh.mutate();
+                }}
+              >
+                Reload delivery servers
+              </Button>
+            </div>
+          ) : null}
         </div>
 
         {!mayPublish && family ? (
-          <p className="policy-detail-hint">
-            Publishing needs the policies:manage permission and the {family.management_level}{" "}
-            management tier.
+          <p className="policy-detail-lock" role="status">
+            {lockReason}
           </p>
         ) : null}
 
@@ -507,24 +559,28 @@ export function PolicyFamilyDetail() {
         {rules !== null && rules.length === 0 ? (
           <p className="policy-detail-hint">
             {activeRevisionNumber === null
-              ? "This family has no published revision yet. Add rules to build the first revision; publishing is audited and versioned, and the server enforces the management tier for this family."
-              : "The active revision contains no rules."}
+              ? "Nothing is published for this family yet, so no rule is stopping mail. Add rules to build the first revision."
+              : "The revision in effect has no rules, so this family decides nothing right now."}
           </p>
         ) : null}
 
         {rules !== null && rules.length > 0 ? (
           <div className="policy-detail-table-wrap">
             <table className="policy-detail-table">
-              <caption className="sr-only">Rules in the current draft</caption>
+              <caption className="sr-only">
+                {mayPublish
+                  ? "Rules in your current draft, not yet published"
+                  : "Rules in the revision currently in effect"}
+              </caption>
               <thead>
                 <tr>
                   <th scope="col">Name</th>
-                  <th scope="col">Priority</th>
-                  <th scope="col">Enabled</th>
-                  <th scope="col">Condition</th>
-                  <th scope="col">Disposition</th>
+                  <th scope="col">Order</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Matches when</th>
+                  <th scope="col">Does</th>
                   <th scope="col">Reason code</th>
-                  <th scope="col">Actions</th>
+                  {mayPublish ? <th scope="col">Actions</th> : null}
                 </tr>
               </thead>
               <tbody>
@@ -532,7 +588,7 @@ export function PolicyFamilyDetail() {
                   <tr key={rule.id}>
                     <td>{rule.name}</td>
                     <td>{rule.priority}</td>
-                    <td>{rule.enabled ? "enabled" : "disabled"}</td>
+                    <td>{rule.enabled ? "On" : "Off"}</td>
                     <td className="policy-detail-condition">
                       {summarizeCondition(rule.condition)}
                     </td>
@@ -540,43 +596,45 @@ export function PolicyFamilyDetail() {
                       <span
                         className={`policy-detail-badge policy-detail-disposition-${rule.action.disposition}`}
                       >
-                        {rule.action.disposition}
+                        {POLICY_DISPOSITION_LABELS[rule.action.disposition]}
                       </span>
                     </td>
                     <td className="policy-detail-code">{rule.action.reason_code}</td>
-                    <td>
-                      <div className="policy-detail-row-actions">
-                        <Button type="button" size="sm" onClick={() => openEditor(rule)}>
-                          Edit
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="danger"
-                          onClick={() => removeRule(rule.id)}
-                        >
-                          Remove
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          aria-label={`Move ${rule.name} up`}
-                          disabled={index === 0}
-                          onClick={() => moveRule(index, -1)}
-                        >
-                          Up
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          aria-label={`Move ${rule.name} down`}
-                          disabled={index === rules.length - 1}
-                          onClick={() => moveRule(index, 1)}
-                        >
-                          Down
-                        </Button>
-                      </div>
-                    </td>
+                    {mayPublish ? (
+                      <td>
+                        <div className="policy-detail-row-actions">
+                          <Button type="button" size="sm" onClick={() => openEditor(rule)}>
+                            Edit
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="danger"
+                            onClick={() => removeRule(rule.id)}
+                          >
+                            Remove
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            aria-label={`Move ${rule.name} earlier`}
+                            disabled={index === 0}
+                            onClick={() => moveRule(index, -1)}
+                          >
+                            Up
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            aria-label={`Move ${rule.name} later`}
+                            disabled={index === rules.length - 1}
+                            onClick={() => moveRule(index, 1)}
+                          >
+                            Down
+                          </Button>
+                        </div>
+                      </td>
+                    ) : null}
                   </tr>
                 ))}
               </tbody>
@@ -608,7 +666,7 @@ export function PolicyFamilyDetail() {
                 error={nameError}
               />
               <Input
-                label="Priority"
+                label="Order"
                 type="number"
                 min={-1000}
                 max={1000}
@@ -617,7 +675,7 @@ export function PolicyFamilyDetail() {
                   setEditing({ ...editing, priority: event.target.valueAsNumber })
                 }
                 error={priorityError}
-                hint="Higher priorities are evaluated first."
+                hint="Higher order is checked first. The first rule that matches decides what happens."
               />
               <label className="policy-detail-check">
                 <input
@@ -625,12 +683,15 @@ export function PolicyFamilyDetail() {
                   checked={editing.enabled}
                   onChange={(event) => setEditing({ ...editing, enabled: event.target.checked })}
                 />
-                Enabled
+                Rule is active
               </label>
               <Select
-                label="Condition scope"
+                label="Rule applies to"
                 value={editing.scope}
-                options={CONDITION_SCOPES.map((value) => ({ value, label: value }))}
+                options={CONDITION_SCOPES.map((value) => ({
+                  value,
+                  label: CONDITION_SCOPE_LABELS[value],
+                }))}
                 onChange={(event) =>
                   setEditing({ ...editing, scope: event.target.value as ConditionScope })
                 }
@@ -697,25 +758,28 @@ export function PolicyFamilyDetail() {
             <fieldset className="policy-detail-fieldset">
               <legend>Authentication</legend>
               <CheckGroup<AuthResult>
-                legend="SPF"
+                legend="SPF result is"
                 values={editing.authSpf}
                 options={AUTH_RESULTS}
+                labels={AUTH_RESULT_LABELS}
                 onToggle={(value) =>
                   setEditing({ ...editing, authSpf: toggleInList(editing.authSpf, value) })
                 }
               />
               <CheckGroup<AuthResult>
-                legend="DKIM"
+                legend="DKIM result is"
                 values={editing.authDkim}
                 options={AUTH_RESULTS}
+                labels={AUTH_RESULT_LABELS}
                 onToggle={(value) =>
                   setEditing({ ...editing, authDkim: toggleInList(editing.authDkim, value) })
                 }
               />
               <CheckGroup<AuthResult>
-                legend="DMARC"
+                legend="DMARC result is"
                 values={editing.authDmarc}
                 options={AUTH_RESULTS}
+                labels={AUTH_RESULT_LABELS}
                 onToggle={(value) =>
                   setEditing({ ...editing, authDmarc: toggleInList(editing.authDmarc, value) })
                 }
@@ -747,40 +811,43 @@ export function PolicyFamilyDetail() {
                 hint="Leave empty to leave message size unrestricted."
               />
               <TriSelect
-                label="Has URL"
+                label="Contains a link"
                 value={editing.hasUrl}
                 onChange={(value) => setEditing({ ...editing, hasUrl: value })}
               />
             </fieldset>
 
             <fieldset className="policy-detail-fieldset">
-              <legend>Finding</legend>
+              <legend>Scanner findings</legend>
               <CheckGroup<ScannerType>
-                legend="Scanner"
+                legend="From scanner"
                 values={editing.scanners}
                 options={SCANNER_TYPES}
+                labels={SCANNER_LABELS}
                 onToggle={(value) =>
                   setEditing({ ...editing, scanners: toggleInList(editing.scanners, value) })
                 }
               />
               <CheckGroup<FindingSeverity>
-                legend="Severity"
+                legend="At severity"
                 values={editing.severities}
                 options={FINDING_SEVERITIES}
+                labels={FINDING_SEVERITY_LABELS}
                 onToggle={(value) =>
                   setEditing({ ...editing, severities: toggleInList(editing.severities, value) })
                 }
               />
               <CheckGroup<FindingCategory>
-                legend="Category"
+                legend="Of category"
                 values={editing.categories}
                 options={FINDING_CATEGORIES}
+                labels={FINDING_CATEGORY_LABELS}
                 onToggle={(value) =>
                   setEditing({ ...editing, categories: toggleInList(editing.categories, value) })
                 }
               />
               <TriSelect
-                label="False positive"
+                label="Already marked a false positive"
                 value={editing.falsePositive}
                 onChange={(value) => setEditing({ ...editing, falsePositive: value })}
               />
@@ -789,9 +856,12 @@ export function PolicyFamilyDetail() {
             <fieldset className="policy-detail-fieldset">
               <legend>Action</legend>
               <Select
-                label="Disposition"
+                label="Then the message is"
                 value={editing.disposition}
-                options={DISPOSITIONS.map((value) => ({ value, label: value }))}
+                options={DISPOSITIONS.map((value) => ({
+                  value,
+                  label: POLICY_DISPOSITION_LABELS[value],
+                }))}
                 onChange={(event) =>
                   setEditing({ ...editing, disposition: event.target.value as Disposition })
                 }
@@ -803,12 +873,13 @@ export function PolicyFamilyDetail() {
                 placeholder="QUARANTINE_PHISHING"
                 maxLength={64}
                 error={reasonCodeError}
-                hint="Uppercase letters, digits and underscores, up to 64 characters."
+                hint="Appears in the mail log and the hold reason an admin sees. Uppercase letters, digits and underscores, up to 64 characters."
               />
               <CheckGroup<NotifyTarget>
                 legend="Notify"
                 values={editing.notify}
                 options={NOTIFY_TARGETS}
+                labels={NOTIFY_TARGET_LABELS}
                 onToggle={(value) =>
                   setEditing({ ...editing, notify: toggleInList(editing.notify, value) })
                 }
@@ -831,17 +902,18 @@ export function PolicyFamilyDetail() {
         <div className="policy-detail-form">
           <p>
             Publish <strong>{rules?.length ?? 0}</strong> rules for{" "}
-            <strong>{family?.family_key}</strong> at <strong>{scopeLevel}</strong> scope?
+            <strong>{family?.display_name}</strong> at <strong>{scopeName}</strong> level?
           </p>
           <p className="policy-detail-hint">
-            Publishing is audited and versioned. The new revision becomes active immediately and
-            supersedes the previous revision for this family.
+            This becomes the live rule set as soon as you confirm, replacing the revision in effect.
+            The publish is recorded with your account and the revision number, so it can be reviewed
+            and rolled back by publishing an earlier rule set again.
           </p>
           {thresholdClearWarning ? (
             <p className="policy-detail-warning" role="alert">
-              This draft has no Inline ML threshold metadata. Publishing it will clear active ML
-              thresholds for this scope and the inline analysis stage will return to evidence-only
-              WARN behavior until thresholds are republished.
+              No rule in this draft carries machine-learning score thresholds. Publishing clears the
+              thresholds now in force, so the inline analysis stage will report evidence without
+              scoring messages until you publish a rule set that includes them.
             </p>
           ) : null}
           {publish.isError ? (

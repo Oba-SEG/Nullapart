@@ -54,9 +54,9 @@ const baseSnapshot = {
   nodes: [
     {
       id: "mx-1",
-      node_type: "mx",
-      role: "mta",
-      status: "healthy",
+      node_type: "mail",
+      role: "mx",
+      status: "active",
       hostname: "mx-1.example.test",
       version: "1.4.0",
       config_revision: 12,
@@ -76,9 +76,9 @@ const baseSnapshot = {
     },
     {
       id: "core-1",
-      node_type: "core",
-      role: "mail-core",
-      status: "starting",
+      node_type: "control",
+      role: "control",
+      status: "offline",
       hostname: "core-1.example.test",
       version: "1.4.0",
       config_revision: null,
@@ -352,18 +352,19 @@ describe("Operations", () => {
     const tier3 = await screen.findByRole("region", { name: "Tier-3 SLO capabilities" });
     expect(within(tier3).getByText("Inbound SMTP acceptance")).toBeTruthy();
     expect(within(tier3).getByText("99.95% monthly design target")).toBeTruthy();
-    expect(within(tier3).getByText("defined")).toBeTruthy();
+    expect(within(tier3).getByText("Rules defined")).toBeTruthy();
 
     const alerts = await screen.findByRole("region", { name: "Burn-rate alert rules" });
     expect(within(alerts).getByText("inbound_smtp_acceptance:fast-burn")).toBeTruthy();
     expect(within(alerts).getByText("14.40x")).toBeTruthy();
-    expect(within(alerts).getByText("not ready")).toBeTruthy();
+    expect(within(alerts).getByText("Not ready")).toBeTruthy();
+    expect(within(alerts).getByText("Pages on-call")).toBeTruthy();
 
     const automation = await screen.findByRole("region", {
       name: "Durable automation categories",
     });
     expect(within(automation).getByText("Critical threat incident")).toBeTruthy();
-    expect(within(automation).getByText("clickup")).toBeTruthy();
+    expect(within(automation).getByText("ClickUp")).toBeTruthy();
     expect(
       within(automation).getByText("deployment:customer:threat_class:rolling_1h"),
     ).toBeTruthy();
@@ -374,10 +375,10 @@ describe("Operations", () => {
     expect(
       within(readiness).getByText("Zero-day parser/dependency exercise completed"),
     ).toBeTruthy();
-    expect(within(readiness).getByText("not ready")).toBeTruthy();
+    expect(within(readiness).getByText("Not ready")).toBeTruthy();
   });
 
-  it("renders each readiness status and its evidence verbatim", async () => {
+  it("labels each readiness status and keeps its evidence linkable", async () => {
     stubFetch({ session: managerSession, snapshot: baseSnapshot, hardening: baseHardening });
     renderAt("/operations");
 
@@ -386,18 +387,18 @@ describe("Operations", () => {
     });
 
     const partialRow = rowFor("Tier-3 SLO/error-budget/burn-rate alerting active");
-    expect(within(partialRow).getByText("partial")).toBeTruthy();
+    expect(within(partialRow).getByText("Partly working")).toBeTruthy();
     expect(within(partialRow).getByText("docs/compliance/08-TIER3-SLO-EVIDENCE.md")).toBeTruthy();
 
     const notReadyRow = rowFor("Zero-day parser/dependency exercise completed");
-    expect(within(notReadyRow).getByText("not ready")).toBeTruthy();
+    expect(within(notReadyRow).getByText("Not ready")).toBeTruthy();
     expect(
       within(notReadyRow).getByText("docs/compliance/15-ZERO-DAY-TABLETOP-TEMPLATE.md"),
     ).toBeTruthy();
 
     // The page must never upgrade a partial/not-ready row to a ready badge.
-    expect(within(partialRow).queryByText("ready")).toBeNull();
-    expect(within(notReadyRow).queryByText("ready")).toBeNull();
+    expect(within(partialRow).queryByText("Ready")).toBeNull();
+    expect(within(notReadyRow).queryByText("Ready")).toBeNull();
     expect(readiness).not.toHaveTextContent("production ready");
   });
 
@@ -406,10 +407,22 @@ describe("Operations", () => {
     renderAt("/operations");
 
     await screen.findByRole("region", { name: "Nodes" });
-    expect(within(rowFor("mx-1")).getByText("stale config")).toBeTruthy();
-    expect(within(rowFor("scan-1")).getByText("current")).toBeTruthy();
-    expect(within(rowFor("core-1")).getByText("unknown")).toBeTruthy();
-    expect(within(rowFor("scan-1")).getByText("never")).toBeTruthy();
+    expect(within(rowFor("mx-1")).getByText("Stale config")).toBeTruthy();
+    expect(within(rowFor("scan-1")).getByText("Current")).toBeTruthy();
+    expect(within(rowFor("core-1")).getByText("Unknown")).toBeTruthy();
+    expect(within(rowFor("scan-1")).getByText("Never checked")).toBeTruthy();
+  });
+
+  it("describes each node in operator terms, not its stored tokens", async () => {
+    stubFetch({ session: managerSession, snapshot: baseSnapshot });
+    renderAt("/operations");
+
+    await screen.findByRole("region", { name: "Nodes" });
+    expect(within(rowFor("mx-1")).getByText("Mail node")).toBeTruthy();
+    expect(within(rowFor("mx-1")).getByText("Receives inbound mail")).toBeTruthy();
+    expect(within(rowFor("scan-1")).getByText("Draining: no new work")).toBeTruthy();
+    expect(within(rowFor("core-1")).getByText("Serves the console and APIs")).toBeTruthy();
+    expect(within(rowFor("core-1")).queryByText("control")).toBeNull();
   });
 
   it("renders an honest empty state when no nodes are registered", async () => {

@@ -8,6 +8,8 @@ import { traceSearch, type TraceSearchResult } from "../api/trace";
 import { ControlRail } from "../components/ControlRail";
 import { WorkspaceHeader } from "../components/WorkspaceHeader";
 import { WorkflowGuide } from "../components/WorkflowGuide";
+import { Hint } from "../components/primitives/Hint";
+import { dispositionLabel, directionLabel, isQuarantineLinked } from "../lib/status";
 import "./Messages.css";
 
 const MIN_QUERY_LENGTH = 3;
@@ -74,13 +76,13 @@ export function Messages() {
       <WorkspaceHeader
         eyebrow="Trace investigation"
         title="Messages"
-        description="Search the mail trace index by transaction ID, sender, recipient or message ID. Results are authorized server-side for your current scope."
-        scope="Metadata-only search"
+        description="Search delivered and held mail by transaction ID, sender, recipient or message ID. Results are limited to what your role allows."
+        scope="Metadata only"
       />
 
       <ControlRail
         title="Trace search state"
-        summary="Search is intentionally metadata-first. Results become actionable only after the server authorizes the current query and scope."
+        summary="Search shows metadata only. Results open once your role allows the query."
         signals={[
           {
             label: "Query",
@@ -92,34 +94,34 @@ export function Messages() {
                   ? "searching"
                   : "complete",
             detail: !submitted
-              ? "Enter an identifier before a trace result set exists."
+              ? "Enter an identifier to see results."
               : search.isError
-                ? "The current search did not produce an authorized trace result."
-                : "A server-authorized trace lookup is in progress or complete.",
+                ? "This search did not return results you can see."
+                : "The search is running or finished.",
           },
           {
             label: "Results",
             value: search.isSuccess ? results.length : search.isError ? "Unavailable" : "—",
             detail: search.isSuccess
-              ? "Trace records returned within the current authorized scope."
-              : "Result count is not inferred before a successful server response.",
+              ? "Messages returned for your role."
+              : "The count appears once the search finishes.",
           },
           {
             label: "Content",
-            value: "isolated",
-            detail: "Any permitted message content remains in the sandboxed record view.",
+            value: "Protected",
+            detail: "Message content stays in its own protected view.",
             tone: "healthy",
           },
         ]}
       />
 
       <WorkflowGuide
-        title="Trace mail without rendering untrusted content"
-        description="Search transaction metadata first, then open a single trace only when its delivery and scanner context is relevant to the investigation."
+        title="Trace mail without showing message bodies"
+        description="Search metadata first, then open one message when its delivery and scanner detail is relevant to the investigation."
         steps={[
           {
             label: "Search",
-            detail: "Use identifiers and metadata to narrow the transaction set.",
+            detail: "Use identifiers and metadata to narrow the results.",
           },
           {
             label: "Trace",
@@ -127,8 +129,7 @@ export function Messages() {
           },
           {
             label: "Escalate",
-            detail:
-              "Follow linked quarantine or policy workflows when the trace indicates a required action.",
+            detail: "Open a linked held message or policy when the result needs action.",
           },
         ]}
       />
@@ -194,7 +195,11 @@ export function Messages() {
                 <th>Sender</th>
                 <th>Message ID</th>
                 <th>Recipients</th>
-                <th>Dispositions</th>
+                <th>
+                  <Hint label="How each recipient copy was handled: delivered, held for review, or rejected.">
+                    <span className="hint-term">Decision</span>
+                  </Hint>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -211,7 +216,9 @@ export function Messages() {
                   </td>
                   <td>{formatTimestamp(result.received_at)}</td>
                   <td>
-                    <span className={directionClass(result.direction)}>{result.direction}</span>
+                    <span className={directionClass(result.direction)}>
+                      {directionLabel(result.direction)}
+                    </span>
                   </td>
                   <td>{result.envelope_sender ?? "—"}</td>
                   <td className="message-id-cell">{result.message_id ?? "—"}</td>
@@ -219,14 +226,26 @@ export function Messages() {
                   <td className="message-dispositions">
                     {result.instances.length === 0
                       ? "—"
-                      : result.instances.map((instance) => (
-                          <span
-                            key={instance.tenant_message_id}
-                            className={dispositionClass(instance.disposition)}
-                          >
-                            {instance.disposition}
-                          </span>
-                        ))}
+                      : result.instances.map((instance) =>
+                          isQuarantineLinked(instance.disposition) ? (
+                            <Link
+                              key={instance.tenant_message_id}
+                              to="/quarantine/$tenant_message_id"
+                              params={{ tenant_message_id: instance.tenant_message_id }}
+                              className={dispositionClass(instance.disposition)}
+                              title="Open the held message for this result"
+                            >
+                              {dispositionLabel(instance.disposition)}
+                            </Link>
+                          ) : (
+                            <span
+                              key={instance.tenant_message_id}
+                              className={dispositionClass(instance.disposition)}
+                            >
+                              {dispositionLabel(instance.disposition)}
+                            </span>
+                          ),
+                        )}
                   </td>
                 </tr>
               ))}
@@ -237,8 +256,8 @@ export function Messages() {
 
       {showResults && search.data && search.data.has_more && (
         <p className="messages-more">
-          Showing {results.length} of {search.data.total_count} matches — refine the search to
-          narrow the results.
+          Showing {results.length} of {search.data.total_count} matches. Refine the search to narrow
+          the results.
         </p>
       )}
     </div>

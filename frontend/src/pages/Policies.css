@@ -139,3 +139,33 @@
   color: var(--color-text-tertiary);
   font-size: var(--font-size-sm);
 }
+
+/* Family cell: label first, internal key as secondary evidence. */
+.policies-name strong {
+  display: block;
+}
+
+.policies-name a {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.policies-key {
+  color: var(--color-text-tertiary);
+  display: block;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+
+/* A family your level cannot open still explains itself. */
+.policies-lock {
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-tertiary);
+  cursor: help;
+  display: inline-block;
+  font-size: var(--font-size-xs);
+  padding: 2px var(--spacing-2);
+}

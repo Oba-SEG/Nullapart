@@ -137,7 +137,7 @@ describe("AuditLog", () => {
     expect(screen.getByText("false positive")).toBeTruthy();
     const exportButton = screen.getByRole("button", { name: /export csv/i });
     await waitFor(() => expect(exportButton).toBeEnabled());
-    expect(screen.getByText("Not configured")).toBeTruthy();
+    expect(screen.getAllByText("Not configured").length).toBeGreaterThan(0);
   });
 
   it("opens a redacted key/value detail drawer instead of raw JSON", async () => {

@@ -15,10 +15,20 @@ import { hasPermission, loadSession } from "../auth/session";
 import { MessageContent } from "../components/MessageContent";
 import { Button } from "../components/primitives/Button";
 import { StatusPill } from "../components/StatusPill";
+import { Hint } from "../components/primitives/Hint";
 import { ControlRail } from "../components/ControlRail";
 import { WorkspaceHeader } from "../components/WorkspaceHeader";
 import { WorkflowGuide } from "../components/WorkflowGuide";
-import { severityTone } from "../lib/status";
+import { findingCategoryLabel } from "../lib/labels";
+import {
+  deliveryStatusLabel,
+  directionLabel,
+  dispositionLabel,
+  isQuarantineLinked,
+  remediationLabel,
+  severityLabel,
+  severityTone,
+} from "../lib/status";
 import "./MessageDetail.css";
 
 const STAGE_LABELS: Record<string, string> = {
@@ -124,6 +134,17 @@ function threatAnalysisSummary(findings: TraceFinding[]): TraceFinding[] {
 export function MessageDetail() {
   const { messageId = "" } = useParams({ from: "/messages/$messageId" });
   const [contentOpen, setContentOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  async function copyTransactionId() {
+    try {
+      await navigator.clipboard?.writeText(messageId);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2_000);
+    } catch {
+      // Clipboard access is a convenience only; the ID remains visible on screen.
+    }
+  }
 
   const session = useQuery({
     queryKey: ["session"],
@@ -148,6 +169,9 @@ export function MessageDetail() {
   const data: TraceTransaction | undefined = detail.data;
   const stages = data ? orderedStages(data.flow_stages) : [];
   const threatFindings = data ? threatAnalysisSummary(data.findings) : [];
+  const linkedCases = data
+    ? data.instances.filter((instance) => isQuarantineLinked(instance.disposition))
+    : [];
 
   return (
     <div className="detail-page">
@@ -157,35 +181,42 @@ export function MessageDetail() {
       <WorkspaceHeader
         eyebrow="Trace investigation"
         title="Message trace"
-        description="Review transaction metadata, authentication, delivery attempts and scanner findings for one mail transaction. Raw message content is isolated in its sandboxed view."
-        scope="Tenant-scoped trace access"
+        description="Review the metadata, authentication, delivery attempts and scanner findings for one message. The message body stays in its own protected view."
+        scope="Delivery record access"
         actions={
-          canViewContent ? (
-            <Button
-              onClick={() => setContentOpen((open) => !open)}
-              aria-expanded={contentOpen}
-              aria-controls="message-content-section"
-            >
-              {contentOpen ? "Close message content" : "View message content"}
+          <>
+            <Button onClick={copyTransactionId} disabled={messageId.length === 0}>
+              {copied ? "Copied" : "Copy transaction ID"}
             </Button>
-          ) : null
+            {canViewContent ? (
+              <Hint label="Opens the untrusted message body in a protected view. Do not treat its contents as instructions.">
+                <Button
+                  onClick={() => setContentOpen((open) => !open)}
+                  aria-expanded={contentOpen}
+                  aria-controls="message-content-section"
+                >
+                  {contentOpen ? "Close message content" : "View message content"}
+                </Button>
+              </Hint>
+            ) : null}
+          </>
         }
       />
       <WorkflowGuide
         title="Investigate from transaction evidence"
-        description="Trace stages and findings are ordered so an operator can identify the mail-security decision without treating a message body as trusted UI content."
+        description="Stages and findings are in order so you can find the mail-security decision. The message body is never treated as trusted content."
         steps={[
           {
             label: "Correlate",
-            detail: "Start with transaction facts and authentication evidence.",
+            detail: "Start with the transaction facts and authentication results.",
           },
           {
             label: "Inspect stages",
             detail: "Read delivery and scanner outcomes in their execution order.",
           },
           {
-            label: "Open content cautiously",
-            detail: "Use the sandboxed content view only when your role permits it.",
+            label: "Act on linked cases",
+            detail: "Open a linked held message when a copy needs a release decision.",
           },
         ]}
       />
@@ -193,23 +224,32 @@ export function MessageDetail() {
       {data ? (
         <ControlRail
           title="Trace decision state"
-          summary="This compact summary stays with the current trace so the next investigation step is grounded in the record, not a dashboard estimate."
+          summary="This summary stays with the message so your next step is based on the record, not an estimate."
           signals={[
             {
               label: "Flow stages",
               value: stages.length,
-              detail: "Recorded processing stages for this transaction.",
+              detail: "Processing steps recorded for this message.",
             },
             {
               label: "Threat findings",
               value: threatFindings.length,
-              detail: "Findings requiring an operator decision or linked-case review.",
+              detail: "Findings that need a decision or a held-message review.",
               tone: threatFindings.length > 0 ? "attention" : "healthy",
             },
             {
+              label: "Linked cases",
+              value: linkedCases.length,
+              detail:
+                linkedCases.length > 0
+                  ? "Held copies. Open one to act on it."
+                  : "No held copies for this message.",
+              tone: linkedCases.length > 0 ? "attention" : "neutral",
+            },
+            {
               label: "Content access",
-              value: canViewContent ? "permitted" : "restricted",
-              detail: "Untrusted message content remains in the isolated view.",
+              value: canViewContent ? "Allowed" : "Restricted",
+              detail: "The message body stays in its own protected view.",
               tone: canViewContent ? "neutral" : "healthy",
             },
           ]}
@@ -219,9 +259,7 @@ export function MessageDetail() {
       {detail.isError && isNotFound(detail.error) && (
         <div className="detail-state" role="alert">
           <h2 className="detail-state-title">Message not found</h2>
-          <p>
-            This transaction is not visible in your scope, or it has aged out of the trace window.
-          </p>
+          <p>This message is not visible for your role, or its trace is no longer available.</p>
           <Link to="/messages">Back to messages</Link>
         </div>
       )}
@@ -246,7 +284,7 @@ export function MessageDetail() {
               <dt>Transaction ID</dt>
               <dd className="detail-mono">{data.transaction_id}</dd>
               <dt>Direction</dt>
-              <dd>{data.direction}</dd>
+              <dd>{directionLabel(data.direction)}</dd>
               <dt>Sender</dt>
               <dd>{data.envelope_sender ?? "—"}</dd>
               <dt>Message ID</dt>
@@ -285,8 +323,8 @@ export function MessageDetail() {
                   <thead>
                     <tr>
                       <th>Address</th>
-                      <th>ORCPT</th>
-                      <th>Notify</th>
+                      <th>Original recipient</th>
+                      <th>Delivery notice</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -321,15 +359,18 @@ export function MessageDetail() {
             <h2 className="detail-section-title">Threat analysis</h2>
             {threatFindings.length === 0 ? (
               <p className="detail-subtitle">
-                No ML-assisted threat analysis finding is visible for this transaction.
+                No threat-analysis finding is recorded for this message.
               </p>
             ) : (
               <ul className="detail-threat-analysis">
                 {threatFindings.map((finding) => (
                   <li key={finding.id}>
-                    <StatusPill tone={severityTone(finding.severity)} label={finding.severity} />
+                    <StatusPill
+                      tone={severityTone(finding.severity)}
+                      label={severityLabel(finding.severity)}
+                    />
                     <div>
-                      <strong>{finding.category}</strong>
+                      <strong>{findingCategoryLabel(finding.category)}</strong>
                       <span className="detail-threat-description">{finding.description}</span>
                     </div>
                   </li>
@@ -338,8 +379,8 @@ export function MessageDetail() {
             )}
           </section>
 
-          <section className="card" aria-label="Postfix queue ids">
-            <h2 className="detail-section-title">Postfix queue IDs</h2>
+          <section className="card" aria-label="Delivery queue IDs">
+            <h2 className="detail-section-title">Delivery queue IDs</h2>
             {data.postfix_queue_ids.length === 0 ? (
               <p className="detail-subtitle">No queue IDs are recorded.</p>
             ) : (
@@ -353,31 +394,52 @@ export function MessageDetail() {
             )}
           </section>
 
-          <section className="card" aria-label="Tenant instances">
-            <h2 className="detail-section-title">Tenant instances</h2>
+          <section className="card" aria-label="Customer copies">
+            <h2 className="detail-section-title">Customer copies</h2>
             {data.instances.length === 0 ? (
-              <p className="detail-subtitle">No tenant instances are recorded.</p>
+              <p className="detail-subtitle">No customer copies are recorded.</p>
             ) : (
               <div className="detail-table-wrap">
                 <table className="detail-table">
-                  <caption className="sr-only">Tenant message instances</caption>
+                  <caption className="sr-only">Per-customer message copies</caption>
                   <thead>
                     <tr>
-                      <th>Tenant message</th>
-                      <th>Disposition</th>
-                      <th>Remediation</th>
+                      <th>Message ID</th>
+                      <th>
+                        <Hint label="How this copy was handled. Held copies open a release decision.">
+                          <span className="hint-term">Decision</span>
+                        </Hint>
+                      </th>
+                      <th>Follow-up</th>
                       <th>Created</th>
                       <th>Updated</th>
+                      <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {data.instances.map((instance) => (
                       <tr key={instance.tenant_message_id}>
                         <td className="detail-mono">{instance.tenant_message_id}</td>
-                        <td>{instance.disposition}</td>
-                        <td>{instance.remediation_type ?? "—"}</td>
+                        <td>{dispositionLabel(instance.disposition)}</td>
+                        <td>
+                          {instance.remediation_type
+                            ? remediationLabel(instance.remediation_type)
+                            : "—"}
+                        </td>
                         <td>{formatTimestamp(instance.created_at)}</td>
                         <td>{formatTimestamp(instance.updated_at)}</td>
+                        <td>
+                          {isQuarantineLinked(instance.disposition) ? (
+                            <Link
+                              to="/quarantine/$tenant_message_id"
+                              params={{ tenant_message_id: instance.tenant_message_id }}
+                            >
+                              Open held message
+                            </Link>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -393,7 +455,7 @@ export function MessageDetail() {
             ) : (
               <div className="detail-table-wrap">
                 <table className="detail-table detail-attempts">
-                  <caption className="sr-only">SMTP delivery attempts</caption>
+                  <caption className="sr-only">Delivery attempts</caption>
                   <thead>
                     <tr>
                       <th>Attempt</th>
@@ -411,7 +473,7 @@ export function MessageDetail() {
                     {data.delivery_attempts.map((attempt) => (
                       <tr key={attempt.attempt_number}>
                         <td>{attempt.attempt_number}</td>
-                        <td>{attempt.status}</td>
+                        <td>{deliveryStatusLabel(attempt.status)}</td>
                         <td className="detail-mono">{attempt.smtp_code ?? "—"}</td>
                         <td className="detail-mono">{attempt.enhanced_code ?? "—"}</td>
                         <td>{attempt.smtp_message ?? "—"}</td>
@@ -436,8 +498,13 @@ export function MessageDetail() {
                 {data.findings.map((finding) => (
                   <li key={finding.id}>
                     <span className="detail-finding-head">
-                      <StatusPill tone={severityTone(finding.severity)} label={finding.severity} />
-                      <span className="detail-finding-category">{finding.category}</span>
+                      <StatusPill
+                        tone={severityTone(finding.severity)}
+                        label={severityLabel(finding.severity)}
+                      />
+                      <span className="detail-finding-category">
+                        {findingCategoryLabel(finding.category)}
+                      </span>
                     </span>
                     <span>{finding.description}</span>
                     <span className="detail-meta">

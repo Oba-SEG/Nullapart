@@ -12,6 +12,16 @@ import { Dialog } from "../components/primitives/Dialog";
 import { Input } from "../components/primitives/Input";
 import { Select } from "../components/primitives/Select";
 import { randomUuid } from "../lib/ids";
+import {
+  commissioningLabel,
+  destinationLabel,
+  nodeRoleLabel,
+  nodeTypeLabel,
+  operationReadinessLabel,
+  runtimeNodeLabel,
+  tokenLabel,
+} from "../lib/labels";
+import { severityLabel } from "../lib/status";
 import "./Operations.css";
 
 type RefreshTarget = "deployment" | "tenant" | "node";
@@ -144,7 +154,7 @@ interface RefreshResult {
 
 const REFRESH_TARGET_OPTIONS: { value: RefreshTarget; label: string }[] = [
   { value: "deployment", label: "Deployment (whole deployment)" },
-  { value: "tenant", label: "Tenant (this customer)" },
+  { value: "tenant", label: "Customer (this customer's config)" },
   { value: "node", label: "Node (single registered node)" },
 ];
 
@@ -209,12 +219,12 @@ function outboxToneClass(outbox: RuntimeSnapshot["outbox"]): string {
 
 function staleBadge(stale: boolean | null) {
   if (stale === true) {
-    return <span className="operations-badge operations-badge-warning">stale config</span>;
+    return <span className="operations-badge operations-badge-warning">Stale config</span>;
   }
   if (stale === false) {
-    return <span className="operations-badge operations-badge-ok">current</span>;
+    return <span className="operations-badge operations-badge-ok">Current</span>;
   }
-  return <span className="operations-badge operations-badge-muted">unknown</span>;
+  return <span className="operations-badge operations-badge-muted">Unknown</span>;
 }
 
 function statusBadge(status: string) {
@@ -226,14 +236,32 @@ function statusBadge(status: string) {
         : "warning";
   return (
     <span className={`operations-badge operations-badge-${tone}`}>
-      {status.replaceAll("_", " ")}
+      {operationReadinessLabel(status)}
     </span>
+  );
+}
+
+/**
+ * Alert severity. It is not a readiness state, so it gets its own badge rather
+ * than sharing the readiness colours: a rule can be fully ready and still page
+ * on-call at a low threshold.
+ */
+function severityBadge(severity: string) {
+  const tone = severity === "critical" || severity === "page" ? "error" : "warning";
+  return (
+    <span className={`operations-badge operations-badge-${tone}`}>{severityLabel(severity)}</span>
   );
 }
 
 function minutesLabel(minutes: number): string {
   if (minutes < 60) return `${minutes}m`;
   return `${Math.floor(minutes / 60)}h`;
+}
+
+function configScopeLabel(scope: ConfigScope["scope"]): string {
+  if (scope === "tenant") return "Customer";
+  if (scope === "system") return "Platform";
+  return "Deployment";
 }
 
 export function Operations() {
@@ -313,10 +341,10 @@ export function Operations() {
   return (
     <div className="operations-page">
       <WorkspaceHeader
-        eyebrow="Runtime control"
+        eyebrow="Runtime status"
         title="Runtime operations"
-        description="Inspect published configuration, registered nodes and durable queue health as reported by the running stack. Nothing on this page is estimated."
-        scope={data ? `Deployment ${data.deployment_id}` : "Runtime control"}
+        description="Review the current configuration, registered nodes and queue health exactly as the running system reports them. Nothing here is estimated."
+        scope={data ? `Deployment ${data.deployment_id}` : "Runtime status"}
         actions={
           <>
             <Button type="button" onClick={() => void snapshot.refetch()}>
@@ -334,24 +362,24 @@ export function Operations() {
       {data ? (
         <ControlRail
           title="Live runtime priorities"
-          summary="These signals come from the current server snapshot. Refresh is the only state-changing action exposed on this route."
+          summary="These values come straight from the running system. Refresh is the only action on this page that changes anything."
           signals={[
             {
-              label: "Unpublished outbox",
+              label: "Pending publication",
               value: data.outbox.unpublished_count,
-              detail: "Durable events awaiting publication.",
+              detail: "Events waiting to be sent out.",
               tone: data.outbox.unpublished_count > 0 ? "attention" : "healthy",
             },
             {
               label: "Dead letters",
               value: data.dead_letters.count,
-              detail: "Items requiring operator investigation.",
+              detail: "Items that need you to look into them.",
               tone: data.dead_letters.count > 0 ? "attention" : "healthy",
             },
             {
               label: "Active scanners",
               value: `${data.scanner.active}/${data.scanner.total}`,
-              detail: "Registered scanner capacity currently active.",
+              detail: "Scanner nodes running and taking work right now.",
               tone: data.scanner.active === data.scanner.total ? "healthy" : "attention",
             },
           ]}
@@ -359,21 +387,20 @@ export function Operations() {
       ) : null}
 
       <WorkflowGuide
-        title="Operate from published state"
-        description="Use the live snapshot to determine where intervention is permitted before requesting a refresh."
+        title="Act from the current state"
+        description="Read the live values to see what you are allowed to change before requesting a refresh."
         steps={[
           {
             label: "Assess",
-            detail: "Read queue, scanner and configuration state from the running deployment.",
+            detail: "Read the queue, scanner and configuration values from the running system.",
           },
           {
             label: "Target",
-            detail:
-              "Choose deployment, tenant or node only when the operation scope is understood.",
+            detail: "Choose deployment, customer or node only when you know what that covers.",
           },
           {
             label: "Refresh",
-            detail: "Request an audited refresh, then reload to confirm the resulting state.",
+            detail: "Request a refresh, then reload to confirm the new state.",
           },
         ]}
       />
@@ -410,7 +437,7 @@ export function Operations() {
               <strong>{data.config.db_revision ?? "none"}</strong>
             </div>
             <div className={`stat-row ${outboxToneClass(data.outbox)}`.trim()}>
-              <span>Outbox backlog</span>
+              <span>Pending publication</span>
               <strong>{outboxLabel(data.outbox)}</strong>
             </div>
             <div className="stat-row">
@@ -468,9 +495,9 @@ export function Operations() {
               <section className="card" aria-labelledby="operations-tier3-heading">
                 <h2 id="operations-tier3-heading">Tier-3 SLO capabilities</h2>
                 <p className="operations-hint">
-                  These are deployment-scoped production-critical capabilities from Phase 9. They
-                  define SLI/SLO targets, recovery objectives and degraded-mode behaviour without
-                  claiming production sign-off.
+                  These are the deployment-critical capabilities from Phase 9. They set service
+                  targets, recovery objectives and degraded-mode behaviour. They do not claim the
+                  deployment is approved for production.
                 </p>
                 <div className="operations-table-wrap">
                   <table className="operations-table">
@@ -517,7 +544,7 @@ export function Operations() {
               <section className="card" aria-labelledby="operations-alerts-heading">
                 <h2 id="operations-alerts-heading">Burn-rate alert rules</h2>
                 <p className="operations-hint">
-                  Phase 9 requires fast, sustained and slow-burn paths. Rules remain inactive until
+                  Phase 9 requires fast, sustained and slow-burn paths. Rules stay off until
                   monitoring is live and tested.
                 </p>
                 <div className="operations-table-wrap">
@@ -540,7 +567,7 @@ export function Operations() {
                             <span className="operations-node-id">{rule.alert_key}</span>
                             <span className="operations-meta">{rule.threshold_description}</span>
                           </td>
-                          <td>{statusBadge(rule.severity)}</td>
+                          <td>{severityBadge(rule.severity)}</td>
                           <td>{rule.burn_rate}x</td>
                           <td>
                             {minutesLabel(rule.long_window_minutes)} +{" "}
@@ -558,9 +585,9 @@ export function Operations() {
               <section className="card" aria-labelledby="operations-automation-heading">
                 <h2 id="operations-automation-heading">Durable automation categories</h2>
                 <p className="operations-hint">
-                  Phase 9 automation remains asynchronous and non-critical to mail delivery. These
-                  rows define minimized metadata, deduplication and aggregation before any
-                  n8n/ClickUp/customer-notification workflow is marked ready.
+                  Phase 9 automation runs in the background and never blocks mail delivery. These
+                  rows set what data is sent, how duplicates are merged and how events are grouped
+                  before any n8n, ClickUp or customer-notification workflow is marked ready.
                 </p>
                 <div className="operations-table-wrap">
                   <table className="operations-table">
@@ -584,7 +611,7 @@ export function Operations() {
                               Metadata: {category.minimized_metadata}
                             </span>
                           </td>
-                          <td>{category.destination.replaceAll("_", " ")}</td>
+                          <td>{destinationLabel(category.destination)}</td>
                           <td>{category.owner}</td>
                           <td className="operations-scope-id" title={category.deduplication_key}>
                             {category.deduplication_key}
@@ -601,8 +628,8 @@ export function Operations() {
               <section className="card" aria-labelledby="operations-readiness-heading">
                 <h2 id="operations-readiness-heading">Production-readiness evidence</h2>
                 <p className="operations-hint">
-                  A ready product still needs deployment evidence: exercises, monitoring, restore
-                  proof, source controls and production approvals are tracked here.
+                  This is not ready for production until we have deployment evidence. It tracks
+                  exercises, monitoring, restore proof, source controls and production approvals.
                 </p>
                 <div className="operations-table-wrap">
                   <table className="operations-table">
@@ -621,7 +648,7 @@ export function Operations() {
                       {hardeningData.readiness_checks.map((check) => (
                         <tr key={check.check_id}>
                           <td>{check.title}</td>
-                          <td>{check.category.replaceAll("_", " ")}</td>
+                          <td>{tokenLabel(check.category)}</td>
                           <td>{statusBadge(check.status)}</td>
                           <td>{check.owner}</td>
                           <td className="operations-scope-id" title={check.evidence_ref}>
@@ -641,8 +668,8 @@ export function Operations() {
             <h2 id="operations-nodes-heading">Nodes</h2>
             {nodes.length === 0 ? (
               <p className="operations-hint">
-                No nodes are registered for this deployment yet. Nodes appear here once the running
-                stack registers them with the control plane; no rows are shown until then.
+                No nodes are registered for this installation yet. Nodes appear here as the running
+                system reports them.
               </p>
             ) : (
               <div className="operations-table-wrap">
@@ -655,7 +682,7 @@ export function Operations() {
                       <th scope="col">Role</th>
                       <th scope="col">Status</th>
                       <th scope="col">Version</th>
-                      <th scope="col">Config revision</th>
+                      <th scope="col">Config version</th>
                       <th scope="col">Last health check</th>
                       <th scope="col">Config freshness</th>
                     </tr>
@@ -669,17 +696,17 @@ export function Operations() {
                             <span className="operations-meta">{node.hostname}</span>
                           ) : null}
                         </td>
-                        <td>{node.node_type}</td>
-                        <td>{node.role}</td>
+                        <td>{nodeTypeLabel(node.node_type)}</td>
+                        <td>{nodeRoleLabel(node.role)}</td>
                         <td>
-                          <span className="operations-badge">{node.status}</span>
+                          <span className="operations-badge">{runtimeNodeLabel(node.status)}</span>
                         </td>
                         <td>{node.version}</td>
                         <td>{node.config_revision ?? "—"}</td>
                         <td>
                           {node.last_health_check
                             ? new Date(node.last_health_check).toLocaleString()
-                            : "never"}
+                            : "Never checked"}
                         </td>
                         <td>{staleBadge(node.stale)}</td>
                       </tr>
@@ -691,10 +718,10 @@ export function Operations() {
           </section>
 
           <section className="card" aria-labelledby="operations-config-heading">
-            <h2 id="operations-config-heading">Config revisions</h2>
+            <h2 id="operations-config-heading">Config versions</h2>
             {scopes.length === 0 ? (
               <p className="operations-hint">
-                No configuration scopes have been published for this deployment yet.
+                No configuration versions exist for this installation yet.
               </p>
             ) : (
               <div className="operations-table-wrap">
@@ -704,7 +731,7 @@ export function Operations() {
                     <tr>
                       <th scope="col">Scope</th>
                       <th scope="col">Scope id</th>
-                      <th scope="col">Revision</th>
+                      <th scope="col">Version</th>
                       <th scope="col">Published by</th>
                       <th scope="col">Published at</th>
                     </tr>
@@ -713,7 +740,7 @@ export function Operations() {
                     {scopes.map((entry) => (
                       <tr key={`${entry.scope}:${entry.scope_id}`}>
                         <td>
-                          <span className="operations-badge">{entry.scope}</span>
+                          <span className="operations-badge">{configScopeLabel(entry.scope)}</span>
                         </td>
                         <td className="operations-scope-id" title={entry.scope_id}>
                           {entry.scope_id}
@@ -736,7 +763,7 @@ export function Operations() {
                 <span
                   className={`operations-badge operations-badge-${smtpCommissioning === "recorded" ? "ok" : "muted"}`}
                 >
-                  {smtpCommissioning.replace("_", " ")}
+                  {commissioningLabel(smtpCommissioning)}
                 </span>
                 <span>{data.smtp.detail}</span>
               </p>
@@ -745,7 +772,7 @@ export function Operations() {
         </>
       ) : null}
 
-      <Dialog open={dialogOpen} onClose={closeDialog} title="Request configuration refresh">
+      <Dialog open={dialogOpen} onClose={closeDialog} title="Request a config refresh">
         <form
           className="operations-form"
           onSubmit={(event) => {
@@ -754,8 +781,8 @@ export function Operations() {
           }}
         >
           <p className="operations-hint">
-            The refresh is audited and emits a config change event so registered nodes reload the
-            published revision. The scope is resolved server-side from your session.
+            A refresh tells the registered nodes to load the current configuration version for the
+            scope you choose. The action is recorded.
           </p>
           <Select
             label="Target"

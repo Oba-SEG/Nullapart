@@ -18,6 +18,8 @@ const customerRow = {
   id: "customer-1",
   display_name: "Acme Corporation",
   internal_key: 42,
+  region_code: "ZA",
+  sequence_no: 1042,
   lifecycle: "active",
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-02T00:00:00Z",
@@ -28,6 +30,8 @@ const otherCustomer = {
   id: "customer-2",
   display_name: "Globex Inc.",
   internal_key: 43,
+  region_code: "NG",
+  sequence_no: 1043,
   lifecycle: "grace",
   created_at: "2026-02-01T00:00:00Z",
   updated_at: "2026-02-02T00:00:00Z",
@@ -110,9 +114,34 @@ interface StubOptions {
   groups?: unknown[];
   created?: unknown;
   verified?: unknown;
+  /** Overrides the published capabilities for one specific gate. */
+  blocked?: Array<"create_customer" | "change_lifecycle" | "add_send_only_domain">;
+  blocker?: "permission" | "lifecycle" | "deployment" | "role";
+}
+
+const allowedCapability = { allowed: true, blocker: null };
+
+/**
+ * The stub answers with the same shape the server publishes: the customer list
+ * and detail payloads carry the write verdict, so these tests exercise what the
+ * console does with it rather than re-deriving roles in the page.
+ */
+function capabilitiesFor(
+  blocked: StubOptions["blocked"] = [],
+  blocker: StubOptions["blocker"] = "role",
+) {
+  const blockedCapability = { allowed: false, blocker };
+  return {
+    create_customer: blocked?.includes("create_customer") ? blockedCapability : allowedCapability,
+    change_lifecycle: blocked?.includes("change_lifecycle") ? blockedCapability : allowedCapability,
+    add_send_only_domain: blocked?.includes("add_send_only_domain")
+      ? blockedCapability
+      : allowedCapability,
+  };
 }
 
 function stubFetch(options: StubOptions) {
+  const capabilities = capabilitiesFor(options.blocked, options.blocker);
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? "GET";
@@ -140,7 +169,7 @@ function stubFetch(options: StubOptions) {
       return ok({ data: { groups: options.groups ?? [] } });
     }
     if (url.includes("/admin/customers/customer-1")) {
-      return ok({ data: options.detail });
+      return ok({ data: { ...(options.detail as object), capabilities } });
     }
     if (options.listError && url.includes("/admin/customers")) {
       return fail(options.listError.status, {
@@ -149,7 +178,7 @@ function stubFetch(options: StubOptions) {
       });
     }
     if (url.includes("/admin/customers")) {
-      return ok({ data: { customers: options.customers ?? [] } });
+      return ok({ data: { customers: options.customers ?? [], capabilities } });
     }
     throw new Error(`unexpected fetch ${url}`);
   });
@@ -212,10 +241,17 @@ describe("Customers", () => {
     const link = await screen.findByRole("link", { name: "Acme Corporation" });
     expect(link).toHaveProperty("href", expect.stringContaining("/customers/customer-1"));
     expect(screen.getByText("customer-1")).toBeTruthy();
-    expect(screen.getByText("active")).toBeTruthy();
+    expect(screen.getByText("ZA")).toBeTruthy();
+    expect(screen.getByText("NG")).toBeTruthy();
+    // "Active" is also a summary label, so the count is what matters: the row
+    // renders the human state, never the wire value.
+    expect(screen.getAllByText("Active").length).toBeGreaterThanOrEqual(2);
     expect(screen.getByRole("link", { name: "Globex Inc." })).toBeTruthy();
-    expect(screen.getByText("grace")).toBeTruthy();
+    expect(screen.getByText("In grace period")).toBeTruthy();
     expect(screen.getByText("0")).toBeTruthy();
+    // The wire state never renders on its own.
+    expect(screen.queryByText(/^grace$/)).toBeNull();
+    expect(screen.queryByText(/^active$/)).toBeNull();
   });
 
   it("renders a hostile customer display name as literal text without executing it", async () => {
@@ -236,12 +272,51 @@ describe("Customers", () => {
     expectLiteralAndNotExecuted(container, hostileDisplayName);
   });
 
-  it("hides the new customer action without admin:customers:manage", async () => {
-    stubFetch({ session: readOnlySession, customers: [customerRow] });
+  it("hides the new customer action and names the missing permission", async () => {
+    stubFetch({
+      session: readOnlySession,
+      customers: [customerRow],
+      blocked: ["create_customer"],
+      blocker: "permission",
+    });
     renderAt("/customers");
 
     await screen.findByRole("link", { name: "Acme Corporation" });
     expect(screen.queryByRole("button", { name: "New customer" })).toBeNull();
+    expect(
+      await screen.findByText(
+        /needs the customer management permission, which your roles do not grant/,
+      ),
+    ).toBeTruthy();
+  });
+
+  it("states the role requirement when the server blocks creation at role level", async () => {
+    // The mismatch this closes: the session holds admin:customers:manage, so a
+    // client-side permission check offered "New customer" while the API refused
+    // it. The list now publishes the gate that refused.
+    stubFetch({
+      session: customerAdminSession,
+      customers: [customerRow],
+      blocked: ["create_customer"],
+      blocker: "role",
+    });
+    renderAt("/customers");
+
+    await screen.findByRole("link", { name: "Acme Corporation" });
+    expect(screen.queryByRole("button", { name: "New customer" })).toBeNull();
+    expect(
+      await screen.findByText(
+        /Creating a customer is limited to the Support and System roles, and yours include neither/,
+      ),
+    ).toBeTruthy();
+  });
+
+  it("offers the new customer action when the server publishes it as allowed", async () => {
+    stubFetch({ session: adminSession, customers: [customerRow] });
+    renderAt("/customers");
+
+    expect(await screen.findByRole("button", { name: "New customer" })).toBeTruthy();
+    expect(document.querySelector(".customers-lock")).toBeNull();
   });
 
   it("creates a customer with an idempotency key and refreshes the list", async () => {
@@ -358,11 +433,13 @@ describe("CustomerDetail", () => {
     };
   });
 
-  it("omits the send_only domain type for a customer admin session", async () => {
+  it("omits the send_only domain type and states why, from the published capability", async () => {
     stubFetch({
       session: customerAdminSession,
       detail: { ...customerRow, domains: [domain], source_ip_groups: [sourceIpGroup] },
       groups: [sourceIpGroup],
+      blocked: ["change_lifecycle", "add_send_only_domain"],
+      blocker: "role",
     });
     renderAt("/customers/customer-1");
 
@@ -371,6 +448,12 @@ describe("CustomerDetail", () => {
     expect(within(typeSelect).getByRole("option", { name: "Internal" })).toBeTruthy();
     expect(within(typeSelect).queryByRole("option", { name: "Send only" })).toBeNull();
     expect(screen.queryByLabelText("New lifecycle")).toBeNull();
+    expect(
+      screen.getByText(/Adding a send-only domain is limited to the Support and System roles/),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/Changing this lifecycle is limited to the Support and System roles/),
+    ).toBeTruthy();
   });
 
   it("limits lifecycle transitions to the allowed set for the current lifecycle", async () => {
@@ -382,11 +465,15 @@ describe("CustomerDetail", () => {
     renderAt("/customers/customer-1");
 
     const lifecycleSelect = await screen.findByLabelText("New lifecycle");
-    expect(within(lifecycleSelect).getByRole("option", { name: "grace" })).toBeTruthy();
-    expect(within(lifecycleSelect).getByRole("option", { name: "suspended" })).toBeTruthy();
-    expect(within(lifecycleSelect).getByRole("option", { name: "terminated" })).toBeTruthy();
-    expect(within(lifecycleSelect).queryByRole("option", { name: "active" })).toBeNull();
+    expect(within(lifecycleSelect).getByRole("option", { name: "In grace period" })).toBeTruthy();
+    expect(within(lifecycleSelect).getByRole("option", { name: "Suspended" })).toBeTruthy();
+    expect(within(lifecycleSelect).getByRole("option", { name: "Terminated" })).toBeTruthy();
+    expect(within(lifecycleSelect).queryByRole("option", { name: "Active" })).toBeNull();
     expect(screen.getByRole("button", { name: "Apply lifecycle change" })).toBeDisabled();
+    expect(screen.getByText("Region")).toBeTruthy();
+    expect(screen.getByText("ZA")).toBeTruthy();
+    expect(screen.getByText("Sequence")).toBeTruthy();
+    expect(screen.getByText("1042")).toBeTruthy();
   });
 
   it("calls the verify endpoint for a domain that is not verified", async () => {
@@ -412,9 +499,7 @@ describe("CustomerDetail", () => {
       );
       expect(call).toBeTruthy();
     });
-    expect(
-      await screen.findByText(/Verification result for mail\.acme\.test: verified/),
-    ).toBeTruthy();
+    expect(await screen.findByText(/Verification for mail\.acme\.test: Verified/)).toBeTruthy();
   });
 
   it("renders hostile customer and domain names as literal text without executing them", async () => {

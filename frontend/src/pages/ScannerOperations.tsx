@@ -4,6 +4,8 @@ import { api, type ApiError } from "../api/client";
 import { ControlRail } from "../components/ControlRail";
 import { WorkspaceHeader } from "../components/WorkspaceHeader";
 import { WorkflowGuide } from "../components/WorkflowGuide";
+import { Hint } from "../components/primitives/Hint";
+import { nodeStatusLabel, requirementLabel, scannerStatusLabel } from "../lib/status";
 import "./ScannerOperations.css";
 
 interface NodeStatus {
@@ -69,53 +71,57 @@ export function ScannerOperations() {
   return (
     <div className="scanner-page">
       <WorkspaceHeader
-        eyebrow="Mail security fabric"
+        eyebrow="Mail security"
         title="Scanner operations"
-        description="Inspect product capability health and tenant-scoped results. Engine detail and message content remain private by design."
-        scope="Health-only operations view"
-        actions={<span className={`scanner-node-status ${node.status}`}>{node.status}</span>}
+        description="Inspect check health and per-customer results. Engine detail and message content stay private by design."
+        scope="Health only"
+        actions={
+          <span className={`scanner-node-status ${node.status}`}>
+            {nodeStatusLabel(node.status)}
+          </span>
+        }
       />
 
       <ControlRail
         title="Scanner capacity state"
-        summary="Health is exposed by capability label so routing decisions do not depend on scanner engine implementation detail."
+        summary="Health is shown by check name so you do not need to know the engine behind it."
         signals={[
           {
-            label: "Required unhealthy",
+            label: "Required checks down",
             value: node.required_unhealthy,
-            detail: "Required capabilities not currently healthy.",
+            detail: "Required checks that are not healthy right now.",
             tone: node.required_unhealthy > 0 ? "attention" : "healthy",
           },
           {
-            label: "Capabilities",
+            label: "Healthy checks",
             value: `${capabilities.filter((item) => item.status === "healthy").length}/${capabilities.length}`,
-            detail: "Published capability health at this node.",
+            detail: "Check health on this node.",
             tone: capabilities.every((item) => item.status === "healthy") ? "healthy" : "attention",
           },
           {
-            label: "Reinjection failures",
+            label: "Release delivery failures",
             value: totals.release_reinjection_failures,
-            detail: "Recorded release reinjection failures in the last 24 hours.",
+            detail: "Released messages that failed to re-enter delivery in the last 24 hours.",
             tone: totals.release_reinjection_failures > 0 ? "attention" : "healthy",
           },
         ]}
       />
 
       <WorkflowGuide
-        title="Assess scanner capacity before routing work"
-        description="This page reports health and operation capability only; it deliberately does not expose scanner engines or unauthenticated management controls."
+        title="Check scanner health before you rely on it"
+        description="This page reports health only. It does not expose scanner engines or management controls."
         steps={[
           {
             label: "Read health",
-            detail: "Confirm active, draining and unavailable scanner capacity.",
+            detail: "Confirm active, draining and unavailable capacity.",
           },
           {
             label: "Inspect operation",
-            detail: "Compare the published capability labels and health state.",
+            detail: "Compare the check names and their health.",
           },
           {
             label: "Escalate safely",
-            detail: "Use runtime operations for a permitted refresh when the evidence warrants it.",
+            detail: "Use runtime operations to refresh when the health signals need it.",
           },
         ]}
       />
@@ -138,7 +144,11 @@ export function ScannerOperations() {
           <strong>{totals.inconclusive}</strong>
         </div>
         <div className={`stat-row${totals.release_reinjection_failures > 0 ? " attention" : ""}`}>
-          <span>Release delivery failures</span>
+          <span>
+            <Hint label="A released message that failed to re-enter delivery after being held.">
+              <span className="hint-term">Release delivery failures</span>
+            </Hint>
+          </span>
           <strong>{totals.release_reinjection_failures}</strong>
         </div>
       </section>
@@ -150,11 +160,11 @@ export function ScannerOperations() {
         </div>
         <dl>
           <div>
-            <dt>Capabilities</dt>
+            <dt>Checks</dt>
             <dd>{node.configured_capabilities}</dd>
           </div>
           <div>
-            <dt>Required unavailable</dt>
+            <dt>Required down</dt>
             <dd>{node.required_unhealthy}</dd>
           </div>
           <div>
@@ -165,11 +175,11 @@ export function ScannerOperations() {
       </section>
 
       <section className="card scanner-table-wrap" aria-labelledby="scanner-capabilities-heading">
-        <h2 id="scanner-capabilities-heading">Configured capabilities</h2>
+        <h2 id="scanner-capabilities-heading">Configured checks</h2>
         <table className="scanner-table">
           <thead>
             <tr>
-              <th>Capability</th>
+              <th>Check</th>
               <th>Requirement</th>
               <th>Status</th>
               <th>Queue</th>
@@ -180,10 +190,10 @@ export function ScannerOperations() {
             {capabilities.map((capability) => (
               <tr key={capability.capability}>
                 <td>{capability.capability}</td>
-                <td>{capability.requirement}</td>
+                <td>{requirementLabel(capability.requirement)}</td>
                 <td>
                   <span className={`scanner-capability-status ${capability.status}`}>
-                    {capability.status}
+                    {scannerStatusLabel(capability.status)}
                   </span>
                 </td>
                 <td>{capability.queue_depth ?? "—"}</td>

@@ -1,15 +1,33 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CheckCircle2, RefreshCw, Send, ShieldAlert } from "lucide-react";
-import { useState } from "react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Pencil,
+  Power,
+  RefreshCw,
+  Send,
+  ShieldAlert,
+} from "lucide-react";
+import { useRef, useState } from "react";
 
 import { api, type ApiError } from "../api/client";
+import { expiryError, expiryToRfc3339 } from "../api/policies";
 import { hasPermission, loadSession } from "../auth/session";
 import { StatusPill } from "../components/StatusPill";
 import { ControlRail } from "../components/ControlRail";
+import { Hint } from "../components/primitives/Hint";
+import { Dialog } from "../components/primitives/Dialog";
+import { StepUpPrompt } from "../components/StepUpPrompt";
 import { WorkspaceHeader } from "../components/WorkspaceHeader";
 import { WorkflowGuide } from "../components/WorkflowGuide";
 import { randomUuid } from "../lib/ids";
-import type { StatusTone } from "../lib/status";
+import {
+  auditActionLabel,
+  fingerprintVersionLabel,
+  outboundEventLabel,
+  outboundOutcomeLabel,
+} from "../lib/labels";
+import { severityLabel, type StatusTone } from "../lib/status";
 import "./OutboundIntelligence.css";
 
 interface OutboundIntelligenceSummary {
@@ -121,6 +139,13 @@ interface ApprovedBulkSenderRequest {
   max_unique_recipients_per_hour: number;
   active: boolean;
   reason: string;
+  expires_at?: string | null;
+}
+
+interface ApprovedSenderWriteResult {
+  sender_address: string;
+  active: boolean;
+  changed: boolean;
 }
 
 const sourceKindLabels: Record<SourceKind, string> = {
@@ -195,7 +220,27 @@ function initialApprovalForm(): ApprovedBulkSenderRequest {
     max_unique_recipients_per_hour: 5000,
     active: true,
     reason: "",
+    expires_at: "",
   };
+}
+
+/** Mirrors the server-side bound: an audited reason of 8-512 characters. */
+function approvalReasonError(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (trimmed.length < 8) return "Enter a reason of at least 8 characters.";
+  if (trimmed.length > 512) return "Enter a reason of at most 512 characters.";
+  return undefined;
+}
+
+/** Converts a stored RFC3339 expiry into a `datetime-local` input value. */
+function expiryToLocalInput(value: string | null): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(
+    date.getHours(),
+  )}:${pad(date.getMinutes())}`;
 }
 
 export function OutboundIntelligence() {
@@ -203,6 +248,14 @@ export function OutboundIntelligence() {
   const [approvalForm, setApprovalForm] =
     useState<ApprovedBulkSenderRequest>(initialApprovalForm());
   const [notice, setNotice] = useState<string | null>(null);
+  const [editingApprovalId, setEditingApprovalId] = useState<string | null>(null);
+  const [toggleTarget, setToggleTarget] = useState<{
+    approval: ApprovedBulkSender;
+    active: boolean;
+  } | null>(null);
+  const [toggleReason, setToggleReason] = useState("");
+  const [showToggleError, setShowToggleError] = useState(false);
+  const approvalFormRef = useRef<HTMLElement>(null);
   const session = useQuery({
     queryKey: ["session"],
     queryFn: ({ signal }) => loadSession(signal),
@@ -216,22 +269,111 @@ export function OutboundIntelligence() {
   const canManage = hasPermission(session.data ?? null, "outbound-intelligence:manage");
   const saveApproval = useMutation({
     mutationFn: (request: ApprovedBulkSenderRequest) =>
-      api.post<{ sender_address: string; active: boolean }>(
+      api.post<ApprovedSenderWriteResult>(
         "/outbound-intelligence/approved-senders",
         {
           ...request,
           source_ip: request.source_ip?.trim() ? request.source_ip.trim() : undefined,
+          expires_at: expiryToRfc3339(request.expires_at ?? ""),
         },
         { idempotencyKey: randomUuid() },
       ),
     onSuccess: async (result) => {
       setNotice(
-        `${result.sender_address} is now ${result.active ? "approved" : "inactive"} for outbound bulk.`,
+        result.changed
+          ? `${result.sender_address} approval is now ${result.active ? "On" : "Off"}.`
+          : `${result.sender_address} approval was already ${result.active ? "On" : "Off"}; nothing changed.`,
       );
       setApprovalForm(initialApprovalForm());
+      setEditingApprovalId(null);
       await queryClient.invalidateQueries({ queryKey: ["outbound-intelligence"] });
     },
   });
+  const toggleApproval = useMutation({
+    mutationFn: (request: { approval: ApprovedBulkSender; active: boolean; reason: string }) =>
+      api.post<ApprovedSenderWriteResult>(
+        "/outbound-intelligence/approved-senders",
+        {
+          sender_address: request.approval.sender_address,
+          sending_domain: request.approval.sending_domain,
+          source_kind: request.approval.source_kind,
+          source_id: request.approval.source_id,
+          source_ip: request.approval.source_ip ?? undefined,
+          max_messages_per_minute: request.approval.max_messages_per_minute,
+          max_messages_per_hour: request.approval.max_messages_per_hour,
+          max_recipients_per_message: request.approval.max_recipients_per_message,
+          max_unique_recipients_per_hour: request.approval.max_unique_recipients_per_hour,
+          active: request.active,
+          reason: request.reason,
+          expires_at: request.approval.expires_at ?? null,
+        },
+        { idempotencyKey: randomUuid() },
+      ),
+    onSuccess: async (result) => {
+      setNotice(
+        result.changed
+          ? `${result.sender_address} approval is now ${result.active ? "On" : "Off"}.`
+          : `${result.sender_address} approval was already ${result.active ? "On" : "Off"}; nothing changed.`,
+      );
+      setToggleTarget(null);
+      setToggleReason("");
+      setShowToggleError(false);
+      await queryClient.invalidateQueries({ queryKey: ["outbound-intelligence"] });
+    },
+  });
+
+  function beginEditApproval(approval: ApprovedBulkSender) {
+    setApprovalForm({
+      sender_address: approval.sender_address,
+      sending_domain: approval.sending_domain,
+      source_kind: approval.source_kind,
+      source_id: approval.source_id,
+      source_ip: approval.source_ip ?? "",
+      max_messages_per_minute: approval.max_messages_per_minute,
+      max_messages_per_hour: approval.max_messages_per_hour,
+      max_recipients_per_message: approval.max_recipients_per_message,
+      max_unique_recipients_per_hour: approval.max_unique_recipients_per_hour,
+      active: approval.active,
+      reason: approval.reason,
+      expires_at: expiryToLocalInput(approval.expires_at),
+    });
+    setEditingApprovalId(approval.id);
+    saveApproval.reset();
+    approvalFormRef.current?.scrollIntoView?.({ block: "start" });
+  }
+
+  function cancelEditApproval() {
+    setApprovalForm(initialApprovalForm());
+    setEditingApprovalId(null);
+    saveApproval.reset();
+  }
+
+  function openToggle(approval: ApprovedBulkSender, active: boolean) {
+    setToggleTarget({ approval, active });
+    setToggleReason("");
+    setShowToggleError(false);
+    toggleApproval.reset();
+  }
+
+  function closeToggle() {
+    setToggleTarget(null);
+    setToggleReason("");
+    setShowToggleError(false);
+    toggleApproval.reset();
+  }
+
+  function submitToggle() {
+    if (!toggleTarget) return;
+    if (approvalReasonError(toggleReason) !== undefined) {
+      setShowToggleError(true);
+      return;
+    }
+    toggleApproval.mutate({
+      approval: toggleTarget.approval,
+      active: toggleTarget.active,
+      reason: toggleReason.trim(),
+    });
+  }
 
   if (intelligence.isPending) {
     return (
@@ -251,13 +393,23 @@ export function OutboundIntelligence() {
 
   const data = intelligence.data;
   const submitError = saveApproval.isError ? errorMessage(saveApproval.error) : null;
+  const toggleError = toggleApproval.isError ? errorMessage(toggleApproval.error) : null;
+  const toggleReasonProblem = toggleTarget === null ? undefined : approvalReasonError(toggleReason);
+  const toggleReasonVisible =
+    toggleTarget !== null &&
+    (showToggleError || toggleReason.length > 0) &&
+    toggleReasonProblem !== undefined;
+  const approvalExpiryProblem = expiryError(approvalForm.expires_at ?? "");
+  const editingApproval = editingApprovalId
+    ? (data.approved_senders.find((approval) => approval.id === editingApprovalId) ?? null)
+    : null;
 
   return (
     <div className="outbound-page">
       <WorkspaceHeader
         eyebrow="Outbound protection"
         title="Outbound intelligence"
-        description={`Review sender, source, campaign and containment controls for deployment ${data.deployment_id}.`}
+        description="Review sender, source, campaign and containment controls for this installation."
         scope="Outbound enforcement controls"
         actions={
           <button
@@ -274,41 +426,41 @@ export function OutboundIntelligence() {
 
       <ControlRail
         title="Outbound risk queue"
-        summary="Prioritize open security events before changing sender approval limits or applying containment."
+        summary="Read the open events first, then change sender limits or stop a sender where your role allows."
         signals={[
           {
             label: "Open events",
             value: data.summary.open_security_events,
-            detail: "Outbound security events still awaiting closure.",
+            detail: "Outbound events still awaiting closure.",
             tone: data.summary.open_security_events > 0 ? "attention" : "healthy",
           },
           {
             label: "Critical",
             value: data.summary.critical_security_events,
-            detail: "Critical events in the current security event set.",
+            detail: "Critical events that need attention now.",
             tone: data.summary.critical_security_events > 0 ? "attention" : "healthy",
           },
           {
             label: "Approved senders",
             value: data.summary.approved_bulk_senders,
-            detail: "Bulk senders with an active approved policy.",
+            detail: "Bulk senders approved to send right now.",
             tone: "healthy",
           },
         ]}
       />
 
       <WorkflowGuide
-        title="Contain outbound risk deliberately"
-        description="Use observed send activity to determine whether a sender needs an approved limit, source correction or containment action."
+        title="Act on outbound risk deliberately"
+        description="Use what senders are doing to decide whether a sender needs an approved limit, a source fix, or to be stopped."
         steps={[
-          { label: "Assess", detail: "Read current sender, campaign and security-event signals." },
+          { label: "Assess", detail: "Read the current sender, campaign and event details." },
           {
             label: "Authorize",
-            detail: "Create or change approved sender limits with a recorded reason.",
+            detail: "Create or change a sender's approved limits, with a reason.",
           },
           {
             label: "Contain",
-            detail: "Apply the permitted containment control and verify it in the refreshed state.",
+            detail: "Apply the control your role allows, then refresh to confirm it took.",
           },
         ]}
       />
@@ -330,7 +482,7 @@ export function OutboundIntelligence() {
         <SummaryCard
           label="Unique recipients"
           value={data.summary.unique_recipients_1h}
-          detail="deduplicated hourly"
+          detail="counted once in the last hour"
         />
         <SummaryCard
           label="Active senders"
@@ -340,7 +492,7 @@ export function OutboundIntelligence() {
         <SummaryCard
           label="Approved bulk"
           value={data.summary.approved_bulk_senders}
-          detail="active sender/source approvals"
+          detail="approvals that are on right now"
         />
         <SummaryCard
           label="Open events"
@@ -358,9 +510,15 @@ export function OutboundIntelligence() {
                 <ShieldAlert size={16} aria-hidden="true" />
                 <div>
                   <div className="outbound-event-title">
-                    <strong>{event.event_type.replaceAll("_", " ")}</strong>
-                    <StatusPill tone={severityTone(event.severity)} label={event.severity} />
-                    <StatusPill tone={dispositionTone(event.outcome)} label={event.outcome} />
+                    <strong>{outboundEventLabel(event.event_type)}</strong>
+                    <StatusPill
+                      tone={severityTone(event.severity)}
+                      label={severityLabel(event.severity)}
+                    />
+                    <StatusPill
+                      tone={dispositionTone(event.outcome)}
+                      label={outboundOutcomeLabel(event.outcome)}
+                    />
                   </div>
                   <p>
                     {event.sender_address ?? "unknown sender"} via{" "}
@@ -399,7 +557,7 @@ export function OutboundIntelligence() {
         {data.sender_behaviour.length === 0 ? (
           <div className="outbound-empty">
             <Send size={22} aria-hidden="true" />
-            <p>No outbound sender metrics in the current one-hour window.</p>
+            <p>No senders recorded in the last hour.</p>
           </div>
         ) : (
           <div className="outbound-table-wrap">
@@ -453,7 +611,7 @@ export function OutboundIntelligence() {
         <section className="card outbound-approved" aria-labelledby="approved-senders-heading">
           <h2 id="approved-senders-heading">Approved bulk senders</h2>
           {data.approved_senders.length === 0 ? (
-            <p className="outbound-muted">No sender/source approval is configured.</p>
+            <p className="outbound-muted">No bulk senders are approved yet.</p>
           ) : (
             <div className="outbound-approved-list">
               {data.approved_senders.map((approval) => (
@@ -466,13 +624,33 @@ export function OutboundIntelligence() {
                   </div>
                   <StatusPill
                     tone={approval.active ? "clean" : "review"}
-                    label={approval.active ? "active" : "inactive"}
+                    label={approval.active ? "On" : "Off"}
                   />
                   <p>{approval.reason}</p>
                   <small>
                     {approval.max_messages_per_hour}/h · {approval.max_recipients_per_message}{" "}
                     recipients/message · expires {formatDate(approval.expires_at)}
                   </small>
+                  {canManage ? (
+                    <div className="outbound-approval-actions">
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={() => beginEditApproval(approval)}
+                      >
+                        <Pencil size={13} aria-hidden="true" />
+                        Edit limits
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={() => openToggle(approval, !approval.active)}
+                      >
+                        <Power size={13} aria-hidden="true" />
+                        {approval.active ? "Deactivate" : "Reactivate"}
+                      </button>
+                    </div>
+                  ) : null}
                 </article>
               ))}
             </div>
@@ -480,11 +658,27 @@ export function OutboundIntelligence() {
         </section>
 
         {canManage ? (
-          <section className="card outbound-approval-form" aria-labelledby="approve-bulk-heading">
-            <h2 id="approve-bulk-heading">Approve or update bulk sender</h2>
+          <section
+            className="card outbound-approval-form"
+            aria-labelledby="approve-bulk-heading"
+            ref={approvalFormRef}
+          >
+            <h2 id="approve-bulk-heading">
+              {editingApproval ? "Update approved bulk sender" : "Approve bulk sender"}
+            </h2>
+            {editingApproval ? (
+              <p className="outbound-editing-note">
+                Editing {editingApproval.sender_address} ({editingApproval.source_id}). Saving
+                updates this approval rather than adding a new one.
+                <button type="button" className="btn btn-ghost" onClick={cancelEditApproval}>
+                  Cancel edit
+                </button>
+              </p>
+            ) : null}
             <form
               onSubmit={(event) => {
                 event.preventDefault();
+                if (approvalExpiryProblem) return;
                 saveApproval.mutate(approvalForm);
               }}
             >
@@ -634,6 +828,24 @@ export function OutboundIntelligence() {
                   required
                 />
               </label>
+              <label>
+                Expires optional
+                <input
+                  type="datetime-local"
+                  value={approvalForm.expires_at ?? ""}
+                  onChange={(event) =>
+                    setApprovalForm((current) => ({ ...current, expires_at: event.target.value }))
+                  }
+                  aria-invalid={
+                    Boolean(approvalForm.expires_at) && approvalExpiryProblem !== undefined
+                  }
+                />
+              </label>
+              {approvalForm.expires_at && approvalExpiryProblem ? (
+                <p className="outbound-form-error" role="alert">
+                  {approvalExpiryProblem}
+                </p>
+              ) : null}
               <label className="outbound-checkbox">
                 <input
                   type="checkbox"
@@ -647,9 +859,11 @@ export function OutboundIntelligence() {
                 />
                 Active approval
               </label>
-              <button type="submit" className="btn btn-primary" disabled={saveApproval.isPending}>
-                Save approval
-              </button>
+              <Hint label="Approving a sender raises the limits applied to mail leaving this installation.">
+                <button type="submit" className="btn btn-primary" disabled={saveApproval.isPending}>
+                  {editingApproval ? "Update approval" : "Save approval"}
+                </button>
+              </Hint>
             </form>
           </section>
         ) : null}
@@ -659,7 +873,7 @@ export function OutboundIntelligence() {
         <section className="card outbound-campaigns" aria-labelledby="campaigns-heading">
           <h2 id="campaigns-heading">Campaign fingerprints</h2>
           {data.campaigns.length === 0 ? (
-            <p className="outbound-muted">No campaign fingerprints have been observed.</p>
+            <p className="outbound-muted">No campaigns have been recorded yet.</p>
           ) : (
             <div className="outbound-table-wrap compact">
               <table>
@@ -667,7 +881,7 @@ export function OutboundIntelligence() {
                   <tr>
                     <th>Fingerprint</th>
                     <th>Volume</th>
-                    <th>Disposition</th>
+                    <th>Action taken</th>
                     <th>Last seen</th>
                   </tr>
                 </thead>
@@ -676,7 +890,7 @@ export function OutboundIntelligence() {
                     <tr key={`${campaign.algorithm}-${campaign.fingerprint}`}>
                       <td>
                         <strong>{campaign.fingerprint}</strong>
-                        <span>{campaign.algorithm}</span>
+                        <span>{fingerprintVersionLabel(campaign.algorithm)}</span>
                       </td>
                       <td>
                         {campaign.message_count} messages
@@ -685,7 +899,7 @@ export function OutboundIntelligence() {
                       <td>
                         <StatusPill
                           tone={dispositionTone(campaign.disposition)}
-                          label={campaign.disposition}
+                          label={outboundOutcomeLabel(campaign.disposition)}
                         />
                       </td>
                       <td>{formatDate(campaign.last_seen_at)}</td>
@@ -698,7 +912,7 @@ export function OutboundIntelligence() {
         </section>
 
         <section className="card outbound-history" aria-labelledby="policy-history-heading">
-          <h2 id="policy-history-heading">Policy/action history</h2>
+          <h2 id="policy-history-heading">Recent changes</h2>
           {data.policy_history.length === 0 ? (
             <p className="outbound-muted">No outbound approval changes recorded yet.</p>
           ) : (
@@ -707,7 +921,7 @@ export function OutboundIntelligence() {
                 <article key={entry.id}>
                   <CheckCircle2 size={15} aria-hidden="true" />
                   <div>
-                    <strong>{entry.action.replaceAll("_", " ")}</strong>
+                    <strong>{auditActionLabel(entry.action)}</strong>
                     <p>
                       {entry.resource_id ?? "outbound policy"} by {entry.actor_login}
                     </p>
@@ -724,8 +938,9 @@ export function OutboundIntelligence() {
         <div>
           <h2 id="notification-heading">Notification and incident state</h2>
           <p>
-            Critical compromised-sender and suspended-outbound events are aggregated before incident
-            creation. Open events above are the customer-visible queue for Support/System follow-up.
+            When a sender is compromised or outbound is stopped, related events are grouped before
+            an incident is raised. The open events above are what the customer can see and what
+            Support and System follow up on.
           </p>
         </div>
         {data.summary.open_security_events > 0 ? (
@@ -734,6 +949,70 @@ export function OutboundIntelligence() {
           <CheckCircle2 size={22} aria-hidden="true" />
         )}
       </section>
+
+      <Dialog
+        open={toggleTarget !== null}
+        onClose={closeToggle}
+        title={toggleTarget?.active ? "Reactivate approved sender" : "Deactivate approved sender"}
+      >
+        {toggleTarget ? (
+          <form
+            className="outbound-toggle-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitToggle();
+            }}
+          >
+            <p className="outbound-toggle-summary">
+              <strong>{toggleTarget.approval.sender_address}</strong> via{" "}
+              {sourceKindLabels[toggleTarget.approval.source_kind]} ·{" "}
+              {toggleTarget.approval.source_id} becomes{" "}
+              <strong>{toggleTarget.active ? "On" : "Off"}</strong>. Rate limits and expiry are
+              kept.
+            </p>
+            <label>
+              Reason
+              <textarea
+                value={toggleReason}
+                onChange={(event) => setToggleReason(event.target.value)}
+                rows={3}
+                placeholder={
+                  toggleTarget.active
+                    ? "Why is this approval being reactivated?"
+                    : "Why is this approval being suspended?"
+                }
+                aria-invalid={toggleReasonVisible}
+              />
+            </label>
+            {toggleReasonVisible && toggleReasonProblem !== undefined ? (
+              <p className="outbound-form-error" role="alert">
+                {toggleReasonProblem}
+              </p>
+            ) : null}
+            {toggleError ? (
+              <>
+                <p className="outbound-form-error" role="alert">
+                  {toggleError}
+                </p>
+                <StepUpPrompt error={toggleApproval.error} />
+              </>
+            ) : null}
+            <div className="outbound-form-actions">
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={closeToggle}
+                disabled={toggleApproval.isPending}
+              >
+                Cancel
+              </button>
+              <button type="submit" className="btn btn-primary" disabled={toggleApproval.isPending}>
+                {toggleTarget.active ? "Reactivate approval" : "Deactivate approval"}
+              </button>
+            </div>
+          </form>
+        ) : null}
+      </Dialog>
     </div>
   );
 }

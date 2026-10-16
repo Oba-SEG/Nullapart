@@ -9,7 +9,7 @@ import {
 } from "@tanstack/react-router";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { OutboundIntelligence } from "./OutboundIntelligence";
 
@@ -140,6 +140,7 @@ function stubFetch() {
         data: {
           sender_address: "bulk@example.test",
           active: true,
+          changed: true,
         },
       });
     }
@@ -174,6 +175,15 @@ function renderAt(entry: string) {
 }
 
 describe("OutboundIntelligence", () => {
+  beforeAll(() => {
+    HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
+      this.open = true;
+    };
+    HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement) {
+      this.open = false;
+    };
+  });
+
   it("renders outbound summaries, events, campaigns and approval controls", async () => {
     stubFetch();
     renderAt("/outbound-intelligence");
@@ -182,7 +192,12 @@ describe("OutboundIntelligence", () => {
     const summary = screen.getByRole("region", { name: "Outbound summary" });
     expect(within(summary).getByText("Messages")).toBeTruthy();
     expect(within(summary).getByText("42")).toBeTruthy();
-    expect(screen.getByText("unauthorized bulk")).toBeTruthy();
+    expect(screen.getByText("Unapproved bulk sending")).toBeTruthy();
+    // No wire token survives into a primary position on this page.
+    expect(screen.queryByText("unauthorized bulk")).toBeNull();
+    expect(screen.getAllByText("Critical").length).toBeGreaterThan(0);
+    expect(screen.getByText("Campaign rule v1")).toBeTruthy();
+    expect(screen.getByText("Approved sender changed")).toBeTruthy();
     expect(screen.getByText(/rotate connector credentials/i)).toBeTruthy();
     expect(screen.getByText(/docs\/runbooks\/OUTBOUND-ABUSE-RESPONSE.md/)).toBeTruthy();
     expect(screen.getAllByText("bulk@example.test").length).toBeGreaterThan(0);
@@ -212,6 +227,77 @@ describe("OutboundIntelligence", () => {
       expect(
         (approvalCall?.[1]?.headers as Record<string, string>)["X-Idempotency-Key"],
       ).toBeTruthy();
+    });
+  });
+
+  it("deactivates an approval through the upsert while preserving its limits", async () => {
+    const fetchMock = stubFetch();
+    const user = userEvent.setup();
+    renderAt("/outbound-intelligence");
+    await screen.findByRole("heading", { name: "Outbound intelligence" });
+
+    await user.click(screen.getByRole("button", { name: "Deactivate" }));
+
+    const dialog = screen.getByRole("dialog", { name: /deactivate approved sender/i });
+    await user.type(
+      within(dialog).getByLabelText("Reason"),
+      "Campaign ended; suspend bulk approval",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Deactivate approval" }));
+
+    await waitFor(() => {
+      const toggleCall = fetchMock.mock.calls.find(
+        ([input, init]) =>
+          String(input).endsWith("/outbound-intelligence/approved-senders") &&
+          init?.method === "POST",
+      );
+      expect(toggleCall).toBeTruthy();
+      expect(JSON.parse(String(toggleCall?.[1]?.body))).toEqual({
+        sender_address: "bulk@example.test",
+        sending_domain: "example.test",
+        source_kind: "smtp_mta",
+        source_id: "mx-1",
+        source_ip: "192.0.2.10",
+        max_messages_per_minute: 20,
+        max_messages_per_hour: 500,
+        max_recipients_per_message: 100,
+        max_unique_recipients_per_hour: 5000,
+        active: false,
+        reason: "Campaign ended; suspend bulk approval",
+        expires_at: null,
+      });
+      expect(
+        (toggleCall?.[1]?.headers as Record<string, string>)["X-Idempotency-Key"],
+      ).toBeTruthy();
+    });
+  });
+
+  it("prefills the approval form for editing and rewrites the approval", async () => {
+    const fetchMock = stubFetch();
+    const user = userEvent.setup();
+    renderAt("/outbound-intelligence");
+    await screen.findByRole("heading", { name: "Outbound intelligence" });
+
+    await user.click(screen.getByRole("button", { name: "Edit limits" }));
+
+    expect(screen.getByRole("heading", { name: "Update approved bulk sender" })).toBeTruthy();
+    expect(screen.getByLabelText("Sender address")).toHaveValue("bulk@example.test");
+    expect(screen.getByLabelText("Msg/hour")).toHaveValue(500);
+
+    await user.type(screen.getByLabelText("Reason"), " raise hourly cap for launch");
+    await user.click(screen.getByRole("button", { name: "Update approval" }));
+
+    await waitFor(() => {
+      const editCall = fetchMock.mock.calls.find(
+        ([input, init]) =>
+          String(input).endsWith("/outbound-intelligence/approved-senders") &&
+          init?.method === "POST",
+      );
+      const body = JSON.parse(String(editCall?.[1]?.body));
+      expect(body.max_messages_per_hour).toBe(500);
+      expect(body.reason).toBe("Approved launch campaign raise hourly cap for launch");
+      expect(body.active).toBe(true);
+      expect((editCall?.[1]?.headers as Record<string, string>)["X-Idempotency-Key"]).toBeTruthy();
     });
   });
 });

@@ -178,7 +178,12 @@ describe("ConnectorsRemediation", () => {
     renderAt();
     expect(await screen.findByText("Connectors & remediation")).toBeTruthy();
     expect(screen.getAllByText("Microsoft 365 ZA").length).toBeGreaterThan(0);
-    expect(screen.getByText("directory sync")).toBeTruthy();
+    expect(screen.getAllByText("Directory sync").length).toBeGreaterThan(0);
+    expect(screen.getByText(/credentials: Credentials valid/)).toBeTruthy();
+    expect(screen.getByText("Recorded, not yet run")).toBeTruthy();
+    expect(screen.getByText(/Succeeded · users/)).toBeTruthy();
+    expect(screen.getAllByText("Move to quarantine").length).toBeGreaterThan(1);
+    expect(screen.queryByText("pending")).toBeNull();
     expect(screen.queryByText(/refresh token/i)).toBeNull();
   });
 
@@ -189,7 +194,7 @@ describe("ConnectorsRemediation", () => {
     await screen.findByText("Save connector");
     const user = userEvent.setup();
     await user.type(screen.getByLabelText("Display name"), "Google Workspace ZA");
-    await user.type(screen.getByLabelText("External tenant hash"), "tenant_hash_abcdef");
+    await user.type(screen.getByLabelText("External account ID"), "tenant_hash_abcdef");
     await user.type(screen.getByLabelText("Credential reference hash"), "credential_hash_abcdef");
     await user.clear(screen.getByLabelText("Directory scopes"));
     await user.type(screen.getByLabelText("Directory scopes"), "User.Read.All");
@@ -218,10 +223,7 @@ describe("ConnectorsRemediation", () => {
       screen.getByLabelText("Connector"),
       "11111111-1111-1111-1111-111111111111",
     );
-    await user.type(
-      screen.getByLabelText("Tenant message ID"),
-      "44444444-4444-4444-4444-444444444444",
-    );
+    await user.type(screen.getByLabelText("Message ID"), "44444444-4444-4444-4444-444444444444");
     await user.type(screen.getByLabelText("Mailbox address hash"), "mailbox_hash_abcdef");
     await user.type(screen.getByLabelText("Provider message hash"), "provider_hash_abcdef");
     await user.type(screen.getAllByLabelText("Reason")[1], "Post delivery threat remediation.");
@@ -237,6 +239,69 @@ describe("ConnectorsRemediation", () => {
     });
   });
 
+  it("prefills the connector form for editing and rewrites the record", async () => {
+    const fetchMock = mockFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    renderAt();
+    await screen.findByText("Save connector");
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "Edit capability" }));
+
+    expect(screen.getByRole("heading", { name: "Update connector capability" })).toBeTruthy();
+    expect(screen.getByLabelText("Display name")).toHaveValue("Microsoft 365 ZA");
+    expect(screen.getByLabelText("Directory scopes")).toHaveValue("User.Read.All");
+    expect(screen.getByLabelText("Mailbox search scopes")).toHaveValue("Mail.Read");
+
+    await user.type(screen.getByLabelText("Credential reference hash"), "credential_hash_abcdef");
+    await user.type(
+      screen.getAllByLabelText("Reason")[0],
+      "Rotated credential reference and confirmed scopes.",
+    );
+    await user.click(screen.getByRole("button", { name: "Update connector" }));
+
+    await waitFor(() => {
+      const editCall = fetchMock.mock.calls.find(
+        ([input, init]) =>
+          String(input).endsWith("/connectors-remediation/connectors") && init?.method === "POST",
+      );
+      expect(editCall).toBeTruthy();
+      const body = JSON.parse(String(editCall?.[1]?.body));
+      expect(body.display_name).toBe("Microsoft 365 ZA");
+      expect(body.external_tenant_id_hash).toBe("tenant_hash_123456");
+      expect(body.capabilities[0].granted_scopes).toEqual(["User.Read.All"]);
+      expect(body.capabilities[1].granted_scopes).toEqual(["Mail.Read"]);
+      expect(body.capabilities[2].enabled).toBe(false);
+    });
+  });
+
+  it("records the remediation purpose with the request", async () => {
+    const fetchMock = mockFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    renderAt();
+    await screen.findByText("Record remediation intent");
+    const user = userEvent.setup();
+    await user.selectOptions(
+      screen.getByLabelText("Connector"),
+      "11111111-1111-1111-1111-111111111111",
+    );
+    await user.type(screen.getByLabelText("Message ID"), "44444444-4444-4444-4444-444444444444");
+    await user.type(screen.getByLabelText("Mailbox address hash"), "mailbox_hash_abcdef");
+    await user.selectOptions(screen.getByLabelText("Purpose"), "customer_reported_phishing");
+    await user.type(screen.getAllByLabelText("Reason")[1], "Customer reported the message.");
+    await user.click(screen.getByText("Record remediation intent"));
+    await waitFor(() => {
+      const remediationCall = fetchMock.mock.calls.find(
+        ([input, init]) =>
+          String(input).endsWith("/connectors-remediation/remediations") && init?.method === "POST",
+      );
+      expect(remediationCall).toBeTruthy();
+      expect(JSON.parse(String(remediationCall?.[1]?.body)).purpose).toBe(
+        "customer_reported_phishing",
+      );
+    });
+  });
+
   it("surfaces the step-up re-auth prompt when connector save is rejected", async () => {
     vi.stubGlobal(
       "fetch",
@@ -246,7 +311,7 @@ describe("ConnectorsRemediation", () => {
     await screen.findByText("Save connector");
     const user = userEvent.setup();
     await user.type(screen.getByLabelText("Display name"), "Google Workspace ZA");
-    await user.type(screen.getByLabelText("External tenant hash"), "tenant_hash_abcdef");
+    await user.type(screen.getByLabelText("External account ID"), "tenant_hash_abcdef");
     await user.type(screen.getByLabelText("Credential reference hash"), "credential_hash_abcdef");
     await user.type(
       screen.getAllByLabelText("Reason")[0],
@@ -269,10 +334,7 @@ describe("ConnectorsRemediation", () => {
       screen.getByLabelText("Connector"),
       "11111111-1111-1111-1111-111111111111",
     );
-    await user.type(
-      screen.getByLabelText("Tenant message ID"),
-      "44444444-4444-4444-4444-444444444444",
-    );
+    await user.type(screen.getByLabelText("Message ID"), "44444444-4444-4444-4444-444444444444");
     await user.type(screen.getByLabelText("Mailbox address hash"), "mailbox_hash_abcdef");
     await user.type(screen.getAllByLabelText("Reason")[1], "Post delivery threat remediation.");
     await user.click(screen.getByText("Record remediation intent"));

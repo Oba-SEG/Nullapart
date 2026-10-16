@@ -6,9 +6,18 @@ import { api, type ApiError } from "../api/client";
 import { hasPermission, loadSession } from "../auth/session";
 import { StatusPill } from "../components/StatusPill";
 import { ControlRail } from "../components/ControlRail";
+import { Hint } from "../components/primitives/Hint";
 import { WorkspaceHeader } from "../components/WorkspaceHeader";
 import { WorkflowGuide } from "../components/WorkflowGuide";
 import { randomUuid } from "../lib/ids";
+import {
+  checkVerdictLabel,
+  dmarcPolicyLabel,
+  domainTypeLabel,
+  sourceClassificationLabel,
+  tokenLabel,
+  verificationStatusLabel,
+} from "../lib/labels";
 import type { StatusTone } from "../lib/status";
 import "./DomainSecurity.css";
 
@@ -173,9 +182,8 @@ function policyTone(policy: string | null): StatusTone {
 }
 
 function bimiStatusLabel(bimi: BimiStatus): string {
-  return bimi.validation_scope === "dns_metadata_only"
-    ? `${bimi.status} — DNS metadata only`
-    : bimi.status;
+  const verdict = checkVerdictLabel(bimi.status);
+  return bimi.validation_scope === "dns_metadata_only" ? `${verdict} (DNS records only)` : verdict;
 }
 
 function SummaryCard({
@@ -219,10 +227,7 @@ export function DomainSecurity() {
       }),
     onSuccess: async (result) => {
       setNotice(
-        `${result.source_key} on ${result.domain} is now ${result.classification.replaceAll(
-          "_",
-          " ",
-        )}.`,
+        `${result.domain} sending source is now ${sourceClassificationLabel(result.classification).toLowerCase()}.`,
       );
       await queryClient.invalidateQueries({ queryKey: ["domain-security"] });
     },
@@ -277,7 +282,7 @@ export function DomainSecurity() {
       <WorkspaceHeader
         eyebrow="Trust & identity"
         title="Domain security"
-        description={`DMARC reporting, sender inventory, external report authorization, and DNS-only BIMI readiness for ${data.deployment_id}.`}
+        description={`DMARC reporting, sending sources, external report receiving and BIMI logo readiness for ${data.deployment_id}.`}
         scope="Domain configuration"
         actions={
           <button
@@ -294,12 +299,12 @@ export function DomainSecurity() {
 
       <ControlRail
         title="Domain trust priorities"
-        summary="Start with broken report authorization and unknown sources before treating a domain as ready for send identity."
+        summary="Start with broken report receiving and unknown sources before you treat a domain as ready to send from."
         signals={[
           {
             label: "Verified domains",
             value: `${data.summary.verified_domains}/${data.summary.domains_total}`,
-            detail: "Domains whose configured verification is currently accepted.",
+            detail: "Domains that pass verification now.",
             tone:
               data.summary.verified_domains === data.summary.domains_total
                 ? "healthy"
@@ -308,13 +313,13 @@ export function DomainSecurity() {
           {
             label: "Unknown sources",
             value: data.summary.unknown_sources,
-            detail: "Observed sources awaiting an explicit classification.",
+            detail: "Sending sources that still need a classification.",
             tone: data.summary.unknown_sources > 0 ? "attention" : "healthy",
           },
           {
             label: "Open notices",
             value: data.summary.open_notifications,
-            detail: "Published domain-security observations that need review.",
+            detail: "Domain checks that need your review.",
             tone: data.summary.open_notifications > 0 ? "attention" : "healthy",
           },
         ]}
@@ -322,7 +327,7 @@ export function DomainSecurity() {
 
       <WorkflowGuide
         title="Establish a defensible sending identity"
-        description="Work from the observed verification state, then correct the domain configuration through the server-authorized deployment workflow."
+        description="Work from what you observe, then correct the domain configuration where your role allows."
         steps={[
           {
             label: "Observe",
@@ -330,11 +335,11 @@ export function DomainSecurity() {
           },
           {
             label: "Correct",
-            detail: "Apply the permitted domain configuration change with an explicit reason.",
+            detail: "Make the domain change your role allows, with a reason.",
           },
           {
             label: "Verify",
-            detail: "Refresh observed state before treating the domain as ready for use.",
+            detail: "Refresh and confirm before treating the domain as ready.",
           },
         ]}
       />
@@ -359,7 +364,7 @@ export function DomainSecurity() {
         <SummaryCard
           label="DMARC alignment"
           value={aligned}
-          detail={`${data.summary.messages_30d} messages in 30d reports`}
+          detail={`${data.summary.messages_30d} messages in the last 30 days`}
         />
         <SummaryCard
           label="Unknown sources"
@@ -367,19 +372,19 @@ export function DomainSecurity() {
           detail="need classification"
         />
         <SummaryCard
-          label="Broken report auth"
+          label="Report receiving"
           value={data.summary.report_authorization_broken}
-          detail="external rua authorization"
+          detail="external receiving needs attention"
         />
         <SummaryCard
-          label="BIMI not ready"
+          label="BIMI logo not ready"
           value={data.summary.bimi_not_ready}
-          detail="DNS readiness gaps; SVG/VMC are not fetched"
+          detail="logo checks that need attention"
         />
         <SummaryCard
           label="Open alerts"
           value={data.summary.open_notifications}
-          detail="domain-security notifications"
+          detail="domain checks that need your review"
         />
       </section>
 
@@ -409,7 +414,7 @@ export function DomainSecurity() {
           <ShieldCheck size={28} aria-hidden="true" />
           <div>
             <h2>No domains yet</h2>
-            <p>Add and verify customer domains before DMARC/BIMI posture can be assessed.</p>
+            <p>Add and verify customer domains to see their sending and logo checks here.</p>
           </div>
         </section>
       ) : (
@@ -420,12 +425,13 @@ export function DomainSecurity() {
                 <div>
                   <h2>{domain.domain}</h2>
                   <p>
-                    {domain.domain_type.replaceAll("_", " ")} · {domain.verification_status}
+                    {domainTypeLabel(domain.domain_type)} ·{" "}
+                    {verificationStatusLabel(domain.verification_status)}
                   </p>
                 </div>
                 <StatusPill
                   tone={policyTone(domain.dmarc.latest_policy)}
-                  label={`DMARC ${domain.dmarc.latest_policy ?? "missing"}`}
+                  label={`DMARC ${dmarcPolicyLabel(domain.dmarc.latest_policy ?? "missing")}`}
                 />
               </div>
 
@@ -457,25 +463,33 @@ export function DomainSecurity() {
                   </dl>
                 </section>
 
-                <section aria-label={`${domain.domain} report authorization`}>
-                  <h3>External report authorization</h3>
+                <section aria-label={`${domain.domain} report receiving`}>
+                  <h3>
+                    <Hint label="Where domain reports are sent">
+                      <span className="hint-term">External report receiving</span>
+                    </Hint>
+                  </h3>
                   {domain.report_authorization ? (
                     <div className="domain-security-record">
                       <StatusPill
                         tone={toneForStatus(domain.report_authorization.status)}
-                        label={domain.report_authorization.status}
+                        label={checkVerdictLabel(domain.report_authorization.status)}
                       />
                       <code>{domain.report_authorization.owner_name}</code>
                       <span>TXT {domain.report_authorization.expected_value}</span>
                       <small>{domain.report_authorization.detail}</small>
                     </div>
                   ) : (
-                    <p className="domain-security-muted">No authorization observation recorded.</p>
+                    <p className="domain-security-muted">No report receiving check recorded yet.</p>
                   )}
                 </section>
 
                 <section aria-label={`${domain.domain} BIMI readiness`}>
-                  <h3>BIMI readiness</h3>
+                  <h3>
+                    <Hint label="These checks read DNS records only; logo files are not downloaded.">
+                      <span className="hint-term">BIMI readiness</span>
+                    </Hint>
+                  </h3>
                   {domain.bimi ? (
                     <div className="domain-security-record">
                       <StatusPill
@@ -483,22 +497,19 @@ export function DomainSecurity() {
                         label={bimiStatusLabel(domain.bimi)}
                       />
                       <span>Selector {domain.bimi.selector}</span>
-                      <span>SVG URL {domain.bimi.svg_status} (not fetched)</span>
-                      <span>Certificate URL {domain.bimi.certificate_status} (not validated)</span>
-                      <span>DMARC {domain.bimi.dmarc_enforcement_status}</span>
+                      <span>Logo file {checkVerdictLabel(domain.bimi.svg_status)}</span>
+                      <span>Certificate {checkVerdictLabel(domain.bimi.certificate_status)}</span>
+                      <span>DMARC {checkVerdictLabel(domain.bimi.dmarc_enforcement_status)}</span>
                       {domain.bimi.logo_url ? (
                         <span className="domain-security-logo-url">
                           <ExternalLink size={13} aria-hidden="true" />
                           {domain.bimi.logo_url}
                         </span>
                       ) : null}
-                      <small>
-                        DNS metadata only. Nullapart does not fetch, render, or cryptographically
-                        validate BIMI SVG or VMC/CMC material.
-                      </small>
+                      <small>These checks read DNS records only.</small>
                     </div>
                   ) : (
-                    <p className="domain-security-muted">No BIMI observation recorded.</p>
+                    <p className="domain-security-muted">No BIMI check recorded yet.</p>
                   )}
                 </section>
               </div>
@@ -511,7 +522,7 @@ export function DomainSecurity() {
                 {domain.next_actions.length === 0 ? (
                   <p className="domain-security-good">
                     <CheckCircle2 size={15} aria-hidden="true" />
-                    No immediate action from recorded observations.
+                    No action needed from the checks recorded so far.
                   </p>
                 ) : (
                   <ul>
@@ -525,9 +536,7 @@ export function DomainSecurity() {
               <section aria-label={`${domain.domain} source inventory`}>
                 <h3>Top sources</h3>
                 {domain.sources.length === 0 ? (
-                  <p className="domain-security-muted">
-                    No aggregate report sources in the last 30 days.
-                  </p>
+                  <p className="domain-security-muted">No report sources in the last 30 days.</p>
                 ) : (
                   <div className="domain-security-table-wrap">
                     <table>
@@ -548,7 +557,13 @@ export function DomainSecurity() {
                               <strong>{source.source_ip}</strong>
                               {source.source_domain ? <span>{source.source_domain}</span> : null}
                             </td>
-                            <td>{source.classification.replaceAll("_", " ")}</td>
+                            <td>
+                              <Hint label="How the platform judges this sending source. Authorized matches your published policy; partially set up sources have a record that does not line up yet.">
+                                <span className="hint-term">
+                                  {sourceClassificationLabel(source.classification)}
+                                </span>
+                              </Hint>
+                            </td>
                             <td>{source.messages_30d}</td>
                             <td>
                               {percent(source.dmarc_aligned_messages_30d, source.messages_30d)}
@@ -603,14 +618,14 @@ export function DomainSecurity() {
               </section>
 
               {domain.observations.length > 0 ? (
-                <section aria-label={`${domain.domain} observer checks`}>
-                  <h3>Observer checks</h3>
+                <section aria-label={`${domain.domain} domain checks`}>
+                  <h3>Domain checks</h3>
                   <div className="domain-security-observations">
                     {domain.observations.map((observation) => (
                       <div key={`${domain.id}-${observation.check_type}`}>
                         <StatusPill
                           tone={toneForStatus(observation.status)}
-                          label={observation.check_type.replaceAll("_", " ")}
+                          label={tokenLabel(observation.check_type)}
                         />
                         <span>{observation.detail}</span>
                       </div>

@@ -7,6 +7,7 @@ import { readStoredTheme, setTheme, subscribeTheme, type Theme } from "../lib/th
 import { useSyncExternalStore } from "react";
 import { Button } from "../components/primitives/Button";
 import { ControlRail } from "../components/ControlRail";
+import { Hint } from "../components/primitives/Hint";
 import { WorkspaceHeader } from "../components/WorkspaceHeader";
 import { WorkflowGuide } from "../components/WorkflowGuide";
 import "./Settings.css";
@@ -48,44 +49,44 @@ export function Settings() {
       <WorkspaceHeader
         eyebrow="Console preferences"
         title="Settings"
-        description="Control local display preferences and review the authenticated session that is operating this console. Browser preferences never affect server-side access."
+        description="Set how the console looks on this device and check the session you are signed in with. These browser preferences do not change what you can access."
         scope="Local browser preferences"
       />
 
       <ControlRail
         title="Session and local preference state"
-        summary="Only the display mode is stored in this browser. Identity, permissions and runtime status are supplied by the authenticated server session."
+        summary="Only the display mode is saved in this browser. Your identity, permissions and live status come from your sign-in."
         signals={[
-          { label: "Theme", value: theme, detail: "Current browser-local console preference." },
+          { label: "Theme", value: theme, detail: "The display mode for this browser." },
           {
             label: "Permissions",
             value: session?.permissions?.length ?? "—",
-            detail: "Permissions reported by the active session.",
+            detail: "Permissions on your current session.",
           },
           {
             label: "Runtime",
             value: canSeeRuntime ? "permitted" : "restricted",
-            detail: "Runtime detail follows the current server-authorized role.",
+            detail: "Runtime detail appears only when your role allows it.",
             tone: canSeeRuntime ? "healthy" : "neutral",
           },
         ]}
       />
 
       <WorkflowGuide
-        title="Separate console preference from authority"
-        description="This page makes it explicit which settings live in the browser and which runtime information is read from the authenticated server session."
+        title="Separate console preference from access"
+        description="This page shows which settings live in your browser and which come from your sign-in."
         steps={[
           {
             label: "Set appearance",
-            detail: "Choose the local display mode for this browser profile.",
+            detail: "Pick the display mode for this browser.",
           },
           {
             label: "Confirm session",
-            detail: "Review the active identity and any customer-entry context.",
+            detail: "Check who you are signed in as and whether you have entered a customer.",
           },
           {
             label: "Inspect runtime",
-            detail: "Use live runtime detail only when your role permits it.",
+            detail: "Use live runtime detail only when your role allows it.",
           },
         ]}
       />
@@ -96,8 +97,8 @@ export function Settings() {
             Appearance
           </h2>
           <p className="settings-hint">
-            The console ships Midnight (dark) as the default. The choice is stored in this browser
-            profile only and never affects server-side access.
+            Midnight (dark) is the default. Your choice is saved in this browser only and does not
+            change what you can access.
           </p>
           <div className="settings-segmented" role="group" aria-label="Theme">
             {options.map(({ value, label, Icon }) => (
@@ -132,13 +133,17 @@ export function Settings() {
                     </span>
                   ))}
                 </dd>
-                <dt>Customer scope</dt>
-                <dd>{session.customerId ?? "System scope"}</dd>
+                <dt>Customer</dt>
+                <dd>{session.customerId ?? "Platform"}</dd>
                 <dt>Permissions</dt>
                 <dd>{session.permissions?.length ?? 0} granted</dd>
                 <dt>Session expires</dt>
                 <dd>{new Date(session.expiresAt).toLocaleString()}</dd>
-                <dt>Step-up re-auth</dt>
+                <dt>
+                  <Hint label="Re-authentication confirms it is you before a high-risk action. It stays valid for a short window.">
+                    <span className="hint-term">Re-authentication</span>
+                  </Hint>
+                </dt>
                 <dd>{session.stepUpActive ? "Active" : "Not active"}</dd>
               </dl>
               <Button variant="ghost" onClick={() => void logout()}>
@@ -167,9 +172,9 @@ export function Settings() {
                 <dl className="settings-facts">
                   <dt>Deployment</dt>
                   <dd>{runtime.data.deployment_id}</dd>
-                  <dt>Config revision</dt>
+                  <dt>Config version</dt>
                   <dd>{runtime.data.config.db_revision ?? "Unknown"}</dd>
-                  <dt>Outbox backlog</dt>
+                  <dt>Pending publication</dt>
                   <dd>{runtime.data.outbox.unpublished_count} unpublished</dd>
                   <dt>Dead letters</dt>
                   <dd>{runtime.data.dead_letters.count} pending</dd>

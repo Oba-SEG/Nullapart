@@ -199,14 +199,34 @@ describe("Models", () => {
     );
   });
 
-  it("hides administration controls without the manage permission", async () => {
+  it("explains why the controls are absent without the manage permission", async () => {
     stubFetch({ session: viewerSession, models: [pendingModel] });
     renderAt("/models");
 
     await screen.findByRole("heading", { name: "Inline ML control plane" });
+    expect(await screen.findByText("Awaiting approval")).toBeTruthy();
+    expect((await screen.findAllByText("Not active")).length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
     expect(screen.queryByRole("region", { name: "Model administration" })).toBeNull();
-    expect(screen.getByText(/cannot change runtime state/i)).toBeTruthy();
+    expect(screen.getByText(/Those actions need the model management permission/i)).toBeTruthy();
+  });
+
+  it("explains a switched-off action instead of leaving it silent", async () => {
+    stubFetch({ session: managerSession, models: [activeModel] });
+    renderAt("/models");
+
+    await screen.findByRole("heading", { name: "Inline ML control plane" });
+    const approve = await screen.findByRole("button", { name: "Approve" });
+    expect(approve).toBeDisabled();
+
+    // A disabled control cannot take focus, so the hint wrapper borrows the tab
+    // stop and the reason stays reachable by keyboard.
+    const hint = approve.closest("span.hint") as HTMLElement;
+    expect(hint).toHaveAttribute("tabindex", "0");
+
+    hint.focus();
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip).toHaveTextContent(/already approved/i);
   });
 
   it("does not approve until the confirmation dialog is confirmed", async () => {
@@ -382,8 +402,8 @@ describe("Models", () => {
     await user.type(screen.getByLabelText("Artifact SHA-256"), "b".repeat(64));
     await user.type(screen.getByLabelText("Macro F1"), "0.9862");
     await user.type(screen.getByLabelText("ROC-AUC"), "1.0");
-    await user.type(screen.getByLabelText("Ham FP rate"), "0.0042");
-    await user.type(screen.getByLabelText("p95 latency (ms)"), "41.01");
+    await user.type(screen.getByLabelText("Clean-mail false positive rate"), "0.0042");
+    await user.type(screen.getByLabelText("95th percentile latency (ms)"), "41.01");
 
     await user.click(screen.getByRole("button", { name: "Register model" }));
 
@@ -412,7 +432,7 @@ describe("Models", () => {
 
     await screen.findByRole("heading", { name: "Inline ML control plane" });
     await user.type(await screen.findByLabelText("Evaluation set"), "shadow-eval-2026-10-04");
-    await user.type(screen.getByLabelText("Macro F1 delta"), "0.021");
+    await user.type(screen.getByLabelText("Macro F1 change"), "0.021");
     await user.selectOptions(screen.getByLabelText("Comparison decision"), "promote_candidate");
 
     await user.click(screen.getByRole("button", { name: "Record shadow evidence" }));

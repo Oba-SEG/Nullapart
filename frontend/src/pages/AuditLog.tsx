@@ -10,9 +10,12 @@ import { WorkspaceHeader } from "../components/WorkspaceHeader";
 import { WorkflowGuide } from "../components/WorkflowGuide";
 import { Button } from "../components/primitives/Button";
 import { Dialog } from "../components/primitives/Dialog";
+import { Hint } from "../components/primitives/Hint";
 import "./AuditLog.css";
 
+import { auditActionLabel } from "../lib/labels";
 import { notify } from "../lib/notify";
+import { checkpointStatusLabel, resultLabel } from "../lib/status";
 import { humanizeToken } from "../lib/text";
 interface AuditEvent {
   id: string;
@@ -168,37 +171,39 @@ export function AuditLog() {
       <WorkspaceHeader
         eyebrow="Evidence & accountability"
         title="Audit log"
-        description="Investigate administrative and security events within your permitted scope. Records stay redacted, append-only and never expose raw event JSON."
-        scope="Audited read access"
+        description="Review administrative and security events you are allowed to see. Records stay redacted, append-only and never show raw event data."
+        scope="Read only"
         actions={
-          <Button onClick={() => void exportCsv()} disabled={!canExport || events.length === 0}>
-            <Download size={16} aria-hidden="true" />
-            Export CSV
-          </Button>
+          <Hint label="Download the events you can see as a CSV file. Export needs the audit export permission and is recorded.">
+            <Button onClick={() => void exportCsv()} disabled={!canExport || events.length === 0}>
+              <Download size={16} aria-hidden="true" />
+              Export CSV
+            </Button>
+          </Hint>
         }
       />
 
       <ControlRail
         title="Evidence queue"
-        summary="Filters scope the records in view; exports remain a separate, step-up-protected evidence operation."
+        summary="Filters narrow the records in view. Export is a separate action and needs re-authentication."
         signals={[
           {
             label: "Records",
             value: page.isSuccess ? events.length : page.isError ? "Unavailable" : "Loading",
             detail: page.isSuccess
               ? "Audit events loaded under the current filters."
-              : "No evidence count is inferred before a successful audit query.",
+              : "The count appears once the events load.",
           },
           {
             label: "Checkpoint",
             value: checkpoint.isSuccess
-              ? checkpoint.data.state
+              ? checkpointStatusLabel(checkpoint.data.state)
               : checkpoint.isError
                 ? "Unavailable"
                 : "Loading",
             detail: checkpoint.isSuccess
-              ? "Integrity checkpoint state for this deployment."
-              : "Checkpoint health is unavailable until the server response succeeds.",
+              ? "Integrity checkpoint state for this installation."
+              : "Checkpoint status appears once the data loads.",
             tone: checkpoint.isSuccess
               ? checkpoint.data.state === "current"
                 ? "healthy"
@@ -207,36 +212,33 @@ export function AuditLog() {
           },
           {
             label: "Export",
-            value: canExport ? "permitted" : "restricted",
-            detail: "CSV export is separately permissioned and audited.",
+            value: canExport ? "Allowed" : "Restricted",
+            detail: "CSV export needs its own permission and is recorded in the log.",
           },
         ]}
       />
 
       <WorkflowGuide
         title="Turn records into an investigation trail"
-        description="Search the append-only record, inspect the permitted event context, then export only the scoped evidence you are authorized to handle."
+        description="Search the record, open an event to see its context, then export only the scoped events you are allowed to handle."
         steps={[
           {
             label: "Filter",
-            detail: "Narrow by actor, action and time window before reviewing individual records.",
+            detail: "Narrow by actor, action and result before reviewing individual records.",
           },
           {
             label: "Inspect",
-            detail:
-              "Open event context without exposing protected message content or raw event payloads.",
+            detail: "Open an event without exposing protected message content or raw event data.",
           },
           {
             label: "Export",
-            detail: "Create a scoped CSV only when evidence must leave the console.",
+            detail: "Create a scoped CSV only when events must leave the console.",
           },
         ]}
       />
 
       {canExport && (
-        <p className="audit-hint">
-          Exports are limited, audited and require step-up authentication.
-        </p>
+        <p className="audit-hint">Exports are limited, recorded and require re-authentication.</p>
       )}
 
       <section className="card audit-checkpoint" aria-label="Audit checkpoint status">
@@ -251,18 +253,14 @@ export function AuditLog() {
           {checkpoint.isSuccess && (
             <>
               <p className={`audit-checkpoint-state audit-checkpoint-${checkpoint.data.state}`}>
-                {checkpoint.data.state === "current"
-                  ? "Current"
-                  : checkpoint.data.state === "stale"
-                    ? "Stale"
-                    : "Not configured"}
+                {checkpointStatusLabel(checkpoint.data.state)}
               </p>
               <p className="audit-meta">
                 {checkpoint.data.last_checkpoint_at
                   ? `Last checkpoint ${new Date(
                       checkpoint.data.last_checkpoint_at,
                     ).toLocaleString()}`
-                  : "No immutable checkpoint has been recorded for this deployment yet."}
+                  : "No checkpoint has been recorded for this installation yet."}
               </p>
             </>
           )}
@@ -349,7 +347,7 @@ export function AuditLog() {
       {events.length > 0 && (
         <div className="card audit-table-wrap">
           <table className="audit-table">
-            <caption className="sr-only">Audit events in your authorized scope</caption>
+            <caption className="sr-only">Audit events you can view</caption>
             <thead>
               <tr>
                 <th>Time</th>
@@ -384,17 +382,17 @@ export function AuditLog() {
                     )}
                   </td>
                   <td>
-                    {humanizeToken(event.action)}
+                    {auditActionLabel(event.action)}
                     <span className="audit-meta">{event.action}</span>
-                    <span className="audit-meta">{event.customer_id ?? "platform scope"}</span>
+                    <span className="audit-meta">{event.customer_id ?? "Platform"}</span>
                   </td>
                   <td>
-                    {event.resource_type}
+                    {humanizeToken(event.resource_type)}
                     <span className="audit-meta">{event.resource_id ?? "—"}</span>
                   </td>
                   <td>
                     <span className={`audit-result audit-result-${event.result}`}>
-                      {event.result}
+                      {resultLabel(event.result)}
                     </span>
                   </td>
                   <td>{event.reason ?? "—"}</td>
@@ -415,8 +413,8 @@ export function AuditLog() {
 
       <aside className="audit-state">
         <ScrollText size={20} aria-hidden="true" />
-        Reads and exports are themselves audited. Support sessions only see their own activity
-        unless a cross-customer permission is granted.
+        Reading and exporting are recorded too. Support accounts see only their own activity unless
+        a cross-customer permission is granted.
       </aside>
 
       <Dialog open={selected !== null} onClose={() => setSelected(null)} title="Audit event detail">
@@ -441,14 +439,14 @@ export function AuditLog() {
             <div>
               <dt>Action</dt>
               <dd>
-                {humanizeToken(detail.data.action)} · {detail.data.result}
+                {auditActionLabel(detail.data.action)} · {resultLabel(detail.data.result)}
                 <span className="audit-meta">{detail.data.action}</span>
               </dd>
             </div>
             <div>
               <dt>Resource</dt>
               <dd>
-                {detail.data.resource_type} · {detail.data.resource_id ?? "—"}
+                {humanizeToken(detail.data.resource_type)} · {detail.data.resource_id ?? "—"}
               </dd>
             </div>
             <div>

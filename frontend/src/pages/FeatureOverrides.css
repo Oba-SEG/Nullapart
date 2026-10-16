@@ -146,3 +146,129 @@
   font-size: var(--font-size-sm);
   resize: vertical;
 }
+
+.features-overrides {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 15rem;
+}
+
+.features-override {
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding-bottom: var(--spacing-3);
+}
+
+.features-override:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.features-override-head {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+}
+
+.features-override-head strong {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+}
+
+.features-override-head code {
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.features-clear {
+  align-self: flex-start;
+}
+
+.features-override-history {
+  border-top: 1px dashed var(--color-border);
+  padding-top: var(--spacing-2);
+}
+
+.features-override-history summary {
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+}
+
+.features-override-history[open] summary {
+  margin-bottom: var(--spacing-2);
+}
+
+.features-override-history .features-override {
+  font-size: var(--font-size-sm);
+}
+
+/* Feature name: human label first, internal id as secondary evidence. */
+.features-name strong {
+  color: var(--color-text-primary);
+  display: block;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+}
+
+.features-key {
+  color: var(--color-text-tertiary);
+  display: inline-block;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+
+/* Where edits are possible, and why not. */
+.features-filters {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-3);
+}
+
+.features-chip {
+  background-color: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  padding: var(--spacing-1) var(--spacing-4);
+  transition:
+    color var(--transition-fast),
+    border-color var(--transition-fast),
+    background-color var(--transition-fast);
+}
+
+.features-chip:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-border-strong);
+}
+
+.features-chip-active {
+  background-color: var(--color-chip-accent-bg);
+  border-color: var(--color-chip-accent-border);
+  color: var(--color-chip-accent-text);
+  font-weight: var(--font-weight-semibold);
+}
+
+.features-lock {
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-tertiary);
+  cursor: help;
+  display: inline-block;
+  font-size: var(--font-size-xs);
+  padding: 2px var(--spacing-2);
+}

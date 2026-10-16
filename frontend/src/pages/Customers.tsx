@@ -3,8 +3,10 @@ import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 
 import { api, type ApiError } from "../api/client";
+import { capabilityLock, type CustomerCapabilities } from "../api/capabilities";
 import { canImpersonate, hasPermission, loadSession, startImpersonation } from "../auth/session";
 import { StepUpPrompt } from "../components/StepUpPrompt";
+import { Hint } from "../components/primitives/Hint";
 import { WorkspaceHeader } from "../components/WorkspaceHeader";
 import { WorkflowGuide } from "../components/WorkflowGuide";
 import { ControlRail } from "../components/ControlRail";
@@ -12,6 +14,7 @@ import { Button } from "../components/primitives/Button";
 import { Dialog } from "../components/primitives/Dialog";
 import { Input } from "../components/primitives/Input";
 import { randomUuid } from "../lib/ids";
+import { HINTS, LIFECYCLE_LABELS } from "../lib/labels";
 import "./Customers.css";
 
 import { notify } from "../lib/notify";
@@ -21,6 +24,8 @@ interface CustomerSummary {
   id: string;
   display_name: string;
   internal_key: number;
+  region_code: string | null;
+  sequence_no: number | null;
   lifecycle: CustomerLifecycle;
   created_at: string;
   updated_at: string;
@@ -29,6 +34,7 @@ interface CustomerSummary {
 
 interface CustomerList {
   customers: CustomerSummary[];
+  capabilities: CustomerCapabilities;
 }
 
 function errorMessage(error: unknown): string {
@@ -93,7 +99,15 @@ export function Customers() {
   const [entryBusy, setEntryBusy] = useState(false);
 
   const current = session.data ?? null;
-  const canManage = hasPermission(current, "admin:customers:manage");
+  // The list carries the server's own verdict on creating a customer, computed
+  // by the same predicate the POST runs. A role that holds
+  // `admin:customers:manage` without a platform role therefore reads a stated
+  // lock here instead of a button that can only be refused.
+  const createCapability = customers.data?.capabilities?.create_customer;
+  const canCreate = createCapability
+    ? createCapability.allowed
+    : hasPermission(current, "admin:customers:manage");
+  const createLock = capabilityLock(createCapability, "Creating a customer");
   const mayEnter = canImpersonate(current) && !current?.impersonation;
   const nameError = displayNameError(displayName);
   const reasonTooShort = reason.trim().length < MIN_REASON_LENGTH;
@@ -154,12 +168,12 @@ export function Customers() {
   return (
     <div className="customers-page">
       <WorkspaceHeader
-        eyebrow="Tenant administration"
+        eyebrow="Customer administration"
         title="Customers"
-        description="Create and enter customer workspaces, then manage lifecycle, domains and source IP groups from the customer record. Every state-changing action is audited."
+        description="Create a customer, enter its workspace, then manage its lifecycle, domains and source IP groups from the customer record. Changes to a customer affect how its mail is treated."
         scope="Customer lifecycle controls"
         actions={
-          canManage ? (
+          canCreate ? (
             <Button type="button" variant="primary" onClick={() => setOpen(true)}>
               New customer
             </Button>
@@ -167,16 +181,22 @@ export function Customers() {
         }
       />
 
+      {createLock !== "" ? (
+        <p className="customers-lock" role="status">
+          {createLock}
+        </p>
+      ) : null}
+
       <ControlRail
-        title="Customer estate"
-        summary="Choose a customer record to enter its lifecycle and trust configuration workspace."
+        title="Customers"
+        summary="Choose a customer to open its lifecycle and sending configuration."
         signals={[
           {
             label: "Customers",
             value: customersAvailable ? rows.length : customersState,
             detail: customersAvailable
-              ? "Records visible in your current deployment scope."
-              : "Customer scope has not produced an authoritative result yet.",
+              ? "Customers you can see in this installation."
+              : "The customer list is still loading.",
           },
           {
             label: "Active",
@@ -184,8 +204,8 @@ export function Customers() {
               ? rows.filter((row) => row.lifecycle === "active").length
               : customersState,
             detail: customersAvailable
-              ? "Currently active customer records."
-              : "Lifecycle state is unavailable until the customer query succeeds.",
+              ? "Customers that can send and receive normally."
+              : "The lifecycle count is unavailable until the customers load.",
             tone: customersAvailable ? "healthy" : "neutral",
           },
           {
@@ -194,25 +214,25 @@ export function Customers() {
               ? rows.filter((row) => row.lifecycle !== "active").length
               : customersState,
             detail: customersAvailable
-              ? "Grace, suspended or terminated records require deliberate handling."
-              : "No review queue is inferred while the customer query is unavailable.",
+              ? "Customers in Grace, Suspended or Terminated need a decision."
+              : "No review queue shows while the customer list is unavailable.",
             tone: customersAvailable ? "attention" : "neutral",
           },
         ]}
       />
 
       <WorkflowGuide
-        title="Establish a tenant safely"
-        description="Customer records are the boundary for all downstream configuration and investigation work."
+        title="Add a customer safely"
+        description="A customer record is the boundary for all its later configuration and investigation."
         steps={[
-          { label: "Create", detail: "Create the customer record with a controlled display name." },
+          { label: "Create", detail: "Create the customer with a clear display name." },
           {
             label: "Configure",
             detail: "Open the record to manage lifecycle, domains and source IP groups.",
           },
           {
             label: "Enter",
-            detail: "Use a recorded reason before entering a customer-scoped workspace.",
+            detail: "Give a reason before entering a customer workspace.",
           },
         ]}
       />
@@ -240,6 +260,7 @@ export function Customers() {
               <tr>
                 <th scope="col">Display name</th>
                 <th scope="col">Customer ID</th>
+                <th scope="col">Region</th>
                 <th scope="col">Lifecycle</th>
                 <th scope="col">Domains</th>
                 <th scope="col">Created</th>
@@ -258,28 +279,35 @@ export function Customers() {
                     <span className="truncate customers-id">{customer.id}</span>
                   </td>
                   <td>
-                    <span
-                      className={`customers-lifecycle customers-lifecycle-${customer.lifecycle}`}
-                    >
-                      {customer.lifecycle}
-                    </span>
+                    <span className="customers-region">{customer.region_code ?? "Not placed"}</span>
+                  </td>
+                  <td>
+                    <Hint label={HINTS.lifecycle}>
+                      <span
+                        className={`customers-lifecycle customers-lifecycle-${customer.lifecycle} hint-term`}
+                      >
+                        {LIFECYCLE_LABELS[customer.lifecycle]}
+                      </span>
+                    </Hint>
                   </td>
                   <td>{customer.domain_count}</td>
                   <td>{new Date(customer.created_at).toLocaleString()}</td>
                   {mayEnter ? (
                     <td>
                       {customer.lifecycle === "active" ? (
-                        <Button
-                          type="button"
-                          size="sm"
-                          onClick={() => {
-                            setEntryError(null);
-                            setReason("");
-                            setEntryTarget(customer);
-                          }}
-                        >
-                          Enter
-                        </Button>
+                        <Hint label="Entering a customer lets you work inside that customer's data. Your own roles and permissions do not change.">
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={() => {
+                              setEntryError(null);
+                              setReason("");
+                              setEntryTarget(customer);
+                            }}
+                          >
+                            Enter
+                          </Button>
+                        </Hint>
                       ) : null}
                     </td>
                   ) : null}
@@ -299,8 +327,7 @@ export function Customers() {
           }}
         >
           <p className="customers-hint">
-            The display name identifies the customer across the control plane. Every creation is
-            audited.
+            The display name is how this customer appears throughout the console.
           </p>
           <Input
             label="Display name"
@@ -349,9 +376,9 @@ export function Customers() {
       >
         <div className="customers-form">
           <p className="customers-hint">
-            Your roles and permissions stay exactly as they are; only the customer scope of this
-            session switches. Every action is audited under your identity. A reason is required (at
-            least {MIN_REASON_LENGTH} characters).
+            Your roles and permissions stay the same. Only the customer you are working on changes.
+            Actions you take here are recorded under your own identity. Enter a reason of at least{" "}
+            {MIN_REASON_LENGTH} characters.
           </p>
           <Input
             label="Reason"

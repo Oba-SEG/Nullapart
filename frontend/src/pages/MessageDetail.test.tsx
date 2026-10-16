@@ -148,6 +148,11 @@ function renderAt(entry: string) {
       path: "/messages/$messageId",
       component: MessageDetail,
     }),
+    createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/quarantine/$tenant_message_id",
+      component: () => null,
+    }),
   ]);
   const router = createRouter({
     routeTree,
@@ -167,7 +172,7 @@ describe("MessageDetail", () => {
     renderAt("/messages/tx-2002");
 
     expect(await screen.findByText("tx-2002")).toBeTruthy();
-    expect(screen.getByText("inbound")).toBeTruthy();
+    expect(screen.getByText("Inbound")).toBeTruthy();
     expect(screen.getByText("sender@example.test")).toBeTruthy();
     expect(screen.getByText("<m-2002@example.test>")).toBeTruthy();
     expect(screen.getByText("sha256:9a3f")).toBeTruthy();
@@ -185,16 +190,16 @@ describe("MessageDetail", () => {
     expect(screen.getAllByText("3Fh2k1Q").length).toBeGreaterThanOrEqual(2);
 
     expect(screen.getByText("tenant-message-7")).toBeTruthy();
-    expect(screen.getByText("quarantine")).toBeTruthy();
-    expect(screen.getByText("release")).toBeTruthy();
+    expect(screen.getByText("Held for review")).toBeTruthy();
+    expect(screen.getByText("Release")).toBeTruthy();
 
-    expect(screen.getByText("deferred")).toBeTruthy();
+    expect(screen.getByText("Retrying")).toBeTruthy();
     expect(screen.getByText("451")).toBeTruthy();
     expect(screen.getByText("4.7.1")).toBeTruthy();
     expect(screen.getByText("Try again later")).toBeTruthy();
 
-    expect(screen.getByText("high")).toBeTruthy();
-    expect(screen.getByText("phishing")).toBeTruthy();
+    expect(screen.getByText("High")).toBeTruthy();
+    expect(screen.getByText("Phishing")).toBeTruthy();
     expect(screen.getByText("Lookalike sender domain")).toBeTruthy();
     expect(screen.getByText(/Link analysis/)).toBeTruthy();
     expect(screen.queryByText(/Scanner urlanalysis/)).toBeNull();

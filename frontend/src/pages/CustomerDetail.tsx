@@ -4,15 +4,23 @@ import { ArrowLeft } from "lucide-react";
 import { useId, useState } from "react";
 
 import { api, type ApiError } from "../api/client";
-import { hasPermission, hasRole, loadSession } from "../auth/session";
+import { capabilityLock, type CustomerCapabilities } from "../api/capabilities";
+import { hasPermission, loadSession } from "../auth/session";
 import { StepUpPrompt } from "../components/StepUpPrompt";
 import { ControlRail } from "../components/ControlRail";
 import { WorkflowGuide } from "../components/WorkflowGuide";
 import { Button } from "../components/primitives/Button";
 import { Dialog } from "../components/primitives/Dialog";
+import { Hint } from "../components/primitives/Hint";
 import { Input } from "../components/primitives/Input";
 import { Select } from "../components/primitives/Select";
 import { randomUuid } from "../lib/ids";
+import {
+  HINTS,
+  LIFECYCLE_LABELS,
+  VERIFICATION_STATUS_LABELS,
+  verificationMethodLabel,
+} from "../lib/labels";
 import "./CustomerDetail.css";
 
 import { notify } from "../lib/notify";
@@ -42,6 +50,8 @@ interface CustomerSummary {
   id: string;
   display_name: string;
   internal_key: number;
+  region_code: string | null;
+  sequence_no: number | null;
   lifecycle: CustomerLifecycle;
   created_at: string;
   updated_at: string;
@@ -51,6 +61,7 @@ interface CustomerSummary {
 interface CustomerDetail extends CustomerSummary {
   domains: Domain[];
   source_ip_groups: SourceIpGroup[];
+  capabilities: CustomerCapabilities;
 }
 
 interface SourceIpGroupList {
@@ -161,11 +172,20 @@ export function CustomerDetail() {
   });
 
   const current = session.data ?? null;
+  // Reading these from the customer record rather than from role names keeps
+  // the console and the API in agreement: a custom role that holds
+  // `admin:customers:manage` is not silently assumed to be able to switch a
+  // customer off, and a session that can is never offered a refused form.
+  const capabilities = detail.data?.capabilities;
+  const mayChangeLifecycle = capabilities?.change_lifecycle.allowed ?? false;
+  const lifecycleLock = capabilityLock(capabilities?.change_lifecycle, "Changing this lifecycle");
+  const mayOfferSendOnly = capabilities?.add_send_only_domain.allowed ?? false;
+  const sendOnlyLock = capabilityLock(
+    capabilities?.add_send_only_domain,
+    "Adding a send-only domain",
+  );
   const canManageCustomers = hasPermission(current, "admin:customers:manage");
   const canManageDomains = hasPermission(current, "admin:domains:manage");
-  const mayChangeLifecycle =
-    canManageCustomers && (hasRole(current, "system_admin") || hasRole(current, "support"));
-  const mayOfferSendOnly = hasRole(current, "system_admin") || hasRole(current, "support");
 
   const customer = detail.data ?? null;
 
@@ -175,7 +195,10 @@ export function CustomerDetail() {
   const [domain, setDomain] = useState("");
   const [domainType, setDomainType] = useState<DomainType>("internal");
   const [domainNotice, setDomainNotice] = useState<string | null>(null);
-  const [verifyNotice, setVerifyNotice] = useState<{ domain: string; status: string } | null>(null);
+  const [verifyNotice, setVerifyNotice] = useState<{
+    domain: string;
+    status: Domain["verification_status"];
+  } | null>(null);
   const [groupName, setGroupName] = useState("");
   const [cidrText, setCidrText] = useState("");
   const [groupNotice, setGroupNotice] = useState<string | null>(null);
@@ -197,7 +220,7 @@ export function CustomerDetail() {
     onSuccess: async (updated) => {
       setTargetLifecycle("");
       setReason("");
-      setLifecycleNotice(`Lifecycle changed to ${updated.lifecycle}.`);
+      setLifecycleNotice(`Lifecycle changed to ${LIFECYCLE_LABELS[updated.lifecycle]}.`);
       await queryClient.invalidateQueries({ queryKey: ["customer", customerId] });
       await queryClient.invalidateQueries({ queryKey: ["customers"] });
     },
@@ -214,7 +237,7 @@ export function CustomerDetail() {
       setDomain("");
       setDomainType("internal");
       setDomainNotice(
-        `${created.domain} was added. Verification status: ${created.verification_status}.`,
+        `${created.domain} was added. It is ${VERIFICATION_STATUS_LABELS[created.verification_status].toLowerCase()}.`,
       );
       await queryClient.invalidateQueries({ queryKey: ["customer", customerId] });
     },
@@ -301,11 +324,13 @@ export function CustomerDetail() {
           <>
             <div className="customer-detail-heading">
               <h1 className="customer-detail-title">{customer.display_name}</h1>
-              <span
-                className={`customer-detail-lifecycle customer-detail-lifecycle-${customer.lifecycle}`}
-              >
-                {customer.lifecycle}
-              </span>
+              <Hint label={HINTS.lifecycle}>
+                <span
+                  className={`customer-detail-lifecycle customer-detail-lifecycle-${customer.lifecycle} hint-term`}
+                >
+                  {LIFECYCLE_LABELS[customer.lifecycle]}
+                </span>
+              </Hint>
             </div>
             <dl className="customer-detail-facts">
               <div>
@@ -315,6 +340,22 @@ export function CustomerDetail() {
               <div>
                 <dt>Internal key</dt>
                 <dd>{customer.internal_key}</dd>
+              </div>
+              <div>
+                <dt>
+                  <Hint label="The sending region assigned to this customer. It is set by the platform.">
+                    <span className="hint-term">Region</span>
+                  </Hint>
+                </dt>
+                <dd>{customer.region_code ?? "Not placed"}</dd>
+              </div>
+              <div>
+                <dt>
+                  <Hint label="The position assigned to this customer within its region. It is set by the platform.">
+                    <span className="hint-term">Sequence</span>
+                  </Hint>
+                </dt>
+                <dd>{customer.sequence_no ?? "Not assigned"}</dd>
               </div>
               <div>
                 <dt>Created</dt>
@@ -331,24 +372,24 @@ export function CustomerDetail() {
 
       {customer ? (
         <ControlRail
-          title="Customer control state"
-          summary="The current record determines which lifecycle and trust configuration actions remain meaningful."
+          title="Customer status"
+          summary="The current record decides which lifecycle and configuration actions are still relevant."
           signals={[
             {
               label: "Lifecycle",
-              value: customer.lifecycle,
-              detail: "Current server-recorded customer lifecycle.",
+              value: LIFECYCLE_LABELS[customer.lifecycle],
+              detail: "The lifecycle set for this customer.",
               tone: customer.lifecycle === "active" ? "healthy" : "attention",
             },
             {
               label: "Domains",
               value: customer.domain_count,
-              detail: "Configured domains associated with this tenant boundary.",
+              detail: "Domains set up for this customer.",
             },
             {
               label: "Transitions",
               value: LIFECYCLE_TRANSITIONS[customer.lifecycle].length,
-              detail: "Allowed lifecycle transition options exposed by policy.",
+              detail: "Lifecycle states you can move to next.",
             },
           ]}
         />
@@ -356,20 +397,20 @@ export function CustomerDetail() {
 
       {customer ? (
         <WorkflowGuide
-          title="Manage the customer boundary"
-          description="Make lifecycle and trust changes here before relying on tenant-specific policy or connector operations."
+          title="Manage the customer"
+          description="Set the lifecycle and sending configuration here before you rely on customer-specific policies or connectors."
           steps={[
             {
               label: "Confirm identity",
-              detail: "Verify the customer record and its current lifecycle.",
+              detail: "Check the customer record and its current lifecycle.",
             },
             {
-              label: "Configure trust",
-              detail: "Manage domains and source IP groups through the permitted forms.",
+              label: "Configure sending",
+              detail: "Manage domains and source IP groups through the forms below.",
             },
             {
               label: "Record change",
-              detail: "Provide required reasons so every state transition is auditable.",
+              detail: "Enter a reason with each change so you can review it later.",
             },
           ]}
         />
@@ -379,9 +420,9 @@ export function CustomerDetail() {
         <section className="card customer-detail-panel" aria-labelledby="lifecycle-heading">
           <h2 id="lifecycle-heading">Lifecycle</h2>
           <p className="customer-detail-hint">
-            Current lifecycle is <strong>{customer.lifecycle}</strong>. Only allowed transitions are
-            offered; every change requires a reason of at least {MIN_REASON_LENGTH} characters and
-            is audited.
+            The current lifecycle is <strong>{LIFECYCLE_LABELS[customer.lifecycle]}</strong>. You
+            can move only to an allowed next state. Each change needs a reason of at least{" "}
+            {MIN_REASON_LENGTH} characters.
           </p>
           <div className="customer-detail-form">
             <Select
@@ -394,7 +435,7 @@ export function CustomerDetail() {
               }}
               options={LIFECYCLE_TRANSITIONS[customer.lifecycle].map((value) => ({
                 value,
-                label: value,
+                label: LIFECYCLE_LABELS[value],
               }))}
             />
             <Input
@@ -445,6 +486,12 @@ export function CustomerDetail() {
         </section>
       ) : null}
 
+      {customer && !mayChangeLifecycle && lifecycleLock !== "" ? (
+        <p className="customer-detail-lock" role="status">
+          {lifecycleLock}
+        </p>
+      ) : null}
+
       {customer ? (
         <section className="card customer-detail-panel" aria-labelledby="domains-heading">
           <h2 id="domains-heading">Domains</h2>
@@ -470,7 +517,9 @@ export function CustomerDetail() {
                     <tr key={entry.id}>
                       <td>
                         {entry.domain}
-                        <span className="customer-detail-meta">{entry.verification_method}</span>
+                        <span className="customer-detail-meta">
+                          {verificationMethodLabel(entry.verification_method)}
+                        </span>
                       </td>
                       <td>
                         <span
@@ -480,11 +529,13 @@ export function CustomerDetail() {
                         </span>
                       </td>
                       <td>
-                        <span
-                          className={`customer-detail-badge customer-detail-verify-${entry.verification_status}`}
-                        >
-                          {entry.verification_status}
-                        </span>
+                        <Hint label="Verified means the customer proved it controls this domain. Pending waits on a DNS check. Failed needs a new verification request.">
+                          <span
+                            className={`customer-detail-badge customer-detail-verify-${entry.verification_status} hint-term`}
+                          >
+                            {VERIFICATION_STATUS_LABELS[entry.verification_status]}
+                          </span>
+                        </Hint>
                       </td>
                       <td>{entry.verification_attempts}</td>
                       <td>
@@ -521,7 +572,8 @@ export function CustomerDetail() {
 
           {verifyNotice ? (
             <p className="customer-detail-notice" role="status">
-              Verification result for {verifyNotice.domain}: {verifyNotice.status}.
+              Verification for {verifyNotice.domain}:{" "}
+              {VERIFICATION_STATUS_LABELS[verifyNotice.status]}.
             </p>
           ) : null}
           {verifyDomain.isError ? (
@@ -552,15 +604,22 @@ export function CustomerDetail() {
                 maxLength={253}
                 error={domain.length > 0 ? domainValueError : undefined}
               />
-              <Select
-                label="Domain type"
-                value={domainType}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  if (value === "internal" || value === "send_only") setDomainType(value);
-                }}
-                options={domainTypeOptions}
-              />
+              <Hint label={HINTS.domainType}>
+                <Select
+                  label="Domain type"
+                  value={domainType}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    if (value === "internal" || value === "send_only") setDomainType(value);
+                  }}
+                  options={domainTypeOptions}
+                />
+              </Hint>
+              {!mayOfferSendOnly && sendOnlyLock !== "" ? (
+                <p className="customer-detail-hint" role="status">
+                  {sendOnlyLock} Only internal domains can be added in this session.
+                </p>
+              ) : null}
               {addDomain.isError ? (
                 <>
                   <p className="customer-detail-error" role="alert">
@@ -664,11 +723,9 @@ export function CustomerDetail() {
                 placeholder="203.0.113.0/24, 198.51.100.7/32"
               />
               <p className="customer-detail-hint">
-                Separate CIDRs with commas or newlines
-                {cidrList.length > 0
-                  ? ` — ${cidrList.length} entr${cidrList.length === 1 ? "y" : "ies"} parsed`
-                  : ""}
-                . The server validates every entry.
+                Addresses that are allowed to send as this customer. Separate each range with a
+                comma or a new line.
+                {cidrList.length > 0 ? ` You entered ${cidrList.length}.` : ""}
               </p>
             </div>
             {addGroup.isError ? (
@@ -709,8 +766,8 @@ export function CustomerDetail() {
         {pendingDelete ? (
           <div className="customer-detail-form">
             <p>
-              Removing this source IP group takes effect immediately and is audited. This action
-              cannot be undone from this page.
+              Removing this source IP group stops those addresses being trusted as this customer
+              right away. This cannot be undone from this page.
             </p>
             <p className="customer-detail-cidrs">{pendingDelete.cidrs.join(", ")}</p>
             {deleteGroup.isError ? (

@@ -58,6 +58,6 @@ describe("ScannerOperations", () => {
     expect(screen.getByText("Document safety")).toBeTruthy();
     expect(screen.getByText("14")).toBeTruthy();
     expect(screen.queryByText(/clamav|tesseract|engine version/i)).toBeNull();
-    expect(screen.getByText(/content remain private/i)).toBeTruthy();
+    expect(screen.getByText(/content stay private/i)).toBeTruthy();
   });
 });

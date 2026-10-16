@@ -15,7 +15,9 @@ import { isSystemAdmin, loadSession } from "../auth/session";
 import { ControlRail } from "../components/ControlRail";
 import { StatusPill } from "../components/StatusPill";
 import { WorkspaceHeader } from "../components/WorkspaceHeader";
-import type { StatusTone } from "../lib/status";
+import { Hint } from "../components/primitives/Hint";
+import { nodeStatusLabel, resultLabel, type StatusTone } from "../lib/status";
+import { humanizeToken } from "../lib/text";
 import "./Dashboard.css";
 
 interface RuntimeSnapshot {
@@ -72,10 +74,10 @@ function outboxTone(unpublished: number, oldest: number | null): StatusTone {
 }
 
 function dashboardOutboxDetail(unpublished: number, oldestAge: string | null): string {
-  if (unpublished === 0) return "Outbox is drained; inspect runtime controls";
+  if (unpublished === 0) return "Publication queue is clear; inspect runtime controls";
   return oldestAge
-    ? `${unpublished} unpublished · oldest ${oldestAge}`
-    : `${unpublished} unpublished event${unpublished === 1 ? "" : "s"}`;
+    ? `${unpublished} waiting to publish · oldest ${oldestAge}`
+    : `${unpublished} message${unpublished === 1 ? "" : "s"} waiting to publish`;
 }
 
 function healthTone(healthy: boolean): StatusTone {
@@ -135,7 +137,53 @@ export function Dashboard() {
   const nodeStatus = scanner.data?.node.status ?? null;
   const oldestAge = outbox ? formatAge(outbox.oldest_unpublished_age_seconds) : null;
   const systemAdmin = isSystemAdmin(session.data ?? null);
-  const workspaceTitle = systemAdmin ? "System command center" : "Security operations desk";
+  const workspaceTitle = systemAdmin ? "System overview" : "Security overview";
+
+  const outboxStale =
+    outbox !== undefined &&
+    outbox.oldest_unpublished_age_seconds !== null &&
+    outbox.oldest_unpublished_age_seconds > 300;
+  const scannerDegraded = nodeStatus !== null && nodeStatus !== "healthy";
+  const attentionItems: Array<{
+    label: string;
+    detail: string;
+    to: string;
+    tone: StatusTone;
+  }> = [];
+  if (deadLetters !== null && deadLetters > 0) {
+    attentionItems.push({
+      label: `${deadLetters} dead letter${deadLetters === 1 ? "" : "s"} need review`,
+      detail: "Failed messages are held for review in Operations.",
+      to: "/operations",
+      tone: "threat",
+    });
+  }
+  if (outboxStale) {
+    attentionItems.push({
+      label: "Publication queue is overdue",
+      detail: `The oldest waiting message is ${oldestAge ?? "unknown"} old.`,
+      to: "/operations",
+      tone: "threat",
+    });
+  }
+  if (quarantined !== null && quarantined > 0) {
+    attentionItems.push({
+      label: `${quarantined} held message${quarantined === 1 ? "" : "s"} waiting for a decision`,
+      detail: "Work the highest-severity ones first. Releasing needs re-authentication.",
+      to: "/quarantine",
+      tone: "review",
+    });
+  }
+  if (scannerDegraded) {
+    attentionItems.push({
+      label: `Scanner node is ${nodeStatusLabel(nodeStatus as string).toLowerCase()}`,
+      detail: "Reduced scanner health slows how quickly new mail is classified.",
+      to: "/scanner-operations",
+      tone: "review",
+    });
+  }
+  const attentionResolved = !loading && !failed && attentionItems.length === 0;
+
   const commandActions = [
     {
       to: "/quarantine",
@@ -143,8 +191,8 @@ export function Dashboard() {
       label: "Triage quarantine",
       detail:
         quarantined !== null
-          ? `${quarantined} message${quarantined === 1 ? "" : "s"} waiting for disposition`
-          : "Review held mail and release only with step-up approval",
+          ? `${quarantined} message${quarantined === 1 ? "" : "s"} waiting for a decision`
+          : "Review held mail and release only with re-authentication",
     },
     {
       to: "/operations",
@@ -152,21 +200,21 @@ export function Dashboard() {
       label: "Inspect runtime",
       detail: outbox
         ? dashboardOutboxDetail(outbox.unpublished_count, oldestAge)
-        : "Check nodes, queues, config revisions and refresh controls",
+        : "Check nodes, queues, config versions and refresh controls",
     },
     {
       to: "/scanner-operations",
       icon: BrainCircuit,
-      label: "Check scanner fabric",
+      label: "Check scanner health",
       detail: nodeStatus
-        ? `Primary node ${nodeStatus}`
-        : "Confirm classifier and scanner node health",
+        ? `Primary node ${nodeStatusLabel(nodeStatus).toLowerCase()}`
+        : "Confirm scanner node health",
     },
     {
       to: "/policies",
       icon: SlidersHorizontal,
       label: "Manage policy",
-      detail: "Tune tenant-safe mail controls without bypassing security floors",
+      detail: "Adjust mail controls for a customer without disabling security floors",
     },
     {
       to: "/audit-log",
@@ -180,22 +228,22 @@ export function Dashboard() {
       label: "Inspect dead letters",
       detail:
         deadLetters !== null
-          ? `${deadLetters} durable event${deadLetters === 1 ? "" : "s"} need review`
-          : "Inspect failed outbox/reinjection events",
+          ? `${deadLetters} failed message${deadLetters === 1 ? "" : "s"} need review`
+          : "Inspect failed publication and re-injection messages",
     },
   ] as const;
 
   return (
     <div className="dashboard">
       <WorkspaceHeader
-        eyebrow={systemAdmin ? "Platform authority" : "Customer security operations"}
+        eyebrow={systemAdmin ? "Platform overview" : "Customer security operations"}
         title={workspaceTitle}
         description={
           systemAdmin
-            ? "Investigate the deployment, govern the security posture, and enter a customer only through the audited customer-entry workflow."
-            : "Investigate mail-security signals and proceed only through the controls authorized for this workspace."
+            ? "Review this installation, manage its security posture, and open a customer only through the Customer entry workflow."
+            : "Review mail-security signals and use the controls allowed for this workspace."
         }
-        scope={systemAdmin ? "System-wide authority" : "Customer workspace"}
+        scope={systemAdmin ? "All customers" : "Customer workspace"}
         actions={
           <button type="button" className="btn btn-ghost dashboard-reload" onClick={retry}>
             <RefreshCw size={14} aria-hidden="true" />
@@ -205,14 +253,14 @@ export function Dashboard() {
       >
         <p className="dashboard-subtitle">
           {data
-            ? `Deployment ${data.deployment_id} · config revision ${data.config.db_revision ?? "unknown"}`
-            : "Live system evidence loads from the authorized operations APIs."}
+            ? `Installation ${data.deployment_id} · configuration version ${data.config.db_revision ?? "unknown"}`
+            : "Live status loads from the operations pages."}
         </p>
       </WorkspaceHeader>
 
       <ControlRail
         title={systemAdmin ? "Platform priority queue" : "Security priority queue"}
-        summary="These signals are linked to the authorized workspace where an investigation or controlled action can occur."
+        summary="These links open where you can investigate or act."
         signals={[
           {
             label: "Quarantine",
@@ -222,20 +270,20 @@ export function Dashboard() {
                 ? "Unavailable"
                 : "Loading",
             detail: quarantine.isSuccess
-              ? "Active held messages; open the case queue to triage."
-              : "No quarantine health state is inferred until the case query succeeds.",
+              ? "Messages on hold. Open the quarantine queue to review them."
+              : "The count appears once held mail finishes loading.",
             tone: quarantine.isSuccess ? (quarantined ? "attention" : "healthy") : "neutral",
           },
           {
-            label: "Outbox backlog",
+            label: "Pending publication",
             value: runtime.isSuccess
               ? (outbox?.unpublished_count ?? "—")
               : runtime.isError
                 ? "Unavailable"
                 : "Loading",
             detail: runtime.isSuccess
-              ? "Durable events pending publication; inspect runtime operations."
-              : "No runtime health state is inferred until the snapshot query succeeds.",
+              ? "Messages waiting to be published. Inspect runtime operations."
+              : "The count appears once the runtime status loads.",
             tone: runtime.isSuccess
               ? outbox?.unpublished_count
                 ? "attention"
@@ -250,12 +298,44 @@ export function Dashboard() {
                 ? "Unavailable"
                 : "Loading",
             detail: runtime.isSuccess
-              ? "Items requiring investigation; no action is performed from this dashboard."
-              : "No dead-letter state is inferred until the runtime snapshot query succeeds.",
+              ? "Messages that need review. Nothing changes from this dashboard."
+              : "The count appears once the runtime status loads.",
             tone: runtime.isSuccess ? (deadLetters ? "attention" : "healthy") : "neutral",
           },
         ]}
       />
+
+      {(attentionItems.length > 0 || attentionResolved) && (
+        <section className="card attention-panel" aria-label="Needs attention">
+          <div className="section-head">
+            <h2 className="section-title">Needs attention</h2>
+          </div>
+          {attentionItems.length === 0 ? (
+            <p className="dashboard-empty">
+              Nothing requires operator attention right now. The queues and scanner health are
+              clear.
+            </p>
+          ) : (
+            <ul className="attention-list">
+              {attentionItems.map((item) => (
+                <li key={item.label} className="attention-item">
+                  <StatusPill
+                    tone={item.tone}
+                    label={item.tone === "threat" ? "Act now" : "Review"}
+                  />
+                  <div className="attention-copy">
+                    <strong>{item.label}</strong>
+                    <span>{item.detail}</span>
+                  </div>
+                  <Link to={item.to} className="section-link">
+                    Open <ArrowRight size={14} aria-hidden="true" />
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
 
       {failed ? (
         <div className="dashboard-error" role="alert">
@@ -275,7 +355,11 @@ export function Dashboard() {
           <span className="metric-cta">Open quarantine</span>
         </Link>
         <Link to="/operations" className="metric-stat">
-          <span className="metric-label">Outbox backlog</span>
+          <span className="metric-label">
+            <Hint label="Messages recorded but not yet published to the next system. Open Operations to review.">
+              <span className="hint-term">Pending publication</span>
+            </Hint>
+          </span>
           <span className="metric-value">
             {loading ? <Skeleton width="2.5ch" /> : (outbox?.unpublished_count ?? "—")}
           </span>
@@ -303,16 +387,14 @@ export function Dashboard() {
         <div className="section-head command-panel-head">
           <div>
             <span className="eyebrow">
-              {systemAdmin ? "System command map" : "Security command map"}
+              {systemAdmin ? "System shortcuts" : "Security shortcuts"}
             </span>
             <h2 id="command-panel-heading" className="section-title">
-              {systemAdmin
-                ? "Choose an authorized system workflow"
-                : "Choose an authorized workflow"}
+              Choose where to work
             </h2>
           </div>
           <Link to="/operations" className="section-link">
-            Runtime console <ArrowRight size={14} aria-hidden="true" />
+            Runtime operations <ArrowRight size={14} aria-hidden="true" />
           </Link>
         </div>
         <div className="command-grid">
@@ -359,8 +441,8 @@ export function Dashboard() {
                 <div className="activity-item" key={event.id}>
                   <span className="activity-time">{timeAgo(event.created_at)}</span>
                   <span className="activity-text">
-                    <strong>{event.actor_login}</strong> {event.action.replaceAll("_", " ")} on{" "}
-                    {event.resource_type} · {event.result}
+                    <strong>{event.actor_login}</strong> {humanizeToken(event.action)} on{" "}
+                    {humanizeToken(event.resource_type)} · {resultLabel(event.result)}
                   </span>
                 </div>
               ))}
@@ -378,19 +460,17 @@ export function Dashboard() {
               ) : (
                 <StatusPill
                   tone={healthTone(nodeStatus === "healthy")}
-                  label={nodeStatus === "healthy" ? "Running" : nodeStatus}
+                  label={nodeStatusLabel(nodeStatus)}
                 />
               )}
             </div>
             <div className="health-item">
-              <span>Outbox</span>
+              <span>Pending publication</span>
               {outbox ? (
                 <StatusPill
                   tone={outboxTone(outbox.unpublished_count, outbox.oldest_unpublished_age_seconds)}
                   label={
-                    outbox.unpublished_count === 0
-                      ? "Drained"
-                      : `${outbox.unpublished_count} unpublished`
+                    outbox.unpublished_count === 0 ? "Clear" : `${outbox.unpublished_count} waiting`
                   }
                 />
               ) : (
@@ -415,7 +495,7 @@ export function Dashboard() {
                   tone={healthTone(data.config.db_revision !== null)}
                   label={
                     data.config.db_revision !== null
-                      ? `Revision ${data.config.db_revision} synced`
+                      ? `Version ${data.config.db_revision} current`
                       : "Unknown"
                   }
                 />

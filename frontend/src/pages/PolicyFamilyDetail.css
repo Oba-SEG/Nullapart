@@ -62,9 +62,31 @@
   display: inline-block;
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-medium);
-  letter-spacing: 0.05em;
+  letter-spacing: 0.01em;
   padding: var(--spacing-1) var(--spacing-2);
-  text-transform: uppercase;
+  text-transform: none;
+}
+
+/* The catalog key is evidence, not the heading: small, mono, breakable. */
+.policy-detail-key {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+.policy-detail-key code {
+  font-family: var(--font-family-mono);
+  overflow-wrap: anywhere;
+}
+
+/* Where a control is absent because access does not reach it. */
+.policy-detail-lock {
+  background-color: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  max-width: 70ch;
+  padding: var(--spacing-3);
 }
 
 .policy-detail-level-customer {

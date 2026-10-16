@@ -48,24 +48,24 @@ export function Login() {
             alt="Nullapart — Cleaner mail. A safer world."
             className="login-wordmark"
           />
-          <p className="login-kicker">Control plane · restricted access</p>
+          <p className="login-kicker">Console · restricted access</p>
           <h1 id="login-brief-title">Operate the mail-security boundary.</h1>
           <p>
-            Review the platform estate, enter a customer only with an audited reason, and make
-            changes through server-authorized controls.
+            Review all customers, enter a customer only with a recorded reason, and make changes
+            that your role allows.
           </p>
           <dl className="login-assurances">
             <div>
               <dt>
                 <ShieldCheck size={16} aria-hidden="true" /> Session custody
               </dt>
-              <dd>Authenticated sessions are HttpOnly and server-managed.</dd>
+              <dd>Your sign-in is stored securely and managed by the console.</dd>
             </div>
             <div>
               <dt>
                 <LockKeyhole size={16} aria-hidden="true" /> Protected actions
               </dt>
-              <dd>High-risk operations require the appropriate authority and step-up.</dd>
+              <dd>High-risk actions need the right permission and re-authentication.</dd>
             </div>
           </dl>
         </section>
@@ -119,7 +119,7 @@ export function Login() {
             </label>
             <button type="submit" className="btn btn-primary login-btn" disabled={busy}>
               <ShieldCheck size={18} aria-hidden="true" />
-              {busy ? "Establishing session…" : "Enter local control plane"}
+              {busy ? "Signing in…" : "Sign in to the console"}
             </button>
           </form>
 

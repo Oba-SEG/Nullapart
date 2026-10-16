@@ -14,29 +14,58 @@
   margin-top: var(--spacing-2);
 }
 
+/* Hourly volume strip: one row, not a second card wall under the control
+ * rail. Items collapse to two columns on narrow screens. */
 .outbound-summary {
-  display: grid;
-  gap: var(--spacing-4);
-  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  padding: var(--spacing-2) var(--spacing-3);
 }
 
 .outbound-summary-card {
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  align-items: baseline;
+  border: 0;
+  border-left: 1px solid var(--color-border);
+  border-radius: 0;
   display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  padding: var(--spacing-4);
+  flex-wrap: wrap;
+  flex: 1 1 auto;
+  gap: var(--spacing-1) var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-4);
 }
 
-.outbound-summary-card span,
-.outbound-summary-card small {
+.outbound-summary-card:first-child {
+  border-left: 0;
+}
+
+.outbound-summary-card span {
   color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .outbound-summary-card strong {
-  font-size: var(--font-size-2xl);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-lg);
+}
+
+.outbound-summary-card small {
+  color: var(--color-text-tertiary);
+  flex-basis: 100%;
+  font-size: 0.68rem;
+}
+
+@media (max-width: 760px) {
+  .outbound-summary-card {
+    flex-basis: 50%;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .outbound-summary-card:nth-child(odd) {
+    border-left: 0;
+  }
 }
 
 .outbound-notice {
@@ -163,9 +192,15 @@
 }
 
 .outbound-two-column {
+  align-items: start;
   display: grid;
   gap: var(--spacing-4);
   grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+}
+
+/* An empty approvals column must not stretch into a void beside the form. */
+.outbound-approved .outbound-muted {
+  margin: 0;
 }
 
 .outbound-approved-list article {
@@ -214,6 +249,64 @@
 
 .outbound-checkbox input {
   width: auto;
+}
+
+.outbound-approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+}
+
+.outbound-editing-note {
+  align-items: center;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--font-size-sm);
+  gap: var(--spacing-2);
+  justify-content: space-between;
+  padding: var(--spacing-2) var(--spacing-3);
+}
+
+.outbound-form-error {
+  color: var(--color-error);
+  font-size: var(--font-size-sm);
+}
+
+.outbound-form-actions {
+  display: flex;
+  gap: var(--spacing-2);
+  justify-content: flex-end;
+}
+
+.outbound-toggle-form {
+  display: grid;
+  gap: var(--spacing-3);
+}
+
+.outbound-toggle-form label {
+  color: var(--color-text-secondary);
+  display: grid;
+  font-size: var(--font-size-sm);
+  gap: var(--spacing-1);
+}
+
+.outbound-toggle-form textarea {
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  min-height: 5rem;
+  padding: var(--spacing-2);
+  resize: vertical;
+}
+
+.outbound-toggle-summary {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
 }
 
 .outbound-history-list article,

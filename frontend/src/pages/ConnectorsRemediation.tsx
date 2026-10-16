@@ -1,15 +1,25 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Cable, CheckCircle2, Search, ShieldCheck, TriangleAlert } from "lucide-react";
-import { useState } from "react";
+import { Cable, CheckCircle2, Pencil, Search, ShieldCheck, TriangleAlert } from "lucide-react";
+import { useRef, useState } from "react";
 
 import { api, type ApiError } from "../api/client";
 import { hasPermission, loadSession } from "../auth/session";
 import { Button } from "../components/primitives/Button";
+import { Hint } from "../components/primitives/Hint";
 import { StepUpPrompt } from "../components/StepUpPrompt";
 import { WorkspaceHeader } from "../components/WorkspaceHeader";
 import { ControlRail } from "../components/ControlRail";
 import { WorkflowGuide } from "../components/WorkflowGuide";
 import { randomUuid } from "../lib/ids";
+import {
+  authStateLabel,
+  connectorCapabilityLabel,
+  connectorStatusLabel,
+  executionStateLabel,
+  HINTS,
+  remediationActionLabel,
+  searchPurposeLabel,
+} from "../lib/labels";
 import "./ConnectorsRemediation.css";
 
 type Provider = "microsoft_365" | "google_workspace" | "imap_pop";
@@ -172,6 +182,25 @@ const providerLabel: Record<Provider, string> = {
   imap_pop: "IMAP/POP",
 };
 
+/**
+ * The two unions a remediation request is built from. The <option> value stays
+ * the wire token the API expects; the words come from the shared catalog so the
+ * form and the history list never describe the same action differently.
+ */
+const SEARCH_PURPOSES: SearchPurpose[] = [
+  "post_delivery_threat",
+  "customer_reported_phishing",
+  "false_negative_review",
+  "manual_security_case",
+];
+
+const REMEDIATION_ACTIONS: RemediationAction[] = [
+  "move_to_quarantine",
+  "move_to_junk",
+  "delete",
+  "manual_review",
+];
+
 function errorMessage(error: unknown): string {
   const apiError = error as Partial<ApiError>;
   return apiError.message ?? "Request failed";
@@ -195,6 +224,8 @@ export function ConnectorsRemediation() {
     useState<RemediationDraft>(defaultRemediationDraft);
   const [connectorFormError, setConnectorFormError] = useState<string | null>(null);
   const [remediationFormError, setRemediationFormError] = useState<string | null>(null);
+  const [editingConnectorId, setEditingConnectorId] = useState<string | null>(null);
+  const connectorFormRef = useRef<HTMLFormElement>(null);
 
   const session = useQuery({
     queryKey: ["session"],
@@ -275,6 +306,36 @@ export function ConnectorsRemediation() {
     },
   });
 
+  function beginEditConnector(connector: ConnectorView) {
+    const capabilityScopes = (capability: Capability) =>
+      connector.capabilities.find((entry) => entry.capability === capability)?.granted_scopes ?? [];
+    setConnectorDraft({
+      provider: connector.provider,
+      display_name: connector.display_name,
+      external_tenant_id_hash: connector.external_tenant_id_hash,
+      // The stored credential reference is never rendered back; saving an edit
+      // requires re-entering it to confirm the rotation.
+      credential_reference_hash: "",
+      status: connector.status,
+      auth_state: connector.auth_state,
+      directory_scope: capabilityScopes("directory_sync").join(", "),
+      mailbox_scope: capabilityScopes("mailbox_search").join(", "),
+      remediation_scope: capabilityScopes("retro_remediation").join(", "),
+      reason: "",
+    });
+    setEditingConnectorId(connector.id);
+    setConnectorFormError(null);
+    upsertConnector.reset();
+    connectorFormRef.current?.scrollIntoView?.({ block: "start" });
+  }
+
+  function cancelEditConnector() {
+    setConnectorDraft(defaultConnectorDraft);
+    setEditingConnectorId(null);
+    setConnectorFormError(null);
+    upsertConnector.reset();
+  }
+
   if (connectors.isLoading) {
     return (
       <div className="connectors-state" role="status">
@@ -295,35 +356,38 @@ export function ConnectorsRemediation() {
   const remediationError = requestRemediation.isError
     ? errorMessage(requestRemediation.error)
     : null;
+  const editingConnector = editingConnectorId
+    ? (data.connectors.find((connector) => connector.id === editingConnectorId) ?? null)
+    : null;
 
   return (
     <div className="connectors-page">
       <WorkspaceHeader
         eyebrow="Provider controls"
         title="Connectors & remediation"
-        description="Manage tenant-scoped Microsoft 365 and Google Workspace capabilities, directory status, mailbox search and recorded remediation outcomes without exposing provider tokens."
-        scope="Tenant-scoped connector controls"
+        description="Set up the Microsoft 365 and Google Workspace connections for a customer: directory status, mailbox search and the remediation actions you record here. Provider sign-in secrets are never shown on this page."
+        scope="Customer connector controls"
       />
 
       <ControlRail
         title="Connector action queue"
-        summary="Start with connector availability, then use only the provider capabilities that have been authorized for the selected tenant."
+        summary="Start with connector availability, then use only the capabilities that are enabled for the selected customer."
         signals={[
           {
             label: "Active",
             value: data.summary.active_connectors,
-            detail: "Connected provider integrations available in scope.",
+            detail: "Connected integrations available right now.",
             tone: data.summary.active_connectors > 0 ? "healthy" : "attention",
           },
           {
             label: "Directory sync",
             value: data.summary.directory_sync_enabled,
-            detail: "Connectors currently reporting directory-sync capability.",
+            detail: "Connectors that sync directories right now.",
           },
           {
             label: "Pending remediation",
             value: data.summary.pending_remediations,
-            detail: "Provider actions awaiting a recorded outcome.",
+            detail: "Remediation actions waiting for a result.",
             tone: data.summary.pending_remediations > 0 ? "attention" : "healthy",
           },
         ]}
@@ -331,20 +395,20 @@ export function ConnectorsRemediation() {
 
       <WorkflowGuide
         title="Remediate through the connected provider"
-        description="Provider capabilities and mailbox actions are tenant-scoped. The console records the result but never displays provider tokens."
+        description="Capabilities and mailbox actions apply to one customer. This page records the result but never shows provider sign-in secrets."
         steps={[
           {
             label: "Validate",
-            detail: "Confirm provider connection and directory state for the selected tenant.",
+            detail: "Confirm the connection and directory state for the selected customer.",
           },
           {
             label: "Locate",
-            detail: "Search the permitted mailbox metadata or targeted remediation candidates.",
+            detail:
+              "Find the delivered message and mailbox for this case. Searches are logged with their result.",
           },
           {
             label: "Remediate",
-            detail:
-              "Execute the authorized action and capture its provider result in the audit trail.",
+            detail: "Run the action your role allows and note the result it returns.",
           },
         ]}
       />
@@ -389,21 +453,37 @@ export function ConnectorsRemediation() {
                   <div>
                     <strong>{connector.display_name}</strong>
                     <span>
-                      {providerLabel[connector.provider]} · {connector.status} · auth{" "}
-                      {connector.auth_state}
+                      {providerLabel[connector.provider]} · {connectorStatusLabel(connector.status)}{" "}
+                      · credentials: {authStateLabel(connector.auth_state)}
                     </span>
                   </div>
                   <div className="capability-list">
                     {connector.capabilities.map((capability) => (
-                      <span className={capabilityTone(capability)} key={capability.capability}>
-                        {capability.capability.replace("_", " ")}
+                      <span
+                        className={capabilityTone(capability)}
+                        key={capability.capability}
+                        title={`${capability.reason} · scopes: ${
+                          capability.granted_scopes.join(", ") || "none"
+                        }`}
+                      >
+                        {connectorCapabilityLabel(capability.capability)}
                       </span>
                     ))}
                   </div>
                   <small>
-                    Tenant ref {connector.external_tenant_id_hash} · updated{" "}
+                    External account ID {connector.external_tenant_id_hash} · updated{" "}
                     {new Date(connector.updated_at).toLocaleString()}
                   </small>
+                  {canManage ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost connector-edit"
+                      onClick={() => beginEditConnector(connector)}
+                    >
+                      <Pencil size={13} aria-hidden="true" />
+                      Edit capability
+                    </button>
+                  ) : null}
                 </div>
               ))
             )}
@@ -420,8 +500,8 @@ export function ConnectorsRemediation() {
                 <div className="connector-card" key={run.id}>
                   <strong>{run.display_name}</strong>
                   <span>
-                    {run.state} · users {run.users_seen} · groups {run.groups_seen} · aliases{" "}
-                    {run.aliases_seen}
+                    {executionStateLabel(run.state)} · users {run.users_seen} · groups{" "}
+                    {run.groups_seen} · aliases {run.aliases_seen}
                   </span>
                   {run.error_summary ? <small>{run.error_summary}</small> : null}
                 </div>
@@ -435,6 +515,7 @@ export function ConnectorsRemediation() {
         <section className="connectors-grid">
           <form
             className="connectors-panel connectors-form"
+            ref={connectorFormRef}
             onSubmit={(event) => {
               event.preventDefault();
               if (
@@ -444,14 +525,25 @@ export function ConnectorsRemediation() {
                 connectorDraft.reason.trim().length < 12
               ) {
                 setConnectorFormError(
-                  "Connector name, safe hashes and a substantive reason are required.",
+                  "Add a connector name, the account and credential references, and a reason in a full sentence.",
                 );
                 return;
               }
               upsertConnector.mutate(connectorDraft);
             }}
           >
-            <h2>Register connector capability</h2>
+            <h2>
+              {editingConnector ? "Update connector capability" : "Register connector capability"}
+            </h2>
+            {editingConnector ? (
+              <p className="connectors-editing-note">
+                Editing {editingConnector.display_name}. Saving updates this connector; re-enter the
+                credential reference to confirm it.
+                <button type="button" className="btn btn-ghost" onClick={cancelEditConnector}>
+                  Cancel edit
+                </button>
+              </p>
+            ) : null}
             <label>
               Provider
               <select
@@ -475,7 +567,7 @@ export function ConnectorsRemediation() {
               />
             </label>
             <label>
-              External tenant hash
+              External account ID
               <input
                 value={connectorDraft.external_tenant_id_hash}
                 onChange={(event) =>
@@ -539,7 +631,7 @@ export function ConnectorsRemediation() {
             ) : null}
             <StepUpPrompt error={upsertConnector.error} />
             <Button type="submit" variant="primary" loading={upsertConnector.isPending}>
-              Save connector
+              {editingConnector ? "Update connector" : "Save connector"}
             </Button>
           </form>
 
@@ -554,7 +646,7 @@ export function ConnectorsRemediation() {
                 remediationDraft.reason.trim().length < 12
               ) {
                 setRemediationFormError(
-                  "Connector, delivered message ID, mailbox hash and reason are required.",
+                  "Choose a connector, then enter the message ID, mailbox reference and a reason in a full sentence.",
                 );
                 return;
               }
@@ -579,7 +671,7 @@ export function ConnectorsRemediation() {
               </select>
             </label>
             <label>
-              Tenant message ID
+              Message ID
               <input
                 value={remediationDraft.tenant_message_id}
                 onChange={(event) =>
@@ -615,7 +707,25 @@ export function ConnectorsRemediation() {
               />
             </label>
             <label>
-              Action
+              Purpose
+              <select
+                value={remediationDraft.purpose}
+                onChange={(event) =>
+                  setRemediationDraft({
+                    ...remediationDraft,
+                    purpose: event.target.value as SearchPurpose,
+                  })
+                }
+              >
+                {SEARCH_PURPOSES.map((purpose) => (
+                  <option value={purpose} key={purpose}>
+                    {searchPurposeLabel(purpose)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Action on the message
               <select
                 value={remediationDraft.action_type}
                 onChange={(event) =>
@@ -625,10 +735,11 @@ export function ConnectorsRemediation() {
                   })
                 }
               >
-                <option value="move_to_quarantine">Move to quarantine</option>
-                <option value="move_to_junk">Move to junk</option>
-                <option value="delete">Delete</option>
-                <option value="manual_review">Manual review</option>
+                {REMEDIATION_ACTIONS.map((action) => (
+                  <option value={action} key={action}>
+                    {remediationActionLabel(action)}
+                  </option>
+                ))}
               </select>
             </label>
             <label>
@@ -644,9 +755,11 @@ export function ConnectorsRemediation() {
               <p className="connectors-error">{remediationFormError ?? remediationError}</p>
             ) : null}
             <StepUpPrompt error={requestRemediation.error} />
-            <Button type="submit" variant="danger" loading={requestRemediation.isPending}>
-              Record remediation intent
-            </Button>
+            <Hint label="This acts on the customer's mailbox through the provider. Delete and move actions can remove mail the customer still needs.">
+              <Button type="submit" variant="danger" loading={requestRemediation.isPending}>
+                Record remediation intent
+              </Button>
+            </Hint>
           </form>
         </section>
       ) : null}
@@ -660,10 +773,13 @@ export function ConnectorsRemediation() {
             ) : (
               data.mailbox_searches.map((searchItem) => (
                 <div className="connector-card" key={searchItem.id}>
-                  <strong>{searchItem.purpose.replaceAll("_", " ")}</strong>
-                  <span>
-                    {searchItem.state} · {searchItem.match_confirmation}
-                  </span>
+                  <strong>{searchPurposeLabel(searchItem.purpose)}</strong>
+                  <Hint label={HINTS.providerState}>
+                    <span>
+                      {executionStateLabel(searchItem.state)} · match check:{" "}
+                      {executionStateLabel(searchItem.match_confirmation)}
+                    </span>
+                  </Hint>
                   <small>Mailbox {searchItem.mailbox_address_hash}</small>
                 </div>
               ))
@@ -678,10 +794,16 @@ export function ConnectorsRemediation() {
             ) : (
               data.remediation_actions.map((action) => (
                 <div className="connector-card" key={action.id}>
-                  <strong>{action.action_type.replaceAll("_", " ")}</strong>
-                  <span>
-                    {action.state} · provider side effect is recorded only after worker confirmation
-                  </span>
+                  <strong>{remediationActionLabel(action.action_type)}</strong>
+                  <Hint label={HINTS.providerState}>
+                    <span>{executionStateLabel(action.state)}</span>
+                  </Hint>
+                  {action.provider_outcome_code ? (
+                    <small>Provider outcome: {action.provider_outcome_code}</small>
+                  ) : null}
+                  {action.error_summary ? (
+                    <small className="connectors-error">{action.error_summary}</small>
+                  ) : null}
                   <small>{action.reason}</small>
                 </div>
               ))
