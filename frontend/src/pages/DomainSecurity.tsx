@@ -173,8 +173,8 @@ function policyTone(policy: string | null): StatusTone {
 }
 
 function bimiStatusLabel(bimi: BimiStatus): string {
-  return bimi.status === "ready" && bimi.validation_scope === "dns_metadata_only"
-    ? "DNS prerequisites observed"
+  return bimi.validation_scope === "dns_metadata_only"
+    ? `${bimi.status} — DNS metadata only`
     : bimi.status;
 }
 

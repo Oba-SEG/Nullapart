@@ -255,7 +255,7 @@ async fn domain_observer_persists_dns_posture_bimi_status_and_authorization_resu
     .fetch_one(&pool)
     .await
     .expect("bimi status must be written");
-    assert_eq!(bimi.get::<String, _>("status"), "ready");
+    assert_eq!(bimi.get::<String, _>("status"), "not_ready");
     assert_eq!(bimi.get::<String, _>("svg_status"), "not_checked");
     assert_eq!(bimi.get::<String, _>("certificate_status"), "unknown");
 

@@ -282,7 +282,12 @@ impl DomainObserverWorker {
         let dkim_problem = dkim.status == "fail";
         let mta_sts_degraded = mta_sts.status == "fail";
         let tls_rpt_degraded = tls_rpt.status == "fail";
-        let bimi_problem = bimi.status != "ready" && bimi.observation.status != "unknown";
+        // BIMI is optional, and missing external SVG/VMC validation is a
+        // truthful readiness limitation rather than an invalid published
+        // record. Alert only on concrete DNS/URL defects; the UI retains the
+        // not-ready state and remediation guidance for the validation gap.
+        let bimi_problem = bimi.svg_status == "invalid"
+            || matches!(bimi.certificate_status.as_str(), "missing" | "invalid");
 
         let mut transaction = self
             .pool
@@ -622,13 +627,15 @@ impl DomainObserverWorker {
                     Some(_) => "invalid",
                     None => "missing",
                 };
-                let ready =
-                    dmarc_enforced && svg_status != "invalid" && certificate_status == "unknown";
                 BimiCheck {
                     selector: DEFAULT_BIMI_SELECTOR.to_string(),
                     record_value: Some(record.chars().take(512).collect()),
                     logo_url,
-                    status: if ready { "ready" } else { "not_ready" }.to_string(),
+                    // URL shape is only DNS metadata. The observer deliberately
+                    // does not dereference customer-controlled URLs, so it cannot
+                    // validate the restrictive SVG profile or VMC/CMC chain.
+                    // Never present that limited observation as BIMI-ready.
+                    status: "not_ready".to_string(),
                     svg_status: svg_status.to_string(),
                     dmarc_enforcement_status: if dmarc_enforced {
                         "enforced".to_string()
@@ -637,17 +644,10 @@ impl DomainObserverWorker {
                     },
                     certificate_status: certificate_status.to_string(),
                     errors: bimi_errors(dmarc_enforced, svg_status, certificate_status),
-                    observation: if ready {
-                        Observation::pass(
-                            Some(name),
-                            "BIMI DNS prerequisites are present; SVG and certificate material were not fetched or cryptographically validated.",
-                        )
-                    } else {
-                        Observation::warning(
-                            Some(name),
-                            "BIMI DNS readiness prerequisites are incomplete; SVG and certificate material are never fetched by this observer.",
-                        )
-                    },
+                    observation: Observation::warning(
+                        Some(name),
+                        "BIMI DNS metadata was observed, but SVG and certificate material were not fetched or cryptographically validated.",
+                    ),
                 }
             },
             Err(_) => BimiCheck::not_ready(
@@ -927,11 +927,23 @@ fn bimi_errors(dmarc_enforced: bool, svg_status: &str, certificate_status: &str)
     if svg_status == "invalid" {
         errors.push("BIMI logo URL must be a safe HTTPS SVG URL".to_string());
     }
+    if svg_status == "not_checked" {
+        errors.push(
+            "BIMI SVG profile has not been fetched and validated by an approved isolated validator."
+                .to_string(),
+        );
+    }
     if certificate_status == "missing" {
         errors.push("BIMI certificate URL is missing".to_string());
     }
     if certificate_status == "invalid" {
         errors.push("BIMI certificate URL is invalid".to_string());
+    }
+    if certificate_status == "unknown" {
+        errors.push(
+            "BIMI VMC/CMC material has not been fetched and cryptographically validated."
+                .to_string(),
+        );
     }
     errors
 }
@@ -968,5 +980,13 @@ mod tests {
         assert!(!safe_bimi_svg_url("http://brand.example/logo.svg"));
         assert!(!safe_bimi_svg_url("data:image/svg+xml,<svg></svg>"));
         assert!(!safe_bimi_svg_url("https://brand.example/logo.png"));
+    }
+
+    #[test]
+    fn dns_metadata_never_claims_bimi_svg_or_certificate_validation() {
+        let errors = bimi_errors(true, "not_checked", "unknown");
+
+        assert!(errors.iter().any(|error| error.contains("SVG profile")));
+        assert!(errors.iter().any(|error| error.contains("VMC/CMC")));
     }
 }

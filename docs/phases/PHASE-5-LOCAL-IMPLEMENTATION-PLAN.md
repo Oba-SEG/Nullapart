@@ -545,12 +545,12 @@ metadata-only quarantine for restricted `ruf` failure reports.
 
 ### Outbound-authentication boundary (2026-10-15 correction)
 
-The Domain Security experience reports **DNS-only BIMI readiness metadata**.
-`ready` means the observer found enforced DMARC and safe-shaped HTTPS logo and
-certificate URLs; it does not mean the SVG profile, VMC/CMC chain, or
-mailbox-provider logo display has been validated. The observer intentionally
-does not dereference customer-controlled URLs to avoid SSRF and untrusted SVG
-parsing in the control plane.
+The Domain Security experience reports **DNS-only BIMI metadata**. A safe-shaped
+record is never `ready`: the observer does not fetch or validate the SVG
+profile, VMC/CMC chain, or mailbox-provider logo display. The observer
+intentionally does not dereference customer-controlled URLs to avoid SSRF and
+untrusted SVG parsing in the control plane. An approved isolated validator is
+required before BIMI can be marked ready.
 
 The Phase 1 outbound admission model reports DKIM signing as unavailable by
 default. A narrow private submission component now permits only a
