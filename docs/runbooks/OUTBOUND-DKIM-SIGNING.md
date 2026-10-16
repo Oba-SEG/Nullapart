@@ -18,7 +18,11 @@ messages, even though its authorized Mail Core source IP is the same.
 Every delivery worker must make a durable, transaction-scoped idempotency claim
 before the SMTP attempt and record the Postfix queue identifier after `250`.
 If the final response or ledger record is ambiguous, retain the claim for
-recovery and defer; never retry the SMTP transaction blindly.
+recovery and defer; never retry the SMTP transaction blindly. The ledger is
+tenant/deployment scoped and stores only the idempotency key, transaction and
+Postfix queue identifiers, state, and timestamps—never MIME, recipients, or
+signing key material. The recovery operator must reconcile an aged
+`in_progress` row against Postfix before any follow-up action.
 
 Do not send a private key through Git, a Docker image layer, the frontend,
 Mail Core configuration, logs, a ticket, or this runbook. The tracked

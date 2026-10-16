@@ -286,9 +286,10 @@ Cross-tenant instances must be independently deliverable/dispositionable after p
 
 **Status:** 🟡 PARTIAL — authorization/intelligence foundation in
 `crates/mail-core/src/outbound.rs`; private signed-submission boundary in
-`crates/mail-core/src/outbound_submission.rs`; no authenticated connector,
-durable outbound queue/ledger implementation, routing worker, retry/DSN
-correlation, or customer delivery path is wired yet.
+`crates/mail-core/src/outbound_submission.rs`; durable per-customer PostgreSQL
+submission-ledger implementation in `migrations/036_outbound_submission_ledger.sql`.
+There is still no authenticated connector, durable outbound queue/routing
+worker, retry/DSN correlation, or customer delivery path wired yet.
 
 Implement initial trusted outbound intake.
 

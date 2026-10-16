@@ -10,7 +10,9 @@
 use std::{net::IpAddr, time::Duration};
 
 use async_trait::async_trait;
+use nullapart_mail_contracts::transaction::{CustomerId, DeploymentId};
 use sha2::{Digest, Sha256};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 use subtle::ConstantTimeEq;
 use tokio::{
     io::{AsyncBufRead, AsyncReadExt, AsyncWriteExt, BufReader},
@@ -114,13 +116,152 @@ pub enum OutboundSubmissionClaim {
 /// must implement this against its authoritative outbound-delivery store.
 #[async_trait]
 pub trait OutboundSubmissionLedger: Send + Sync {
-    async fn claim_submission(&self, transaction_id: &str) -> Result<OutboundSubmissionClaim, ()>;
+    async fn claim_submission(
+        &self,
+        idempotency_key: &str,
+        transaction_id: &str,
+    ) -> Result<OutboundSubmissionClaim, ()>;
 
     async fn record_submission(
         &self,
         idempotency_key: &str,
         receipt: &OutboundSubmissionReceipt,
     ) -> Result<(), ()>;
+}
+
+/// PostgreSQL implementation of the private outbound submission ledger.
+///
+/// Each instance is permanently scoped to the workload-derived deployment and
+/// customer. The row is claimed before the SMTP side effect and remains
+/// `in_progress` if a connection fails after Postfix may have accepted DATA.
+/// That conservative state deliberately requires reconciliation rather than
+/// risking a duplicate customer delivery by retrying blindly.
+#[derive(Clone)]
+pub struct PostgresOutboundSubmissionLedger {
+    pool: PgPool,
+    deployment_id: DeploymentId,
+    customer_id: CustomerId,
+}
+
+impl PostgresOutboundSubmissionLedger {
+    pub fn new(pool: PgPool, deployment_id: DeploymentId, customer_id: CustomerId) -> Self {
+        Self {
+            pool,
+            deployment_id,
+            customer_id,
+        }
+    }
+
+    async fn begin_scoped(&self) -> Result<Transaction<'_, Postgres>, ()> {
+        let mut transaction = self.pool.begin().await.map_err(|_| ())?;
+        sqlx::query(
+            "SELECT set_config('app.current_deployment_id', $1, true), \
+                    set_config('app.current_customer_id', $2, true)",
+        )
+        .bind(&self.deployment_id.0)
+        .bind(&self.customer_id.0)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| ())?;
+        Ok(transaction)
+    }
+}
+
+#[async_trait]
+impl OutboundSubmissionLedger for PostgresOutboundSubmissionLedger {
+    async fn claim_submission(
+        &self,
+        idempotency_key: &str,
+        transaction_id: &str,
+    ) -> Result<OutboundSubmissionClaim, ()> {
+        if !is_sha256_hex(idempotency_key) || transaction_id.trim().is_empty() {
+            return Err(());
+        }
+
+        let mut transaction = self.begin_scoped().await?;
+        let inserted = sqlx::query(
+            "INSERT INTO outbound_submission_ledger \
+             (deployment_id, customer_id, idempotency_key, transaction_id, submission_state) \
+             VALUES ($1, $2, $3, $4, 'in_progress') \
+             ON CONFLICT (deployment_id, customer_id, idempotency_key) DO NOTHING",
+        )
+        .bind(&self.deployment_id.0)
+        .bind(&self.customer_id.0)
+        .bind(idempotency_key)
+        .bind(transaction_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| ())?
+        .rows_affected();
+        if inserted == 1 {
+            transaction.commit().await.map_err(|_| ())?;
+            return Ok(OutboundSubmissionClaim::Submit);
+        }
+
+        let row = sqlx::query(
+            "SELECT submission_state, transaction_id, postfix_queue_id \
+             FROM outbound_submission_ledger \
+             WHERE deployment_id = $1 AND customer_id = $2 AND idempotency_key = $3 \
+             FOR UPDATE",
+        )
+        .bind(&self.deployment_id.0)
+        .bind(&self.customer_id.0)
+        .bind(idempotency_key)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| ())?
+        .ok_or(())?;
+        let claim = match (
+            row.get::<String, _>("submission_state").as_str(),
+            row.get::<Option<String>, _>("transaction_id"),
+            row.get::<Option<String>, _>("postfix_queue_id"),
+        ) {
+            ("submitted", Some(transaction_id), Some(postfix_queue_id)) => {
+                OutboundSubmissionClaim::AlreadySubmitted(OutboundSubmissionReceipt {
+                    transaction_id,
+                    postfix_queue_id,
+                })
+            },
+            ("in_progress", _, _) => OutboundSubmissionClaim::InProgress,
+            _ => return Err(()),
+        };
+        transaction.commit().await.map_err(|_| ())?;
+        Ok(claim)
+    }
+
+    async fn record_submission(
+        &self,
+        idempotency_key: &str,
+        receipt: &OutboundSubmissionReceipt,
+    ) -> Result<(), ()> {
+        if !is_sha256_hex(idempotency_key)
+            || receipt.transaction_id.trim().is_empty()
+            || receipt.postfix_queue_id.trim().is_empty()
+        {
+            return Err(());
+        }
+        let mut transaction = self.begin_scoped().await?;
+        let updated = sqlx::query(
+            "UPDATE outbound_submission_ledger \
+             SET submission_state = 'submitted', postfix_queue_id = $5, \
+                 submitted_at = now() \
+             WHERE deployment_id = $1 AND customer_id = $2 AND idempotency_key = $3 \
+               AND submission_state = 'in_progress' AND transaction_id = $4",
+        )
+        .bind(&self.deployment_id.0)
+        .bind(&self.customer_id.0)
+        .bind(idempotency_key)
+        .bind(&receipt.transaction_id)
+        .bind(&receipt.postfix_queue_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| ())?
+        .rows_affected();
+        if updated != 1 {
+            return Err(());
+        }
+        transaction.commit().await.map_err(|_| ())
+    }
 }
 
 /// Authorize and bind a raw outbound message to its validated intake request.
@@ -187,8 +328,9 @@ pub async fn submit_authorized_outbound(
     submission: AuthorizedOutboundSubmission,
 ) -> Result<OutboundSubmissionReceipt, OutboundSubmissionError> {
     let idempotency_key = submission.idempotency_key().to_string();
+    let transaction_id = submission.transaction_id().to_string();
     match ledger
-        .claim_submission(&idempotency_key)
+        .claim_submission(&idempotency_key, &transaction_id)
         .await
         .map_err(|_| OutboundSubmissionError::LedgerUnavailable)?
     {
@@ -256,15 +398,18 @@ fn map_authorization_error(_: OutboundError) -> OutboundSubmissionError {
 }
 
 fn content_hash_matches(expected: &str, raw_mime: &[u8]) -> bool {
-    if expected.len() != 64
-        || !expected
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
+    if !is_sha256_hex(expected) {
         return false;
     }
     let actual = hex::encode(Sha256::digest(raw_mime));
     bool::from(expected.as_bytes().ct_eq(actual.as_bytes()))
+}
+
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 /// Derive a stable key for delivery retries from trusted submission identity
@@ -497,7 +642,7 @@ mod tests {
 
     #[async_trait]
     impl OutboundSubmissionLedger for TestLedger {
-        async fn claim_submission(&self, _: &str) -> Result<OutboundSubmissionClaim, ()> {
+        async fn claim_submission(&self, _: &str, _: &str) -> Result<OutboundSubmissionClaim, ()> {
             Ok(self
                 .0
                 .lock()
