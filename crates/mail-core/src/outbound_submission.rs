@@ -782,7 +782,7 @@ mod tests {
         let signed = authorize_outbound_submission(
             &request(raw_mime),
             &domains(),
-            &DomainAuthorization::Full,
+            &DomainAuthorization::Internal,
             &signer("customer-a.test"),
             raw_mime.to_vec(),
         );
@@ -791,7 +791,7 @@ mod tests {
         let unavailable = authorize_outbound_submission(
             &request(raw_mime),
             &domains(),
-            &DomainAuthorization::Full,
+            &DomainAuthorization::Internal,
             &signer("other.test"),
             raw_mime.to_vec(),
         );
@@ -806,7 +806,7 @@ mod tests {
             authorize_outbound_submission(
                 &mismatched_hash,
                 &domains(),
-                &DomainAuthorization::Full,
+                &DomainAuthorization::Internal,
                 &signer("customer-a.test"),
                 raw_mime.to_vec(),
             )
@@ -820,7 +820,7 @@ mod tests {
             authorize_outbound_submission(
                 &null_sender,
                 &domains(),
-                &DomainAuthorization::Full,
+                &DomainAuthorization::Internal,
                 &signer("customer-a.test"),
                 raw_mime.to_vec(),
             )
@@ -835,7 +835,7 @@ mod tests {
             authorize_outbound_submission(
                 &injection_attempt,
                 &domains(),
-                &DomainAuthorization::Full,
+                &DomainAuthorization::Internal,
                 &signer("customer-a.test"),
                 raw_mime.to_vec(),
             )
@@ -895,7 +895,7 @@ mod tests {
         let submission = authorize_outbound_submission(
             &request(raw_mime),
             &domains(),
-            &DomainAuthorization::Full,
+            &DomainAuthorization::Internal,
             &signer("customer-a.test"),
             raw_mime.to_vec(),
         )
@@ -931,7 +931,7 @@ mod tests {
         let submission = authorize_outbound_submission(
             &request(raw_mime),
             &domains(),
-            &DomainAuthorization::Full,
+            &DomainAuthorization::Internal,
             &signer("customer-a.test"),
             raw_mime.to_vec(),
         )
@@ -956,7 +956,7 @@ mod tests {
         let submission = authorize_outbound_submission(
             &request(raw_mime),
             &domains(),
-            &DomainAuthorization::Full,
+            &DomainAuthorization::Internal,
             &signer("customer-a.test"),
             raw_mime.to_vec(),
         )

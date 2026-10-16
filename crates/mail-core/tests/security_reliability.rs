@@ -74,11 +74,7 @@ fn validated_sender_domain(customer_id: CustomerId) -> DomainValidation {
 #[test]
 fn open_relay_default_deny() {
     let empty_allow_list: &[DomainValidation] = &[];
-    for authorization in [
-        DomainAuthorization::Internal,
-        DomainAuthorization::SendOnly,
-        DomainAuthorization::Full,
-    ] {
+    for authorization in [DomainAuthorization::Internal, DomainAuthorization::SendOnly] {
         let result = validate_outbound(&relay_request(), empty_allow_list, &authorization);
         assert!(
             matches!(result, Err(OutboundError::DomainNotAuthorized(_))),
@@ -100,23 +96,24 @@ fn open_relay_default_deny() {
 fn relay_path_fails_closed_for_unauthenticated_unvalidated_and_foreign_senders() {
     let authorized = vec![validated_sender_domain(CustomerId::new("cust-a"))];
 
-    // The least-privileged authorization never relays, even for a domain that
-    // is validated and owned by the connector's customer.
+    // A documented INTERNAL domain may relay once the authenticated connector
+    // and customer-owned domain checks have passed.
     let internal = validate_outbound(
         &relay_request(),
         &authorized,
         &DomainAuthorization::Internal,
     );
     assert!(
-        matches!(internal, Err(OutboundError::DomainNotAuthorized(_))),
-        "Internal-only authorization must deny external relay, got {internal:?}"
+        internal.is_ok(),
+        "an authenticated INTERNAL domain must relay, got {internal:?}"
     );
 
     // No authenticated connector identity means no relay, even with a
     // fully validated allow-list.
     let mut anonymous = relay_request();
     anonymous.connector.authenticated_as = None;
-    let unauthenticated = validate_outbound(&anonymous, &authorized, &DomainAuthorization::Full);
+    let unauthenticated =
+        validate_outbound(&anonymous, &authorized, &DomainAuthorization::Internal);
     assert!(
         matches!(unauthenticated, Err(OutboundError::NotAuthenticated)),
         "an unauthenticated connector must be denied, got {unauthenticated:?}"
@@ -127,8 +124,11 @@ fn relay_path_fails_closed_for_unauthenticated_unvalidated_and_foreign_senders()
         validated: false,
         ..validated_sender_domain(CustomerId::new("cust-a"))
     }];
-    let unvalidated_result =
-        validate_outbound(&relay_request(), &unvalidated, &DomainAuthorization::Full);
+    let unvalidated_result = validate_outbound(
+        &relay_request(),
+        &unvalidated,
+        &DomainAuthorization::Internal,
+    );
     assert!(
         matches!(
             unvalidated_result,
@@ -139,7 +139,8 @@ fn relay_path_fails_closed_for_unauthenticated_unvalidated_and_foreign_senders()
 
     // A domain validated for a *different* customer never relays.
     let foreign = vec![validated_sender_domain(CustomerId::new("cust-b"))];
-    let foreign_result = validate_outbound(&relay_request(), &foreign, &DomainAuthorization::Full);
+    let foreign_result =
+        validate_outbound(&relay_request(), &foreign, &DomainAuthorization::Internal);
     assert!(
         matches!(foreign_result, Err(OutboundError::DomainNotAuthorized(_))),
         "a cross-customer sender domain must be denied, got {foreign_result:?}"
@@ -148,7 +149,11 @@ fn relay_path_fails_closed_for_unauthenticated_unvalidated_and_foreign_senders()
     // The permitted path still succeeds, so the denials above are
     // configuration denials rather than a broken gate that rejects
     // everything (which would hide a real open-relay regression).
-    let permitted = validate_outbound(&relay_request(), &authorized, &DomainAuthorization::Full);
+    let permitted = validate_outbound(
+        &relay_request(),
+        &authorized,
+        &DomainAuthorization::Internal,
+    );
     assert!(
         permitted.is_ok(),
         "an authenticated, validated, owned sender domain must relay, got {permitted:?}"

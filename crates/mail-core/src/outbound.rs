@@ -79,12 +79,10 @@ pub enum DomainValidationSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum DomainAuthorization {
-    /// Internal-only — cannot be used for external delivery.
+    /// Verified customer domain authorized for inbound and outbound mail.
     Internal,
     /// Send-only — can send but cannot receive.
     SendOnly,
-    /// Full send and receive.
-    Full,
 }
 
 /// Outbound intake request.
@@ -326,17 +324,10 @@ pub fn validate_outbound_with_signing_config(
 
     // Validate domain authorization
     match authorization {
-        DomainAuthorization::Internal => {
-            return Err(OutboundError::DomainNotAuthorized(
-                "Internal-only domain cannot send externally".to_string(),
-            ));
-        },
-        DomainAuthorization::SendOnly => {
-            // Send-only is allowed for outbound
-        },
-        DomainAuthorization::Full => {
-            // Full access
-        },
+        // Both documented domain types are permitted to originate outbound
+        // mail. Their inbound behavior is enforced by the recipient-domain
+        // path, not by this external-delivery admission boundary.
+        DomainAuthorization::Internal | DomainAuthorization::SendOnly => {},
     }
 
     // Validate recipients exist and are syntactically routable.
@@ -612,7 +603,7 @@ mod tests {
             message_id: None,
             content_hash: "abc".to_string(),
         };
-        let result = validate_outbound(&request, &test_domains(), &DomainAuthorization::Full);
+        let result = validate_outbound(&request, &test_domains(), &DomainAuthorization::Internal);
         assert!(result.is_ok());
         let result = result.unwrap();
         assert_eq!(result.disposition, OutboundDisposition::Accepted);
@@ -678,7 +669,7 @@ mod tests {
             message_id: None,
             content_hash: "abc".to_string(),
         };
-        let result = validate_outbound(&request, &test_domains(), &DomainAuthorization::Full);
+        let result = validate_outbound(&request, &test_domains(), &DomainAuthorization::Internal);
         assert!(matches!(result, Err(OutboundError::NotAuthenticated)));
     }
 
@@ -695,12 +686,12 @@ mod tests {
             message_id: None,
             content_hash: "abc".to_string(),
         };
-        let result = validate_outbound(&request, &test_domains(), &DomainAuthorization::Full);
+        let result = validate_outbound(&request, &test_domains(), &DomainAuthorization::Internal);
         assert!(matches!(result, Err(OutboundError::DomainNotAuthorized(_))));
     }
 
     #[test]
-    fn internal_only_rejected_for_external() {
+    fn internal_domain_is_allowed_for_external_delivery() {
         let request = OutboundIntakeRequest {
             connector: test_connector(),
             envelope_sender: EnvelopeSender::new("sender@customer-a.com"),
@@ -713,7 +704,7 @@ mod tests {
             content_hash: "abc".to_string(),
         };
         let result = validate_outbound(&request, &test_domains(), &DomainAuthorization::Internal);
-        assert!(matches!(result, Err(OutboundError::DomainNotAuthorized(_))));
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -725,7 +716,7 @@ mod tests {
             message_id: None,
             content_hash: "abc".to_string(),
         };
-        let result = validate_outbound(&request, &test_domains(), &DomainAuthorization::Full);
+        let result = validate_outbound(&request, &test_domains(), &DomainAuthorization::Internal);
         assert!(matches!(result, Err(OutboundError::NoRecipients)));
     }
 
@@ -742,7 +733,7 @@ mod tests {
             message_id: None,
             content_hash: "abc".to_string(),
         };
-        let intake = validate_outbound(&request, &test_domains(), &DomainAuthorization::Full)
+        let intake = validate_outbound(&request, &test_domains(), &DomainAuthorization::Internal)
             .expect("base validation must pass");
         let intelligence = OutboundIntelligenceDecision {
             outcome: OutboundDecisionOutcome::Hold,
