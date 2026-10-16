@@ -19,7 +19,8 @@ use chrono::{Duration, Utc};
 use nullapart_mail_contracts::transaction::{CustomerId, DeploymentId};
 use nullapart_mail_core::admin_rbac::{
     AdminRbacStore, AuditEventDraft, AuditSubject, AuthenticateOutcome, CreateUserOutcome,
-    NewSession, NewUser, PostgresAdminRbacStore, SessionConfig,
+    NewRoleDefinition, NewSession, NewUser, PostgresAdminRbacStore, RoleDeleteOutcome, RolePatch,
+    RoleUpdateOutcome, SessionConfig,
 };
 use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
@@ -740,5 +741,352 @@ fn discriminant_name(outcome: &AuthenticateOutcome) -> &'static str {
         AuthenticateOutcome::Bootstrapped { .. } => "Bootstrapped",
         AuthenticateOutcome::Unknown => "Unknown",
         AuthenticateOutcome::Suspended => "Suspended",
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires migrated local PostgreSQL through 038_custom_admin_roles.sql"]
+async fn store_custom_role_definitions_are_scoped_immutable_and_audited() {
+    let pool = connect().await;
+    ensure_request_role(&pool).await;
+    let fixture = seed(&pool).await;
+    let store = PostgresAdminRbacStore::new(pool.clone());
+    let actor = format!("admin-{}@example.test", fixture.suffix);
+    let created_by = format!("creator-{}", fixture.suffix);
+
+    // Bootstrap creates the deployment's builtin role rows.
+    let outcome = store
+        .authenticate_identity(&fixture.deployment.0, &actor, Some(&fixture.customer_a.0))
+        .await
+        .expect("bootstrap must succeed");
+    assert!(matches!(outcome, AuthenticateOutcome::Bootstrapped { .. }));
+
+    let builtins = store
+        .list_role_definitions(&fixture.deployment.0)
+        .await
+        .expect("the builtin roles must be listed");
+    assert_eq!(
+        builtins.len(),
+        3,
+        "exactly the three builtin levels are seeded per deployment"
+    );
+    assert!(
+        builtins.iter().all(|role| role.builtin),
+        "seeded builtin rows must carry the builtin flag"
+    );
+    let system_admin = builtins
+        .iter()
+        .find(|role| role.role_key == "system_admin")
+        .expect("system_admin is seeded");
+    assert_eq!(system_admin.role_level, "system");
+    assert!(!system_admin.permissions.is_empty());
+
+    // A custom role is stored with canonical (sorted, deduped) permissions.
+    let role_key = format!("audit_helper_{}", fixture.suffix.replace('-', "_"));
+    let created = store
+        .create_role(
+            &fixture.deployment.0,
+            NewRoleDefinition {
+                role_key: role_key.clone(),
+                display_name: "Audit helper".to_string(),
+                description: Some("Reads and exports audits".to_string()),
+                role_level: "customer".to_string(),
+                permissions: vec![
+                    "audit:view".to_string(),
+                    "audit:export".to_string(),
+                    "audit:view".to_string(),
+                ],
+            },
+            draft(&fixture, &actor, "admin_role_created", "admin_role"),
+        )
+        .await
+        .expect("the custom role must be created");
+    assert!(created, "a fresh role key must insert");
+    let role = store
+        .get_role_definition(&fixture.deployment.0, &role_key)
+        .await
+        .expect("the custom role must be readable")
+        .expect("the custom role must exist");
+    assert!(!role.builtin);
+    assert_eq!(
+        role.permissions,
+        vec!["audit:export".to_string(), "audit:view".to_string()]
+    );
+    assert_eq!(role.user_count, 0);
+    assert_eq!(
+        audit_count(&pool, &fixture.deployment, "admin_role_created").await,
+        1,
+        "creation audits in the same transaction as the rows"
+    );
+
+    // The unique (deployment, role_key) constraint refuses duplicates — builtin
+    // or custom — without writing an audit row.
+    let duplicate_builtin = store
+        .create_role(
+            &fixture.deployment.0,
+            NewRoleDefinition {
+                role_key: "system_admin".to_string(),
+                display_name: "Shadow".to_string(),
+                description: None,
+                role_level: "system".to_string(),
+                permissions: vec!["admin:users:manage".to_string()],
+            },
+            draft(&fixture, &actor, "admin_role_created", "admin_role"),
+        )
+        .await
+        .expect("the duplicate query must succeed");
+    assert!(!duplicate_builtin, "a builtin key cannot be redefined");
+    let duplicate_custom = store
+        .create_role(
+            &fixture.deployment.0,
+            NewRoleDefinition {
+                role_key: role_key.clone(),
+                display_name: "Audit helper copy".to_string(),
+                description: None,
+                role_level: "customer".to_string(),
+                permissions: vec!["audit:view".to_string()],
+            },
+            draft(&fixture, &actor, "admin_role_created", "admin_role"),
+        )
+        .await
+        .expect("the duplicate query must succeed");
+    assert!(!duplicate_custom, "a duplicate custom key must be refused");
+    assert_eq!(
+        audit_count(&pool, &fixture.deployment, "admin_role_created").await,
+        1,
+        "refused duplicates write no audit row"
+    );
+
+    // Builtin roles are immutable inside the store, so the API cannot race one.
+    let patched_builtin = store
+        .update_role(
+            &fixture.deployment.0,
+            "support",
+            RolePatch {
+                display_name: Some("Root Support".to_string()),
+                ..Default::default()
+            },
+            draft(&fixture, &actor, "admin_role_updated", "admin_role"),
+        )
+        .await
+        .expect("the builtin patch must reach the store");
+    assert!(matches!(patched_builtin, RoleUpdateOutcome::Builtin));
+    let deleted_builtin = store
+        .delete_role(
+            &fixture.deployment.0,
+            "customer_admin",
+            draft(&fixture, &actor, "admin_role_deleted", "admin_role"),
+        )
+        .await
+        .expect("the builtin delete must reach the store");
+    assert!(matches!(deleted_builtin, RoleDeleteOutcome::Builtin));
+    assert_eq!(
+        audit_count(&pool, &fixture.deployment, "admin_role_updated").await,
+        0,
+        "a refused builtin change writes no audit row"
+    );
+
+    // Grant the custom role, then edit its permissions: the holder's effective
+    // set follows the definition, and the audit records before/after.
+    let created_user = store
+        .create_user(
+            &fixture.deployment.0,
+            NewUser {
+                login: format!("holder-{}@example.test", fixture.suffix),
+                display_name: "Holder".to_string(),
+                customer_id: Some(fixture.customer_a.0.clone()),
+                roles: vec![role_key.clone()],
+                created_by: created_by.clone(),
+            },
+            draft(&fixture, &actor, "admin_user_created", "admin_user"),
+        )
+        .await
+        .expect("the holder must be created with the custom role");
+    let CreateUserOutcome::Created(holder) = created_user else {
+        panic!("the holder creation must succeed");
+    };
+    let AuthenticateOutcome::Authenticated { permissions, .. } = store
+        .authenticate_identity(
+            &fixture.deployment.0,
+            &format!("holder-{}@example.test", fixture.suffix),
+            None,
+        )
+        .await
+        .expect("the holder must authenticate")
+    else {
+        panic!("the holder is an existing provisioned identity");
+    };
+    assert_eq!(
+        permissions,
+        vec!["audit:export".to_string(), "audit:view".to_string()]
+    );
+
+    let updated = store
+        .update_role(
+            &fixture.deployment.0,
+            &role_key,
+            RolePatch {
+                display_name: None,
+                description: None,
+                permissions: Some(vec!["quarantine:view".to_string()]),
+            },
+            draft(&fixture, &actor, "admin_role_updated", "admin_role"),
+        )
+        .await
+        .expect("the custom role must be patchable");
+    match updated {
+        RoleUpdateOutcome::Updated {
+            permissions_before,
+            permissions_after,
+        } => {
+            assert_eq!(
+                permissions_before,
+                vec!["audit:export".to_string(), "audit:view".to_string()]
+            );
+            assert_eq!(permissions_after, vec!["quarantine:view".to_string()]);
+        },
+        other => panic!("the patch must apply, got {other:?}"),
+    }
+    let AuthenticateOutcome::Authenticated { permissions, .. } = store
+        .authenticate_identity(
+            &fixture.deployment.0,
+            &format!("holder-{}@example.test", fixture.suffix),
+            None,
+        )
+        .await
+        .expect("the holder must still authenticate")
+    else {
+        panic!("the holder is an existing provisioned identity");
+    };
+    assert_eq!(
+        permissions,
+        vec!["quarantine:view".to_string()],
+        "a narrowed definition stops applying without waiting for session expiry"
+    );
+
+    // A role users still hold cannot be deleted; the stored level drives rank.
+    let in_use = store
+        .delete_role(
+            &fixture.deployment.0,
+            &role_key,
+            draft(&fixture, &actor, "admin_role_deleted", "admin_role"),
+        )
+        .await
+        .expect("the delete must reach the store");
+    assert!(matches!(in_use, RoleDeleteOutcome::InUse));
+    assert_eq!(
+        store
+            .role_level_for_key(&fixture.deployment.0, &role_key)
+            .await
+            .expect("the level must be readable")
+            .as_deref(),
+        Some("customer"),
+        "rank comes from the stored definition"
+    );
+    assert!(
+        store
+            .role_exists(&fixture.deployment.0, &role_key)
+            .await
+            .expect("existence must be readable"),
+        "custom roles are grantable vocabulary"
+    );
+    assert!(
+        !store
+            .role_exists(&fixture.deployment.0, "not_a_role")
+            .await
+            .expect("existence must be readable"),
+        "unknown keys must be rejected rather than silently granted"
+    );
+
+    store
+        .revoke_role(
+            &fixture.deployment.0,
+            holder.id,
+            &role_key,
+            draft_for_user(&fixture, &actor, "admin_role_revoked", holder.id),
+        )
+        .await
+        .expect("the grant must be revoked");
+    let deleted = store
+        .delete_role(
+            &fixture.deployment.0,
+            &role_key,
+            draft(&fixture, &actor, "admin_role_deleted", "admin_role"),
+        )
+        .await
+        .expect("the delete must reach the store");
+    assert!(matches!(deleted, RoleDeleteOutcome::Deleted));
+    assert!(store
+        .get_role_definition(&fixture.deployment.0, &role_key)
+        .await
+        .expect("the lookup must succeed")
+        .is_none());
+    assert_eq!(
+        audit_count(&pool, &fixture.deployment, "admin_role_deleted").await,
+        1,
+        "only the applied deletion audits"
+    );
+
+    // Deployment isolation: the other deployment sees only its own builtins.
+    let other = store
+        .list_role_definitions(&fixture.deployment_b.0)
+        .await
+        .expect("the second deployment must be readable");
+    assert!(other.iter().all(|role| role.builtin));
+    assert!(!other.iter().any(|role| role.role_key == role_key));
+}
+
+/// The deployed Control Plane connects as the restricted runtime role, while
+/// every test above connects as the schema owner (which bypasses both RLS and
+/// table privileges). That difference hid a real defect: the role-definition
+/// store locks a role with `SELECT ... FOR UPDATE` (needs UPDATE) and then
+/// UPDATEs or DELETEs it, and the runtime role only held SELECT/INSERT on
+/// `admin_roles`, so every live PATCH/DELETE answered 503 while the
+/// owner-level store test stayed green. This asserts the privileges the store
+/// actually depends on whenever the runtime role exists in the database under
+/// test, and skips (rather than fails) a fresh database that has not been
+/// provisioned with it.
+#[tokio::test]
+#[ignore = "requires migrated local PostgreSQL through 038_custom_admin_roles.sql"]
+async fn runtime_role_holds_the_privileges_the_role_store_uses() {
+    const RUNTIME_ROLE: &str = "nullapart_mailcore";
+    let pool = connect().await;
+
+    let provisioned: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)")
+            .bind(RUNTIME_ROLE)
+            .fetch_one(&pool)
+            .await
+            .expect("the runtime role lookup must succeed");
+    if !provisioned {
+        eprintln!("skipped: {RUNTIME_ROLE} is not provisioned in this database");
+        return;
+    }
+
+    for (table, privilege) in [
+        ("admin_roles", "SELECT"),
+        ("admin_roles", "INSERT"),
+        ("admin_roles", "UPDATE"),
+        ("admin_roles", "DELETE"),
+        ("admin_role_permissions", "SELECT"),
+        ("admin_role_permissions", "INSERT"),
+        ("admin_role_permissions", "DELETE"),
+    ] {
+        let granted: bool = sqlx::query_scalar(
+            "SELECT has_table_privilege($1::text, $2::text, $3::text)",
+        )
+        .bind(RUNTIME_ROLE)
+        .bind(table)
+        .bind(privilege)
+        .fetch_one(&pool)
+        .await
+        .unwrap_or_else(|error| {
+            panic!("has_table_privilege({RUNTIME_ROLE}, {table}, {privilege}) must run: {error}")
+        });
+        assert!(
+            granted,
+            "{RUNTIME_ROLE} must hold {privilege} on {table}; migration 038 grants it and \
+             infrastructure/containers/provision-local-runtime-role.sh provisions it"
+        );
     }
 }

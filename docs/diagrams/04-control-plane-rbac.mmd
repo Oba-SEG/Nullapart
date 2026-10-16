@@ -3,6 +3,7 @@ flowchart TB
     Support[Support Admin]
     Owner[Customer Owner / Admin]
     Roles[Customer RBAC Roles]
+    Custom[Deployment-Defined Custom Roles]
 
     IDP[ZITADEL]
     Backend[Nullapart Control Backend]
@@ -36,6 +37,11 @@ flowchart TB
     Owner -. tenant scope .-> CustomerPolicies
     Owner -. assigns tenant permissions .-> Roles
     Roles -. RBAC controlled .-> Sensitive
+
+    System -. defines: step-up, rate limited, audited .-> Custom
+    Custom -. catalog permissions at one builtin level .-> Backend
+    Owner -. held when granted within grantor subset .-> Custom
+    Custom -. RBAC controlled .-> Sensitive
 
     System -->|audited impersonation| Backend
     Support -->|audited impersonation| Backend

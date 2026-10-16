@@ -35,6 +35,17 @@
 //!     entered customer (docs/03-IDENTITY-RBAC-IMPERSONATION.md).
 //!   * Session/RBAC persistence applies deployment row-level security as
 //!     defense in depth; every query also filters `deployment_id` directly.
+//!   * Custom role definitions live beside the builtins in `admin_roles`
+//!     (`builtin = false`). Only a session holding the literal builtin
+//!     `system_admin` role and `admin:users:manage` may create, edit or
+//!     delete them (step-up gated, rate limited, audited in the same
+//!     transaction). A builtin role is immutable through the API. Granting
+//!     or revoking any role additionally requires the grantor to hold the
+//!     stored role level, and a custom role may only carry permissions the
+//!     grantor already holds (no upward privilege creation through roles).
+//!   * Without customer entry the request tenant is the session user's own
+//!     `admin_users.customer_id` binding (platform users with no binding
+//!     keep the deployment template tenant); customer entry overrides both.
 
 use std::sync::Arc;
 
@@ -45,7 +56,7 @@ use axum::{
     http::{header, HeaderMap, Method, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post},
     Json, Router,
 };
 use chrono::{DateTime, Duration, Utc};
@@ -113,10 +124,16 @@ const USER_LIST_ACTION: &str = "admin_users_list";
 const USER_CREATE_ACTION: &str = "admin_user_created";
 const ROLE_GRANT_ACTION: &str = "admin_role_granted";
 const ROLE_REVOKE_ACTION: &str = "admin_role_revoked";
+const ROLE_DEFINITION_CREATE_ACTION: &str = "admin_role_created";
+const ROLE_DEFINITION_UPDATE_ACTION: &str = "admin_role_updated";
+const ROLE_DEFINITION_DELETE_ACTION: &str = "admin_role_deleted";
+const ROLE_DEFINITION_LIST_ACTION: &str = "admin_roles_listed";
+const PERMISSION_LIST_ACTION: &str = "admin_permissions_listed";
 const IMPERSONATION_START_ACTION: &str = "impersonation_started";
 const IMPERSONATION_END_ACTION: &str = "impersonation_ended";
 const RESOURCE_SESSION: &str = "session";
 const RESOURCE_USER: &str = "admin_user";
+const RESOURCE_ROLE: &str = "admin_role";
 const RESOURCE_IMPERSONATION: &str = "admin_impersonation";
 
 const MAX_IDENTITY_LEN: usize = 254;
@@ -124,9 +141,17 @@ const MAX_LOGIN_LEN: usize = 254;
 const MAX_DISPLAY_NAME_LEN: usize = 128;
 const MIN_IMPERSONATION_REASON_LEN: usize = 10;
 const MAX_IMPERSONATION_REASON_LEN: usize = 500;
+/// Custom role key shape: `^[a-z][a-z0-9_]{2,63}$` (checked manually so the
+/// boundary never depends on regex behaviour for untrusted input).
+const MIN_ROLE_KEY_LEN: usize = 3;
+const MAX_ROLE_KEY_LEN: usize = 64;
+const MAX_ROLE_DESCRIPTION_LEN: usize = 500;
+/// Upper bound on the permission set one custom role may carry.
+const MAX_ROLE_PERMISSIONS: usize = 40;
+const ROLE_LEVELS: [&str; 3] = ["system", "support", "customer"];
 
-/// One builtin role: seeded idempotently per deployment and the only role
-/// keys the management API accepts.
+/// One builtin role: seeded idempotently per deployment (`builtin = true`)
+/// and immutable through the management API; custom roles live beside these.
 pub struct BuiltinRole {
     pub key: &'static str,
     pub display_name: &'static str,
@@ -221,58 +246,225 @@ pub const BUILTIN_ROLES: [BuiltinRole; 3] = [
     },
 ];
 
+/// One entry of the server-side permission catalog: the fixed vocabulary the
+/// role-definition API accepts for custom roles. Every key here must match a
+/// `*_PERMISSION` constant enforced by an owning module, and every permission
+/// the builtin roles carry must appear in this catalog.
+pub struct PermissionMeta {
+    pub key: &'static str,
+    pub display_name: &'static str,
+    pub description: &'static str,
+    pub group: &'static str,
+}
+
+/// The complete permission vocabulary custom roles may reference. Adding a
+/// permission to a feature module means adding its catalog entry here.
+pub const PERMISSION_CATALOG: &[PermissionMeta] = &[
+    PermissionMeta {
+        key: ADMIN_USERS_MANAGE_PERMISSION,
+        display_name: "Manage admin users",
+        description: "Create admin users, list the managed tenant's users and grant or revoke roles.",
+        group: "Administration",
+    },
+    PermissionMeta {
+        key: IMPERSONATE_PERMISSION,
+        display_name: "Enter customer tenants",
+        description: "Start and end reasoned, step-up-gated customer entry (acting as the customer admin scope).",
+        group: "Administration",
+    },
+    PermissionMeta {
+        key: AUDIT_VIEW_PERMISSION,
+        display_name: "View audit trail",
+        description: "Read audit events inside the authorized customer scope.",
+        group: "Audit",
+    },
+    PermissionMeta {
+        key: AUDIT_EXPORT_PERMISSION,
+        display_name: "Export audit trail",
+        description: "Export audit event pages out of the console.",
+        group: "Audit",
+    },
+    PermissionMeta {
+        key: AUDIT_CROSS_CUSTOMER_PERMISSION,
+        display_name: "Cross-customer audit view",
+        description: "Read audit events across customer tenants in the deployment.",
+        group: "Audit",
+    },
+    PermissionMeta {
+        key: TRACE_VIEW_PERMISSION,
+        display_name: "View transaction trace",
+        description: "Read a mail transaction's routing and delivery metadata.",
+        group: "Trace",
+    },
+    PermissionMeta {
+        key: TRACE_CONTENT_PERMISSION,
+        display_name: "View transaction content",
+        description: "Read a mail transaction's rendered message headers and body.",
+        group: "Trace",
+    },
+    PermissionMeta {
+        key: OPERATIONS_VIEW_PERMISSION,
+        display_name: "View operations",
+        description: "Read operational runbooks, automations and system state.",
+        group: "Operations",
+    },
+    PermissionMeta {
+        key: OPERATIONS_MANAGE_PERMISSION,
+        display_name: "Run operations",
+        description: "Execute and change operational automations.",
+        group: "Operations",
+    },
+    PermissionMeta {
+        key: QUARANTINE_VIEW_PERMISSION,
+        display_name: "View quarantine",
+        description: "List and inspect quarantined messages in the authorized scope.",
+        group: "Quarantine",
+    },
+    PermissionMeta {
+        key: QUARANTINE_RELEASE_PERMISSION,
+        display_name: "Release quarantine",
+        description: "Release or reinject quarantined messages.",
+        group: "Quarantine",
+    },
+    PermissionMeta {
+        key: SCANNER_OPERATIONS_VIEW_PERMISSION,
+        display_name: "View scanner operations",
+        description: "Read scanner health, drift and evidence operations.",
+        group: "Scanners",
+    },
+    PermissionMeta {
+        key: crate::admin_customers::CUSTOMERS_VIEW_PERMISSION,
+        display_name: "View customers",
+        description: "Read the customer directory and customer detail inside the authorized scope.",
+        group: "Customers & domains",
+    },
+    PermissionMeta {
+        key: crate::admin_customers::CUSTOMERS_MANAGE_PERMISSION,
+        display_name: "Manage customers",
+        description: "Create customers and change customer lifecycle state.",
+        group: "Customers & domains",
+    },
+    PermissionMeta {
+        key: crate::admin_customers::DOMAINS_MANAGE_PERMISSION,
+        display_name: "Manage domains",
+        description: "Add, verify and remove customer domains and source IP groups.",
+        group: "Customers & domains",
+    },
+    PermissionMeta {
+        key: crate::domain_security::DOMAIN_SECURITY_VIEW_PERMISSION,
+        display_name: "View domain security",
+        description: "Read domain DNS/DKIM/DMARC/BIMI security posture.",
+        group: "Domain security",
+    },
+    PermissionMeta {
+        key: crate::domain_security::DOMAIN_SECURITY_MANAGE_PERMISSION,
+        display_name: "Manage domain security",
+        description: "Trigger and change domain security checks and remediation state.",
+        group: "Domain security",
+    },
+    PermissionMeta {
+        key: crate::deep_ai::DEEP_AI_VIEW_PERMISSION,
+        display_name: "View Deep AI",
+        description: "Read Deep AI analyses, evidence and confidence.",
+        group: "Deep AI",
+    },
+    PermissionMeta {
+        key: crate::deep_ai::DEEP_AI_MANAGE_PERMISSION,
+        display_name: "Manage Deep AI",
+        description: "Request, correct or reprocess Deep AI analyses.",
+        group: "Deep AI",
+    },
+    PermissionMeta {
+        key: crate::outbound_intelligence_api::OUTBOUND_INTELLIGENCE_VIEW_PERMISSION,
+        display_name: "View outbound intelligence",
+        description: "Read outbound sending intelligence and approved senders.",
+        group: "Outbound intelligence",
+    },
+    PermissionMeta {
+        key: crate::outbound_intelligence_api::OUTBOUND_INTELLIGENCE_MANAGE_PERMISSION,
+        display_name: "Manage outbound intelligence",
+        description: "Change outbound sending intelligence decisions and approvals.",
+        group: "Outbound intelligence",
+    },
+    PermissionMeta {
+        key: crate::policy_admin::POLICIES_VIEW_PERMISSION,
+        display_name: "View policies",
+        description: "Read policy sets, revisions and tenant feature overrides.",
+        group: "Policies",
+    },
+    PermissionMeta {
+        key: crate::policy_admin::POLICIES_MANAGE_PERMISSION,
+        display_name: "Manage policies",
+        description: "Publish policy revisions and change feature overrides within the caller's tier.",
+        group: "Policies",
+    },
+    PermissionMeta {
+        key: crate::model_registry::MODELS_VIEW_PERMISSION,
+        display_name: "View models",
+        description: "Read the ML model registry and model telemetry.",
+        group: "Models",
+    },
+    PermissionMeta {
+        key: crate::model_registry::MODELS_MANAGE_PERMISSION,
+        display_name: "Manage models",
+        description: "Register, promote or roll back models.",
+        group: "Models",
+    },
+    PermissionMeta {
+        key: crate::connectors_remediation_api::CONNECTORS_VIEW_PERMISSION,
+        display_name: "View connectors",
+        description: "Read connector status and remediation findings.",
+        group: "Connectors",
+    },
+    PermissionMeta {
+        key: crate::connectors_remediation_api::CONNECTORS_MANAGE_PERMISSION,
+        display_name: "Manage connectors",
+        description: "Run connector remediation actions.",
+        group: "Connectors",
+    },
+];
+
+/// Whether `key` is part of the fixed permission vocabulary custom roles may
+/// reference (catalog-driven; unknown keys are always refused).
+pub fn is_allowed_permission(key: &str) -> bool {
+    PERMISSION_CATALOG
+        .iter()
+        .any(|permission| permission.key == key)
+}
+
 fn is_builtin_role(role_key: &str) -> bool {
     BUILTIN_ROLES.iter().any(|role| role.key == role_key)
 }
 
-/// Ordering rank of a builtin role level: a grantor may only assign or revoke
+/// Ordering rank of a stored role level: a grantor may only assign or revoke
 /// roles at or below their own highest level (no privilege escalation).
-fn role_level_rank(role_key: &str) -> u8 {
-    BUILTIN_ROLES
-        .iter()
-        .find(|role| role.key == role_key)
-        .map(|role| match role.role_level {
-            "system" => 3,
-            "support" => 2,
-            "customer" => 1,
-            _ => 0,
-        })
-        .unwrap_or(0)
+/// Anything that is not a known level ranks 0 and can never be granted
+/// (fail closed).
+fn rank_for_level(role_level: &str) -> u8 {
+    match role_level {
+        "system" => 3,
+        "support" => 2,
+        "customer" => 1,
+        _ => 0,
+    }
 }
 
-/// Whether every listed role is within the grantor's own level.
-fn roles_within_grantor_level(grantor_roles: &[String], requested: &[String]) -> bool {
-    let grantor_rank = grantor_roles
-        .iter()
-        .map(|role| role_level_rank(role))
-        .max()
-        .unwrap_or(0);
-    requested
-        .iter()
-        .all(|role| role_level_rank(role) <= grantor_rank)
-}
-
-/// Effective permissions for a set of role keys (in-memory store; the
-/// Postgres store reads `admin_role_permissions`, seeded from this map).
-fn permissions_for_roles(roles: &[String]) -> Vec<String> {
-    let mut permissions: Vec<String> = BUILTIN_ROLES
-        .iter()
-        .filter(|role| roles.iter().any(|granted| granted == role.key))
-        .flat_map(|role| {
-            role.permissions
-                .iter()
-                .map(|permission| permission.to_string())
-        })
-        .collect();
-    permissions.sort();
-    permissions.dedup();
+/// Whether every listed permission is in the server-side catalog. Used by
+/// role-definition validation to reject payloads referencing unknown keys.
+fn permissions_in_catalog(permissions: &[String]) -> bool {
     permissions
+        .iter()
+        .all(|permission| is_allowed_permission(permission))
 }
-
 #[derive(Debug, thiserror::Error)]
 pub enum AdminRbacError {
     #[error("admin rbac persistence failed")]
     PersistenceFailed,
+    /// A role mutation named a role key that does not exist for the
+    /// deployment. The handler gate turns this into a safe 400; the store
+    /// raises it instead of silently reporting an unchanged grant.
+    #[error("admin role does not exist")]
+    RoleNotFound,
 }
 
 #[derive(Debug, Clone)]
@@ -300,7 +492,8 @@ impl Default for SessionConfig {
 }
 
 /// Static customer/config facts used to build a per-request `TenantContext`
-/// from a resolved session (the local deployment serves one seeded customer).
+/// fallback from a resolved session: the deployment tenant for platform
+/// (unbound) users and the display facts when no bound-customer row exists.
 #[derive(Debug, Clone)]
 pub struct ControlPlaneTemplate {
     pub region: RegionId,
@@ -336,7 +529,16 @@ pub struct ActiveSession {
     /// permission set. Customer entry changes the customer scope only and
     /// never intersects, reduces or extends permissions.
     pub permissions: Vec<String>,
+    /// The user's own `admin_users.customer_id` binding (`None` = platform
+    /// user). Without customer entry this is the request tenant; platform
+    /// users fall back to the deployment template tenant.
     pub customer_id: Option<String>,
+    /// Display facts of the bound customer loaded with the session, so the
+    /// tenant context never mixes a customer ID with another customer's
+    /// metadata. `None` fields when unbound or when the row was unavailable.
+    pub customer_internal_key: Option<i64>,
+    pub customer_display_name: Option<String>,
+    pub customer_lifecycle: Option<String>,
     pub csrf_token: String,
     pub authenticated_at: DateTime<Utc>,
     pub absolute_expires_at: DateTime<Utc>,
@@ -410,6 +612,7 @@ fn session_view(
             .impersonation
             .as_ref()
             .map(|impersonation| impersonation.customer_id.clone())
+            .or_else(|| session.customer_id.clone())
             .unwrap_or_else(|| template.customer_id.0.clone()),
         expires_at: session.absolute_expires_at.to_rfc3339(),
         step_up_active: session.step_up_active(Utc::now(), step_up_ttl_secs),
@@ -535,6 +738,62 @@ pub enum CreateUserOutcome {
 pub struct RoleMutation {
     pub changed: bool,
     pub roles: Vec<String>,
+}
+
+/// A stored role definition (builtin or custom) with its effective
+/// permissions and how many users currently hold it.
+#[derive(Debug, Clone)]
+pub struct RoleDefinitionRecord {
+    pub role_key: String,
+    pub display_name: String,
+    pub description: Option<String>,
+    pub role_level: String,
+    pub builtin: bool,
+    pub permissions: Vec<String>,
+    pub user_count: i64,
+}
+
+/// A new custom role to persist with its audit row atomically.
+#[derive(Debug, Clone)]
+pub struct NewRoleDefinition {
+    pub role_key: String,
+    pub display_name: String,
+    pub description: Option<String>,
+    pub role_level: String,
+    pub permissions: Vec<String>,
+}
+
+/// Field patch for an existing custom role.
+#[derive(Debug, Clone, Default)]
+pub struct RolePatch {
+    pub display_name: Option<String>,
+    pub description: Option<String>,
+    pub permissions: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone)]
+pub enum RoleUpdateOutcome {
+    /// Patch applied; carries the permission set before and after so the
+    /// audit row records the exact effective change.
+    Updated {
+        permissions_before: Vec<String>,
+        permissions_after: Vec<String>,
+    },
+    /// Builtin roles are immutable through the management API.
+    Builtin,
+    /// No role with this key exists for the deployment.
+    NotFound,
+}
+
+#[derive(Debug, Clone)]
+pub enum RoleDeleteOutcome {
+    Deleted,
+    /// Builtin roles cannot be deleted.
+    Builtin,
+    /// Users still hold this role; the caller must revoke grants first.
+    InUse,
+    /// No role with this key exists for the deployment.
+    NotFound,
 }
 
 /// Actor attribution shared by every audit row this module writes.
@@ -748,6 +1007,66 @@ pub trait AdminRbacStore: Send + Sync {
         deployment_id: &str,
         customer_id: &str,
     ) -> Result<Option<CustomerEntryTarget>, AdminRbacError>;
+
+    /// Whether a role key exists for this deployment (builtin or custom).
+    /// Replaces the static builtin-only gate so custom roles are grantable
+    /// and unknown keys fail with 400 instead of a silent no-op.
+    async fn role_exists(
+        &self,
+        deployment_id: &str,
+        role_key: &str,
+    ) -> Result<bool, AdminRbacError>;
+
+    /// The stored `role_level` for any role key (`None` when the role does
+    /// not exist). Rank decisions come from this, never from the static
+    /// catalog, so a custom system-level role counts as system.
+    async fn role_level_for_key(
+        &self,
+        deployment_id: &str,
+        role_key: &str,
+    ) -> Result<Option<String>, AdminRbacError>;
+
+    async fn list_role_definitions(
+        &self,
+        deployment_id: &str,
+    ) -> Result<Vec<RoleDefinitionRecord>, AdminRbacError>;
+
+    async fn get_role_definition(
+        &self,
+        deployment_id: &str,
+        role_key: &str,
+    ) -> Result<Option<RoleDefinitionRecord>, AdminRbacError>;
+
+    /// Inserts a custom role (`builtin = false`) with its permission rows and
+    /// the audit event in one transaction. `Ok(false)` means the (deployment,
+    /// role_key) already existed and nothing (including audit) was written.
+    async fn create_role(
+        &self,
+        deployment_id: &str,
+        role: NewRoleDefinition,
+        audit: AuditEventDraft,
+    ) -> Result<bool, AdminRbacError>;
+
+    /// Applies a patch to a custom role and audits permission before/after in
+    /// the same transaction. Builtin roles are refused inside the store, so
+    /// the immutability check cannot race a concurrent request.
+    async fn update_role(
+        &self,
+        deployment_id: &str,
+        role_key: &str,
+        patch: RolePatch,
+        audit: AuditEventDraft,
+    ) -> Result<RoleUpdateOutcome, AdminRbacError>;
+
+    /// Deletes a custom role (its permission rows cascade) and audits the
+    /// deletion in the same transaction. Refuses builtin roles and roles that
+    /// users still hold.
+    async fn delete_role(
+        &self,
+        deployment_id: &str,
+        role_key: &str,
+        audit: AuditEventDraft,
+    ) -> Result<RoleDeleteOutcome, AdminRbacError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -815,11 +1134,25 @@ struct MemoryFlow {
     expires_at: DateTime<Utc>,
 }
 
+/// A custom (non-builtin) role definition in the in-memory store. Builtin
+/// roles always resolve from the static [`BUILTIN_ROLES`] catalog, which the
+/// API refuses to edit, so they need no rows here.
+#[derive(Debug, Clone)]
+struct MemoryRole {
+    deployment_id: String,
+    role_key: String,
+    display_name: String,
+    description: Option<String>,
+    role_level: String,
+    permissions: Vec<String>,
+}
+
 pub struct InMemoryAdminRbacStore {
     users: std::sync::Mutex<Vec<MemoryUser>>,
     sessions: std::sync::Mutex<Vec<MemorySession>>,
     impersonations: std::sync::Mutex<Vec<MemoryImpersonation>>,
     customers: std::sync::Mutex<Vec<MemoryCustomer>>,
+    roles: std::sync::Mutex<Vec<MemoryRole>>,
     flows: std::sync::Mutex<Vec<MemoryFlow>>,
     audit: Arc<dyn AuditStore>,
 }
@@ -840,6 +1173,7 @@ impl InMemoryAdminRbacStore {
             sessions: std::sync::Mutex::new(Vec::new()),
             impersonations: std::sync::Mutex::new(Vec::new()),
             customers: std::sync::Mutex::new(Vec::new()),
+            roles: std::sync::Mutex::new(Vec::new()),
             flows: std::sync::Mutex::new(Vec::new()),
             audit,
         }
@@ -947,6 +1281,126 @@ impl InMemoryAdminRbacStore {
             .cloned()
     }
 
+    /// Seeds a custom (non-builtin) role definition directly (tests and
+    /// local fixtures; the management API path goes through `create_role`).
+    pub fn seed_custom_role(
+        &self,
+        deployment_id: &str,
+        role_key: &str,
+        display_name: &str,
+        role_level: &str,
+        permissions: &[&str],
+    ) {
+        let mut roles = self.roles.lock().expect("admin rbac store poisoned");
+        if let Some(existing) = roles
+            .iter_mut()
+            .find(|role| role.deployment_id == deployment_id && role.role_key == role_key)
+        {
+            existing.display_name = display_name.to_string();
+            existing.role_level = role_level.to_string();
+            existing.permissions = permissions.iter().map(|p| p.to_string()).collect();
+            return;
+        }
+        roles.push(MemoryRole {
+            deployment_id: deployment_id.to_string(),
+            role_key: role_key.to_string(),
+            display_name: display_name.to_string(),
+            description: None,
+            role_level: role_level.to_string(),
+            permissions: permissions.iter().map(|p| p.to_string()).collect(),
+        });
+    }
+
+    /// Resolves a role key against the builtin static catalog (mirrors the
+    /// rows `ensure_builtin_roles` seeds in the Postgres store).
+    fn builtin_role_record(role_key: &str) -> Option<RoleDefinitionRecord> {
+        let role = BUILTIN_ROLES.iter().find(|role| role.key == role_key)?;
+        let mut permissions: Vec<String> = role.permissions.iter().map(|p| p.to_string()).collect();
+        permissions.sort();
+        Some(RoleDefinitionRecord {
+            role_key: role.key.to_string(),
+            display_name: role.display_name.to_string(),
+            description: None,
+            role_level: role.role_level.to_string(),
+            builtin: true,
+            permissions,
+            user_count: 0,
+        })
+    }
+
+    fn custom_role(&self, deployment_id: &str, role_key: &str) -> Option<MemoryRole> {
+        self.roles
+            .lock()
+            .expect("admin rbac store poisoned")
+            .iter()
+            .find(|role| role.deployment_id == deployment_id && role.role_key == role_key)
+            .cloned()
+    }
+
+    fn role_user_count(&self, deployment_id: &str, role_key: &str) -> i64 {
+        self.users
+            .lock()
+            .expect("admin rbac store poisoned")
+            .iter()
+            .filter(|user| {
+                user.deployment_id == deployment_id
+                    && user.roles.iter().any(|granted| granted == role_key)
+            })
+            .count() as i64
+    }
+
+    fn role_definition(&self, deployment_id: &str, role_key: &str) -> Option<RoleDefinitionRecord> {
+        let mut record = match Self::builtin_role_record(role_key) {
+            Some(record) => record,
+            None => {
+                let role = self.custom_role(deployment_id, role_key)?;
+                RoleDefinitionRecord {
+                    role_key: role.role_key,
+                    display_name: role.display_name,
+                    description: role.description,
+                    role_level: role.role_level,
+                    builtin: false,
+                    permissions: {
+                        let mut permissions = role.permissions;
+                        permissions.sort();
+                        permissions
+                    },
+                    user_count: 0,
+                }
+            },
+        };
+        record.user_count = self.role_user_count(deployment_id, &record.role_key);
+        Some(record)
+    }
+
+    /// Effective permissions for a set of role keys: builtin catalog plus
+    /// any seeded custom roles of the same deployment (the Postgres store
+    /// reads `admin_role_permissions`, which is the same source of truth
+    /// there).
+    fn effective_permissions(&self, deployment_id: &str, roles: &[String]) -> Vec<String> {
+        let customs = self.roles.lock().expect("admin rbac store poisoned");
+        let mut permissions: Vec<String> = roles
+            .iter()
+            .flat_map(|role_key| {
+                Self::builtin_role_record(role_key)
+                    .map(|record| record.permissions)
+                    .unwrap_or_else(|| {
+                        customs
+                            .iter()
+                            .filter(|custom| {
+                                custom.deployment_id == deployment_id
+                                    && custom.role_key == *role_key
+                            })
+                            .flat_map(|custom| custom.permissions.clone())
+                            .collect::<Vec<_>>()
+                    })
+            })
+            .collect();
+        permissions.sort();
+        permissions.dedup();
+        permissions
+    }
+
     async fn write_audit(
         &self,
         draft: AuditEventDraft,
@@ -979,7 +1433,7 @@ impl AdminRbacStore for InMemoryAdminRbacStore {
                 &[BOOTSTRAP_ROLE],
             );
             let user = self.user(deployment_id, id).expect("just seeded");
-            let permissions = permissions_for_roles(&user.roles);
+            let permissions = self.effective_permissions(deployment_id, &user.roles);
             return Ok(AuthenticateOutcome::Bootstrapped {
                 user: user.record(),
                 permissions,
@@ -991,7 +1445,7 @@ impl AdminRbacStore for InMemoryAdminRbacStore {
         if user.lifecycle != "active" {
             return Ok(AuthenticateOutcome::Suspended);
         }
-        let permissions = permissions_for_roles(&user.roles);
+        let permissions = self.effective_permissions(deployment_id, &user.roles);
         Ok(AuthenticateOutcome::Authenticated {
             user: user.record(),
             permissions,
@@ -1020,7 +1474,7 @@ impl AdminRbacStore for InMemoryAdminRbacStore {
                     linked: false,
                 });
             }
-            let permissions = permissions_for_roles(&user.roles);
+            let permissions = self.effective_permissions(deployment_id, &user.roles);
             return Ok(ExternalAuthOutcome {
                 outcome: AuthenticateOutcome::Authenticated {
                     user: user.record(),
@@ -1045,7 +1499,7 @@ impl AdminRbacStore for InMemoryAdminRbacStore {
                 user.clone()
             });
         if let Some(user) = matched {
-            let permissions = permissions_for_roles(&user.roles);
+            let permissions = self.effective_permissions(deployment_id, &user.roles);
             return Ok(ExternalAuthOutcome {
                 outcome: AuthenticateOutcome::Authenticated {
                     user: user.record(),
@@ -1071,7 +1525,7 @@ impl AdminRbacStore for InMemoryAdminRbacStore {
                 roles: vec![BOOTSTRAP_ROLE.to_string()],
                 auth_subject: Some(subject.to_string()),
             };
-            let permissions = permissions_for_roles(&user.roles);
+            let permissions = self.effective_permissions(deployment_id, &user.roles);
             let record = user.record();
             users.push(user);
             return Ok(ExternalAuthOutcome {
@@ -1225,7 +1679,7 @@ impl AdminRbacStore for InMemoryAdminRbacStore {
         let authenticated_at = session.authenticated_at;
         let absolute_expires_at = session.absolute_expires_at;
         let step_up_at = session.step_up_at;
-        let actor_permissions = permissions_for_roles(&user.roles);
+        let actor_permissions = self.effective_permissions(deployment_id, &user.roles);
         drop(sessions);
 
         let active_impersonation = self
@@ -1266,6 +1720,22 @@ impl AdminRbacStore for InMemoryAdminRbacStore {
             Some(entry) => (Some(entry), actor_permissions),
             None => (None, actor_permissions),
         };
+        // Display facts for the user's own bound customer ride along with the
+        // session so the tenant context never mixes identities (the Postgres
+        // resolve loads the same fields).
+        let bound_customer = if user.customer_id.is_some() {
+            self.customers
+                .lock()
+                .expect("admin rbac store poisoned")
+                .iter()
+                .find(|customer| {
+                    customer.deployment_id == deployment_id
+                        && Some(customer.id.as_str()) == user.customer_id.as_deref()
+                })
+                .cloned()
+        } else {
+            None
+        };
         let active = ActiveSession {
             session_id,
             deployment_id: deployment_id.to_string(),
@@ -1274,6 +1744,15 @@ impl AdminRbacStore for InMemoryAdminRbacStore {
             roles: user.roles.clone(),
             permissions,
             customer_id: user.customer_id.clone(),
+            customer_internal_key: bound_customer
+                .as_ref()
+                .map(|customer| customer.internal_key),
+            customer_display_name: bound_customer
+                .as_ref()
+                .map(|customer| customer.display_name.clone()),
+            customer_lifecycle: bound_customer
+                .as_ref()
+                .map(|customer| customer.lifecycle.clone()),
             csrf_token,
             authenticated_at,
             absolute_expires_at,
@@ -1349,6 +1828,15 @@ impl AdminRbacStore for InMemoryAdminRbacStore {
         if self.user_for_login(deployment_id, &user.login).is_some() {
             return Ok(CreateUserOutcome::AlreadyExists);
         }
+        // Unknown role keys are a failed mutation (rollback-equivalent):
+        // never persist a user with a dangling grant.
+        if user
+            .roles
+            .iter()
+            .any(|role| self.role_definition(deployment_id, role).is_none())
+        {
+            return Err(AdminRbacError::RoleNotFound);
+        }
         let id = self.seed_user(
             deployment_id,
             &user.login,
@@ -1377,6 +1865,9 @@ impl AdminRbacStore for InMemoryAdminRbacStore {
         _granted_by: &str,
         audit: AuditEventDraft,
     ) -> Result<RoleMutation, AdminRbacError> {
+        if self.role_definition(deployment_id, role_key).is_none() {
+            return Err(AdminRbacError::RoleNotFound);
+        }
         let (changed, roles) = {
             let mut users = self.users.lock().expect("admin rbac store poisoned");
             let changed = if let Some(user) = users
@@ -1530,6 +2021,176 @@ impl AdminRbacStore for InMemoryAdminRbacStore {
         .await?;
         Ok(true)
     }
+
+    async fn role_exists(
+        &self,
+        deployment_id: &str,
+        role_key: &str,
+    ) -> Result<bool, AdminRbacError> {
+        Ok(self.role_definition(deployment_id, role_key).is_some())
+    }
+
+    async fn role_level_for_key(
+        &self,
+        deployment_id: &str,
+        role_key: &str,
+    ) -> Result<Option<String>, AdminRbacError> {
+        Ok(self
+            .role_definition(deployment_id, role_key)
+            .map(|record| record.role_level))
+    }
+
+    async fn list_role_definitions(
+        &self,
+        deployment_id: &str,
+    ) -> Result<Vec<RoleDefinitionRecord>, AdminRbacError> {
+        let mut records: Vec<RoleDefinitionRecord> = BUILTIN_ROLES
+            .iter()
+            .filter_map(|role| Self::builtin_role_record(role.key))
+            .chain(
+                self.roles
+                    .lock()
+                    .expect("admin rbac store poisoned")
+                    .iter()
+                    .filter(|role| role.deployment_id == deployment_id)
+                    .map(|role| RoleDefinitionRecord {
+                        role_key: role.role_key.clone(),
+                        display_name: role.display_name.clone(),
+                        description: role.description.clone(),
+                        role_level: role.role_level.clone(),
+                        builtin: false,
+                        permissions: {
+                            let mut permissions = role.permissions.clone();
+                            permissions.sort();
+                            permissions
+                        },
+                        user_count: 0,
+                    }),
+            )
+            .collect();
+        for record in &mut records {
+            record.user_count = self.role_user_count(deployment_id, &record.role_key);
+        }
+        records.sort_by(|left, right| left.role_key.cmp(&right.role_key));
+        Ok(records)
+    }
+
+    async fn get_role_definition(
+        &self,
+        deployment_id: &str,
+        role_key: &str,
+    ) -> Result<Option<RoleDefinitionRecord>, AdminRbacError> {
+        Ok(self.role_definition(deployment_id, role_key))
+    }
+
+    async fn create_role(
+        &self,
+        deployment_id: &str,
+        role: NewRoleDefinition,
+        audit: AuditEventDraft,
+    ) -> Result<bool, AdminRbacError> {
+        // Builtins exist in every deployment; a duplicate custom key
+        // conflicts exactly like the Postgres unique index.
+        if Self::builtin_role_record(&role.role_key).is_some()
+            || self.custom_role(deployment_id, &role.role_key).is_some()
+        {
+            return Ok(false);
+        }
+        self.roles
+            .lock()
+            .expect("admin rbac store poisoned")
+            .push(MemoryRole {
+                deployment_id: deployment_id.to_string(),
+                role_key: role.role_key,
+                display_name: role.display_name,
+                description: role.description,
+                role_level: role.role_level,
+                permissions: role.permissions,
+            });
+        self.write_audit(audit, "success", None).await?;
+        Ok(true)
+    }
+
+    async fn update_role(
+        &self,
+        deployment_id: &str,
+        role_key: &str,
+        patch: RolePatch,
+        audit: AuditEventDraft,
+    ) -> Result<RoleUpdateOutcome, AdminRbacError> {
+        if Self::builtin_role_record(role_key).is_some() {
+            return Ok(RoleUpdateOutcome::Builtin);
+        }
+        let (permissions_before, permissions_after) = {
+            let mut roles = self.roles.lock().expect("admin rbac store poisoned");
+            let Some(role) = roles
+                .iter_mut()
+                .find(|role| role.deployment_id == deployment_id && role.role_key == role_key)
+            else {
+                return Ok(RoleUpdateOutcome::NotFound);
+            };
+            let before = {
+                let mut before = role.permissions.clone();
+                before.sort();
+                before
+            };
+            if let Some(display_name) = patch.display_name {
+                role.display_name = display_name;
+            }
+            if let Some(description) = patch.description {
+                role.description = Some(description);
+            }
+            if let Some(permissions) = patch.permissions {
+                let mut permissions = permissions;
+                permissions.sort();
+                permissions.dedup();
+                role.permissions = permissions;
+            }
+            (before, role.permissions.clone())
+        };
+        self.write_audit(
+            audit,
+            "success",
+            Some(serde_json::json!({
+                "permissions_before": permissions_before,
+                "permissions_after": permissions_after,
+            })),
+        )
+        .await?;
+        Ok(RoleUpdateOutcome::Updated {
+            permissions_before,
+            permissions_after,
+        })
+    }
+
+    async fn delete_role(
+        &self,
+        deployment_id: &str,
+        role_key: &str,
+        audit: AuditEventDraft,
+    ) -> Result<RoleDeleteOutcome, AdminRbacError> {
+        if Self::builtin_role_record(role_key).is_some() {
+            return Ok(RoleDeleteOutcome::Builtin);
+        }
+        let index = {
+            let roles = self.roles.lock().expect("admin rbac store poisoned");
+            roles
+                .iter()
+                .position(|role| role.deployment_id == deployment_id && role.role_key == role_key)
+        };
+        let Some(index) = index else {
+            return Ok(RoleDeleteOutcome::NotFound);
+        };
+        if self.role_user_count(deployment_id, role_key) > 0 {
+            return Ok(RoleDeleteOutcome::InUse);
+        }
+        self.roles
+            .lock()
+            .expect("admin rbac store poisoned")
+            .remove(index);
+        self.write_audit(audit, "success", None).await?;
+        Ok(RoleDeleteOutcome::Deleted)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1598,8 +2259,10 @@ impl PostgresAdminRbacStore {
     ) -> Result<(), AdminRbacError> {
         for role in BUILTIN_ROLES.iter() {
             sqlx::query(
-                "INSERT INTO admin_roles (deployment_id, role_key, display_name, role_level) \
-                 VALUES ($1, $2, $3, $4) ON CONFLICT (deployment_id, role_key) DO NOTHING",
+                "INSERT INTO admin_roles \
+                 (deployment_id, role_key, display_name, role_level, builtin) \
+                 VALUES ($1, $2, $3, $4, true) \
+                 ON CONFLICT (deployment_id, role_key) DO NOTHING",
             )
             .bind(deployment_id)
             .bind(role.key)
@@ -1694,6 +2357,18 @@ impl PostgresAdminRbacStore {
             customer_id: row.get("customer_id"),
             lifecycle: row.get("lifecycle"),
             roles: Vec::new(),
+        }
+    }
+
+    fn role_from_row(row: &sqlx::postgres::PgRow) -> RoleDefinitionRecord {
+        RoleDefinitionRecord {
+            role_key: row.get("role_key"),
+            display_name: row.get("display_name"),
+            description: row.get("description"),
+            role_level: row.get("role_level"),
+            builtin: row.get("builtin"),
+            permissions: row.get("permissions"),
+            user_count: row.get("user_count"),
         }
     }
 }
@@ -2236,6 +2911,30 @@ impl AdminRbacStore for PostgresAdminRbacStore {
             }
         });
         let permissions = actor_permissions;
+        // Display facts for the user's own bound customer load in the same
+        // deployment-scoped transaction so the tenant context never mixes a
+        // customer ID with another customer's metadata (the `customers`
+        // table carries FORCE row-level security, hence the scoped read).
+        let bound_customer_id: Option<String> = row.get("customer_id");
+        let bound_customer = match bound_customer_id.as_deref() {
+            Some(customer_id) => sqlx::query(
+                "SELECT display_name, internal_key, lifecycle \
+                 FROM customers WHERE deployment_id = $1 AND id = $2",
+            )
+            .bind(deployment_id)
+            .bind(customer_id)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(|_| AdminRbacError::PersistenceFailed)?
+            .map(|customer| {
+                (
+                    customer.get::<String, _>("display_name"),
+                    customer.get::<i64, _>("internal_key"),
+                    customer.get::<String, _>("lifecycle"),
+                )
+            }),
+            None => None,
+        };
         let active = ActiveSession {
             session_id,
             deployment_id: deployment_id.to_string(),
@@ -2243,7 +2942,10 @@ impl AdminRbacStore for PostgresAdminRbacStore {
             login: row.get("login"),
             roles,
             permissions,
-            customer_id: row.get("customer_id"),
+            customer_id: bound_customer_id,
+            customer_internal_key: bound_customer.as_ref().map(|customer| customer.1),
+            customer_display_name: bound_customer.as_ref().map(|customer| customer.0.clone()),
+            customer_lifecycle: bound_customer.as_ref().map(|customer| customer.2.clone()),
             csrf_token: row.get("csrf_token"),
             authenticated_at: row.get("authenticated_at"),
             absolute_expires_at: row.get("absolute_expires_at"),
@@ -2435,6 +3137,23 @@ impl AdminRbacStore for PostgresAdminRbacStore {
         audit: AuditEventDraft,
     ) -> Result<RoleMutation, AdminRbacError> {
         let mut transaction = self.begin_scoped(deployment_id).await?;
+        // An unknown role key must error (the caller's gate turns it into a
+        // safe 400), never degrade into a silent `changed = false` success.
+        let role_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM admin_roles WHERE deployment_id = $1 AND role_key = $2)",
+        )
+        .bind(deployment_id)
+        .bind(role_key)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|_| AdminRbacError::PersistenceFailed)?;
+        if !role_exists {
+            transaction
+                .rollback()
+                .await
+                .map_err(|_| AdminRbacError::PersistenceFailed)?;
+            return Err(AdminRbacError::RoleNotFound);
+        }
         Self::apply_audit_scope(&mut transaction, &audit.subject).await?;
         let inserted = sqlx::query(
             "INSERT INTO admin_user_roles (user_id, role_id, granted_by) \
@@ -2662,6 +3381,369 @@ impl AdminRbacStore for PostgresAdminRbacStore {
             lifecycle: row.get("lifecycle"),
         }))
     }
+
+    async fn role_exists(
+        &self,
+        deployment_id: &str,
+        role_key: &str,
+    ) -> Result<bool, AdminRbacError> {
+        let mut transaction = self.begin_scoped(deployment_id).await?;
+        let exists = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM admin_roles \
+             WHERE deployment_id = $1 AND role_key = $2)",
+        )
+        .bind(deployment_id)
+        .bind(role_key)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|_| AdminRbacError::PersistenceFailed)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| AdminRbacError::PersistenceFailed)?;
+        Ok(exists)
+    }
+
+    async fn role_level_for_key(
+        &self,
+        deployment_id: &str,
+        role_key: &str,
+    ) -> Result<Option<String>, AdminRbacError> {
+        let mut transaction = self.begin_scoped(deployment_id).await?;
+        let level = sqlx::query_scalar::<_, String>(
+            "SELECT role_level FROM admin_roles WHERE deployment_id = $1 AND role_key = $2",
+        )
+        .bind(deployment_id)
+        .bind(role_key)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| AdminRbacError::PersistenceFailed)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| AdminRbacError::PersistenceFailed)?;
+        Ok(level)
+    }
+
+    async fn list_role_definitions(
+        &self,
+        deployment_id: &str,
+    ) -> Result<Vec<RoleDefinitionRecord>, AdminRbacError> {
+        let mut transaction = self.begin_scoped(deployment_id).await?;
+        let rows = sqlx::query(
+            "SELECT role.role_key, role.display_name, role.description, role.role_level, \
+                    role.builtin, \
+                    COALESCE(permissions.aggregated, '{}'::text[]) AS permissions, \
+                    (SELECT COUNT(*) FROM admin_user_roles AS grant_row \
+                     WHERE grant_row.role_id = role.id) AS user_count \
+             FROM admin_roles AS role \
+             LEFT JOIN LATERAL ( \
+                 SELECT array_agg(permission.permission ORDER BY permission.permission) \
+                        AS aggregated \
+                 FROM admin_role_permissions AS permission \
+                 WHERE permission.role_id = role.id \
+             ) AS permissions ON true \
+             WHERE role.deployment_id = $1 \
+             ORDER BY role.role_key",
+        )
+        .bind(deployment_id)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| AdminRbacError::PersistenceFailed)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| AdminRbacError::PersistenceFailed)?;
+        Ok(rows
+            .into_iter()
+            .map(|row| Self::role_from_row(&row))
+            .collect())
+    }
+
+    async fn get_role_definition(
+        &self,
+        deployment_id: &str,
+        role_key: &str,
+    ) -> Result<Option<RoleDefinitionRecord>, AdminRbacError> {
+        let mut transaction = self.begin_scoped(deployment_id).await?;
+        let row = sqlx::query(
+            "SELECT role.role_key, role.display_name, role.description, role.role_level, \
+                    role.builtin, \
+                    COALESCE(permissions.aggregated, '{}'::text[]) AS permissions, \
+                    (SELECT COUNT(*) FROM admin_user_roles AS grant_row \
+                     WHERE grant_row.role_id = role.id) AS user_count \
+             FROM admin_roles AS role \
+             LEFT JOIN LATERAL ( \
+                 SELECT array_agg(permission.permission ORDER BY permission.permission) \
+                        AS aggregated \
+                 FROM admin_role_permissions AS permission \
+                 WHERE permission.role_id = role.id \
+             ) AS permissions ON true \
+             WHERE role.deployment_id = $1 AND role.role_key = $2",
+        )
+        .bind(deployment_id)
+        .bind(role_key)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| AdminRbacError::PersistenceFailed)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| AdminRbacError::PersistenceFailed)?;
+        Ok(row.map(|row| Self::role_from_row(&row)))
+    }
+
+    async fn create_role(
+        &self,
+        deployment_id: &str,
+        role: NewRoleDefinition,
+        audit: AuditEventDraft,
+    ) -> Result<bool, AdminRbacError> {
+        let mut transaction = self.begin_scoped(deployment_id).await?;
+        let inserted = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO admin_roles \
+             (deployment_id, role_key, display_name, description, role_level, builtin) \
+             VALUES ($1, $2, $3, $4, $5, false) \
+             ON CONFLICT (deployment_id, role_key) DO NOTHING \
+             RETURNING id",
+        )
+        .bind(deployment_id)
+        .bind(&role.role_key)
+        .bind(&role.display_name)
+        .bind(role.description.as_deref())
+        .bind(&role.role_level)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| AdminRbacError::PersistenceFailed)?;
+        let Some(role_id) = inserted else {
+            // Role key already taken: nothing (including audit) is written.
+            transaction
+                .rollback()
+                .await
+                .map_err(|_| AdminRbacError::PersistenceFailed)?;
+            return Ok(false);
+        };
+        // The handler sorts and dedupes, but the permission table's primary
+        // key is (role_id, permission), so the store normalizes too: a raw
+        // duplicate would abort the transaction instead of being tolerated.
+        let mut permissions = role.permissions.clone();
+        permissions.sort();
+        permissions.dedup();
+        for permission in &permissions {
+            sqlx::query("INSERT INTO admin_role_permissions (role_id, permission) VALUES ($1, $2)")
+                .bind(role_id)
+                .bind(permission)
+                .execute(&mut *transaction)
+                .await
+                .map_err(|_| AdminRbacError::PersistenceFailed)?;
+        }
+        Self::apply_audit_scope(&mut transaction, &audit.subject).await?;
+        Self::record_row(
+            &mut transaction,
+            deployment_id,
+            audit,
+            "success",
+            Some(serde_json::json!({
+                "permissions": permissions,
+                "role_level": role.role_level,
+            })),
+        )
+        .await?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| AdminRbacError::PersistenceFailed)?;
+        Ok(true)
+    }
+
+    async fn update_role(
+        &self,
+        deployment_id: &str,
+        role_key: &str,
+        patch: RolePatch,
+        audit: AuditEventDraft,
+    ) -> Result<RoleUpdateOutcome, AdminRbacError> {
+        let mut transaction = self.begin_scoped(deployment_id).await?;
+        // Lock the role row first so a concurrent create/delete cannot slip
+        // between the builtin check, the permission rewrite and the audit.
+        let row = sqlx::query(
+            "SELECT id, builtin, display_name, description, role_level \
+             FROM admin_roles WHERE deployment_id = $1 AND role_key = $2 \
+             FOR UPDATE",
+        )
+        .bind(deployment_id)
+        .bind(role_key)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| AdminRbacError::PersistenceFailed)?;
+        let Some(row) = row else {
+            transaction
+                .commit()
+                .await
+                .map_err(|_| AdminRbacError::PersistenceFailed)?;
+            return Ok(RoleUpdateOutcome::NotFound);
+        };
+        if row.get::<bool, _>("builtin") {
+            transaction
+                .commit()
+                .await
+                .map_err(|_| AdminRbacError::PersistenceFailed)?;
+            return Ok(RoleUpdateOutcome::Builtin);
+        }
+        let role_id = row.get::<Uuid, _>("id");
+        let permissions_before: Vec<String> = sqlx::query_scalar(
+            "SELECT permission FROM admin_role_permissions \
+             WHERE role_id = $1 ORDER BY permission",
+        )
+        .bind(role_id)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| AdminRbacError::PersistenceFailed)?;
+        if let Some(display_name) = &patch.display_name {
+            let updated = sqlx::query("UPDATE admin_roles SET display_name = $1 WHERE id = $2")
+                .bind(display_name)
+                .bind(role_id)
+                .execute(&mut *transaction)
+                .await
+                .map_err(|_| AdminRbacError::PersistenceFailed)?;
+            // The row is locked for this transaction, so anything other than
+            // exactly one updated row means the statement was filtered by a
+            // privilege or policy change rather than the role being missing.
+            // Fail closed instead of auditing a change that never landed.
+            if updated.rows_affected() != 1 {
+                transaction
+                    .rollback()
+                    .await
+                    .map_err(|_| AdminRbacError::PersistenceFailed)?;
+                return Err(AdminRbacError::PersistenceFailed);
+            }
+        }
+        if let Some(description) = &patch.description {
+            let updated = sqlx::query("UPDATE admin_roles SET description = $1 WHERE id = $2")
+                .bind(description)
+                .bind(role_id)
+                .execute(&mut *transaction)
+                .await
+                .map_err(|_| AdminRbacError::PersistenceFailed)?;
+            if updated.rows_affected() != 1 {
+                transaction
+                    .rollback()
+                    .await
+                    .map_err(|_| AdminRbacError::PersistenceFailed)?;
+                return Err(AdminRbacError::PersistenceFailed);
+            }
+        }
+        let permissions_after = match &patch.permissions {
+            Some(requested) => {
+                // Same normalization as creation: the primary key is
+                // (role_id, permission), and the audit must report what was
+                // actually stored.
+                let mut permissions = requested.clone();
+                permissions.sort();
+                permissions.dedup();
+                sqlx::query("DELETE FROM admin_role_permissions WHERE role_id = $1")
+                    .bind(role_id)
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(|_| AdminRbacError::PersistenceFailed)?;
+                for permission in &permissions {
+                    sqlx::query(
+                        "INSERT INTO admin_role_permissions (role_id, permission) \
+                         VALUES ($1, $2)",
+                    )
+                    .bind(role_id)
+                    .bind(permission)
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(|_| AdminRbacError::PersistenceFailed)?;
+                }
+                permissions
+            },
+            None => permissions_before.clone(),
+        };
+        Self::apply_audit_scope(&mut transaction, &audit.subject).await?;
+        Self::record_row(
+            &mut transaction,
+            deployment_id,
+            audit,
+            "success",
+            Some(serde_json::json!({
+                "permissions_before": permissions_before,
+                "permissions_after": permissions_after,
+            })),
+        )
+        .await?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| AdminRbacError::PersistenceFailed)?;
+        Ok(RoleUpdateOutcome::Updated {
+            permissions_before,
+            permissions_after,
+        })
+    }
+
+    async fn delete_role(
+        &self,
+        deployment_id: &str,
+        role_key: &str,
+        audit: AuditEventDraft,
+    ) -> Result<RoleDeleteOutcome, AdminRbacError> {
+        let mut transaction = self.begin_scoped(deployment_id).await?;
+        let row = sqlx::query("SELECT id, builtin FROM admin_roles WHERE deployment_id = $1 AND role_key = $2 FOR UPDATE")
+            .bind(deployment_id)
+            .bind(role_key)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(|_| AdminRbacError::PersistenceFailed)?;
+        let Some(row) = row else {
+            transaction
+                .commit()
+                .await
+                .map_err(|_| AdminRbacError::PersistenceFailed)?;
+            return Ok(RoleDeleteOutcome::NotFound);
+        };
+        if row.get::<bool, _>("builtin") {
+            transaction
+                .commit()
+                .await
+                .map_err(|_| AdminRbacError::PersistenceFailed)?;
+            return Ok(RoleDeleteOutcome::Builtin);
+        }
+        let role_id = row.get::<Uuid, _>("id");
+        let user_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM admin_user_roles WHERE role_id = $1")
+                .bind(role_id)
+                .fetch_one(&mut *transaction)
+                .await
+                .map_err(|_| AdminRbacError::PersistenceFailed)?;
+        if user_count > 0 {
+            transaction
+                .commit()
+                .await
+                .map_err(|_| AdminRbacError::PersistenceFailed)?;
+            return Ok(RoleDeleteOutcome::InUse);
+        }
+        let deleted = sqlx::query("DELETE FROM admin_roles WHERE id = $1")
+            .bind(role_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| AdminRbacError::PersistenceFailed)?;
+        if deleted.rows_affected() != 1 {
+            transaction
+                .rollback()
+                .await
+                .map_err(|_| AdminRbacError::PersistenceFailed)?;
+            return Err(AdminRbacError::PersistenceFailed);
+        }
+        Self::apply_audit_scope(&mut transaction, &audit.subject).await?;
+        Self::record_row(&mut transaction, deployment_id, audit, "success", None).await?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| AdminRbacError::PersistenceFailed)?;
+        Ok(RoleDeleteOutcome::Deleted)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2845,6 +3927,12 @@ pub fn admin_rbac_router(state: AdminRbacState) -> Router {
             "/api/v1/admin/users/:user_id/roles/:role_key",
             delete(revoke_role),
         )
+        .route("/api/v1/admin/permissions", get(list_permissions))
+        .route("/api/v1/admin/roles", get(list_roles).post(create_role))
+        .route(
+            "/api/v1/admin/roles/:role_key",
+            patch(update_role).delete(delete_role),
+        )
         .route("/api/v1/admin/impersonations", post(start_impersonation))
         .route("/api/v1/admin/impersonations/end", post(end_impersonation))
         .with_state(state)
@@ -2970,6 +4058,29 @@ fn build_context(
             session_id: session.session_id.to_string(),
         }
     });
+    // Tenant resolution without customer entry: a customer-bound admin acts
+    // on their OWN customer (display facts included), so the tenant can never
+    // drift to another deployment default. Platform users (no binding) keep
+    // the template tenant; customer-bound sessions always carry the bound
+    // row's facts loaded with the session (the FK plus deployment-scoped
+    // reads guarantee they exist together). The fact fallbacks below mirror
+    // the customer-entry overlay and only apply to non-database stores.
+    let bound_customer = match (&session.customer_id, &session.impersonation) {
+        (Some(customer_id), None) => Some((
+            CustomerId(customer_id.clone()),
+            session
+                .customer_display_name
+                .clone()
+                .unwrap_or_else(|| customer_id.clone()),
+            session.customer_internal_key.unwrap_or(0),
+            session
+                .customer_lifecycle
+                .as_deref()
+                .map(lifecycle_from_db)
+                .unwrap_or(state.0.template.customer_lifecycle),
+        )),
+        _ => None,
+    };
     TenantContext {
         deployment_id: DeploymentId::new(&session.deployment_id),
         region: state.0.template.region.clone(),
@@ -2990,21 +4101,25 @@ fn build_context(
             .impersonation
             .as_ref()
             .map(|impersonation| CustomerId(impersonation.customer_id.clone()))
+            .or_else(|| bound_customer.as_ref().map(|bound| bound.0.clone()))
             .unwrap_or_else(|| state.0.template.customer_id.clone()),
         customer_internal_key: session
             .impersonation
             .as_ref()
             .map(|impersonation| impersonation.customer_internal_key)
+            .or_else(|| bound_customer.as_ref().map(|bound| bound.2))
             .unwrap_or(state.0.template.customer_internal_key),
         customer_display_name: session
             .impersonation
             .as_ref()
             .map(|impersonation| impersonation.customer_display_name.clone())
+            .or_else(|| bound_customer.as_ref().map(|bound| bound.1.clone()))
             .unwrap_or_else(|| state.0.template.customer_display_name.clone()),
         customer_lifecycle: session
             .impersonation
             .as_ref()
             .map(|impersonation| lifecycle_from_db(&impersonation.customer_lifecycle))
+            .or_else(|| bound_customer.as_ref().map(|bound| bound.3))
             .unwrap_or(state.0.template.customer_lifecycle),
         permissions: session.permissions.clone(),
         config_revision: state.0.template.config_revision,
@@ -3193,12 +4308,47 @@ async fn denied(
     code: &'static str,
     message: &'static str,
 ) -> Response {
+    denied_with(
+        state,
+        subject,
+        &Denial {
+            action,
+            resource_type: RESOURCE_USER,
+            resource_id,
+            reason,
+            status: StatusCode::FORBIDDEN,
+            code,
+            message,
+        },
+    )
+    .await
+}
+
+/// Denial intent with an explicit resource type and status code, for the
+/// role-definition endpoints where denials answer 403/404/409 rather than
+/// the user-management 403 default.
+struct Denial<'a> {
+    action: &'a str,
+    resource_type: &'a str,
+    resource_id: Option<String>,
+    reason: &'a str,
+    status: StatusCode,
+    code: &'static str,
+    message: &'static str,
+}
+
+/// Audits a denial with an explicit resource shape (see `Denial`).
+async fn denied_with(
+    state: &AdminRbacState,
+    subject: &AuditSubject,
+    denial: &Denial<'_>,
+) -> Response {
     let record = AuditEventDraft {
         subject: subject.clone(),
-        action: action.to_string(),
-        resource_type: RESOURCE_USER.to_string(),
-        resource_id,
-        details: serde_json::json!({ "reason": reason }),
+        action: denial.action.to_string(),
+        resource_type: denial.resource_type.to_string(),
+        resource_id: denial.resource_id.clone(),
+        details: serde_json::json!({ "reason": denial.reason }),
     }
     .into_record("denied", None);
     if let Err(error) = state
@@ -3209,7 +4359,7 @@ async fn denied(
     {
         error!(%error, "failed to audit administrative denial");
     }
-    api_error(StatusCode::FORBIDDEN, code, message)
+    api_error(denial.status, denial.code, denial.message)
 }
 
 /// Validates one high-risk management change: permission, fresh step-up,
@@ -3319,6 +4469,35 @@ fn can_manage_target(context: &TenantContext, target_customer: Option<&str>) -> 
             .iter()
             .any(|role| role == SYSTEM_ADMIN_ROLE),
     }
+}
+
+/// Highest rank of the grantor's own stored role levels. Levels come from
+/// the deployment's role rows (custom roles rank by their own definition);
+/// a role that no longer resolves or carries an unknown level ranks 0, so a
+/// session with no usable stored level can grant nothing (fail closed).
+async fn grantor_rank(state: &AdminRbacState, session: &ActiveSession) -> u8 {
+    let mut rank = 0u8;
+    for role_key in &session.roles {
+        if let Ok(Some(level)) = state
+            .0
+            .store
+            .role_level_for_key(&state.0.deployment_id.0, role_key)
+            .await
+        {
+            rank = rank.max(rank_for_level(&level));
+        }
+    }
+    rank
+}
+
+/// Subset rule for custom (non-builtin) roles: the granting session must
+/// already hold every permission the role would bestow, so a role can never
+/// become a path to create upward privileges. Builtin roles keep only the
+/// rank rule (their permission sets are the fixed baseline itself).
+fn custom_role_permissions_held(role: &RoleDefinitionRecord, session: &ActiveSession) -> bool {
+    role.permissions
+        .iter()
+        .all(|permission| session.permissions.iter().any(|held| held == permission))
 }
 
 fn session_cookie_header(token: &str, headers: &HeaderMap) -> header::HeaderValue {
@@ -3462,6 +4641,21 @@ async fn establish_session(
     if created.is_err() {
         return unavailable();
     }
+    // Customer-bound admins log in with their own customer's display facts
+    // resolved up front (same row the stores load on session restore), so
+    // the tenant context never pairs a customer ID with template metadata.
+    let bound_customer = match user.customer_id.as_deref() {
+        Some(customer_id) => match state
+            .0
+            .store
+            .customer_entry_target(deployment_id, customer_id)
+            .await
+        {
+            Ok(target) => target,
+            Err(_) => return unavailable(),
+        },
+        None => None,
+    };
 
     let session = ActiveSession {
         session_id,
@@ -3471,6 +4665,13 @@ async fn establish_session(
         roles: user.roles,
         permissions,
         customer_id: user.customer_id,
+        customer_internal_key: bound_customer.as_ref().map(|target| target.internal_key),
+        customer_display_name: bound_customer
+            .as_ref()
+            .map(|target| target.display_name.clone()),
+        customer_lifecycle: bound_customer
+            .as_ref()
+            .map(|target| target.lifecycle.clone()),
         csrf_token,
         authenticated_at: now,
         absolute_expires_at,
@@ -4264,16 +5465,35 @@ async fn create_user(
         );
     };
     let login = body.login.trim();
-    if !valid_login(login)
-        || !valid_display_name(body.display_name.trim())
-        || body.roles.is_empty()
-        || body.roles.iter().any(|role| !is_builtin_role(role))
+    if !valid_login(login) || !valid_display_name(body.display_name.trim()) || body.roles.is_empty()
     {
         return api_error(
             StatusCode::BAD_REQUEST,
             "INVALID_REQUEST",
             "Request is invalid",
         );
+    }
+    // Resolve every requested role against the stored definitions before the
+    // rate budget is consumed: unknown keys are a 400 (validation), while
+    // custom roles additionally face the subset rule below.
+    let mut requested_roles = Vec::with_capacity(body.roles.len());
+    for role_key in &body.roles {
+        match state
+            .0
+            .store
+            .get_role_definition(&state.0.deployment_id.0, role_key)
+            .await
+        {
+            Ok(Some(role)) => requested_roles.push(role),
+            Ok(None) => {
+                return api_error(
+                    StatusCode::BAD_REQUEST,
+                    "INVALID_REQUEST",
+                    "Request is invalid",
+                )
+            },
+            Err(_) => return unavailable(),
+        }
     }
     if let Err(response) = authorize_management_change(
         &state,
@@ -4287,17 +5507,32 @@ async fn create_user(
     {
         return response;
     }
-    if !roles_within_grantor_level(&session.roles, &body.roles) {
-        return denied(
-            &state,
-            &subject_from_session(&session, &headers),
-            USER_CREATE_ACTION,
-            None,
-            "cannot grant a role above own level",
-            "FORBIDDEN",
-            "Permission is required",
-        )
-        .await;
+    let grantor_rank = grantor_rank(&state, &session).await;
+    for role in &requested_roles {
+        if rank_for_level(&role.role_level) > grantor_rank {
+            return denied(
+                &state,
+                &subject_from_session(&session, &headers),
+                USER_CREATE_ACTION,
+                None,
+                "cannot grant a role above own level",
+                "FORBIDDEN",
+                "Permission is required",
+            )
+            .await;
+        }
+        if !role.builtin && !custom_role_permissions_held(role, &session) {
+            return denied(
+                &state,
+                &subject_from_session(&session, &headers),
+                USER_CREATE_ACTION,
+                None,
+                "cannot grant a role containing permissions you do not hold",
+                "FORBIDDEN",
+                "Permission is required",
+            )
+            .await;
+        }
     }
     let is_system_admin = context
         .actor
@@ -4370,6 +5605,13 @@ async fn create_user(
             "CONFLICT",
             "Admin user already exists",
         ),
+        // Unknown role keys are refused by the store too (fail closed); the
+        // handler gate above already answers 400 for them.
+        Err(AdminRbacError::RoleNotFound) => api_error(
+            StatusCode::BAD_REQUEST,
+            "INVALID_REQUEST",
+            "Request is invalid",
+        ),
         Err(_) => unavailable(),
     }
 }
@@ -4402,13 +5644,25 @@ async fn grant_role(
             "Authentication is required",
         );
     };
-    if !is_builtin_role(&body.role_key) {
-        return api_error(
-            StatusCode::BAD_REQUEST,
-            "INVALID_REQUEST",
-            "Request is invalid",
-        );
-    }
+    // Resolve the role first (read-only): custom roles are grantable and an
+    // unknown key fails with 400 instead of the old builtin-only rejection or
+    // a silent store no-op. This runs before the rate budget is consumed.
+    let role = match state
+        .0
+        .store
+        .get_role_definition(&state.0.deployment_id.0, &body.role_key)
+        .await
+    {
+        Ok(Some(role)) => role,
+        Ok(None) => {
+            return api_error(
+                StatusCode::BAD_REQUEST,
+                "INVALID_REQUEST",
+                "Request is invalid",
+            )
+        },
+        Err(_) => return unavailable(),
+    };
     if let Err(response) = authorize_management_change(
         &state,
         &context,
@@ -4461,13 +5715,28 @@ async fn grant_role(
         )
         .await;
     }
-    if !roles_within_grantor_level(&session.roles, std::slice::from_ref(&body.role_key)) {
+    // Rank comes from the stored role level (custom roles rank by their own
+    // definition), and a custom role additionally requires the subset rule.
+    let grantor_rank = grantor_rank(&state, &session).await;
+    if rank_for_level(&role.role_level) > grantor_rank {
         return denied(
             &state,
             &subject_from_session(&session, &headers),
             ROLE_GRANT_ACTION,
             Some(user_id.to_string()),
             "cannot grant a role above own level",
+            "FORBIDDEN",
+            "Permission is required",
+        )
+        .await;
+    }
+    if !role.builtin && !custom_role_permissions_held(&role, &session) {
+        return denied(
+            &state,
+            &subject_from_session(&session, &headers),
+            ROLE_GRANT_ACTION,
+            Some(user_id.to_string()),
+            "cannot grant a role containing permissions you do not hold",
             "FORBIDDEN",
             "Permission is required",
         )
@@ -4503,6 +5772,13 @@ async fn grant_role(
             }),
         )
             .into_response(),
+        // The store refuses unknown roles with RoleNotFound instead of
+        // silently reporting an unchanged grant (concurrent role deletion).
+        Err(AdminRbacError::RoleNotFound) => api_error(
+            StatusCode::BAD_REQUEST,
+            "INVALID_REQUEST",
+            "Request is invalid",
+        ),
         Err(_) => unavailable(),
     }
 }
@@ -4521,13 +5797,25 @@ async fn revoke_role(
             "Authentication is required",
         );
     };
-    if !is_builtin_role(&role_key) {
-        return api_error(
-            StatusCode::BAD_REQUEST,
-            "INVALID_REQUEST",
-            "Request is invalid",
-        );
-    }
+    // Unknown role keys fail with 400 before the rate budget is consumed;
+    // custom roles are revocable exactly like builtins (rank rule only —
+    // revoking never requires holding the role's permissions).
+    let revoked_level = match state
+        .0
+        .store
+        .role_level_for_key(&state.0.deployment_id.0, &role_key)
+        .await
+    {
+        Ok(Some(level)) => level,
+        Ok(None) => {
+            return api_error(
+                StatusCode::BAD_REQUEST,
+                "INVALID_REQUEST",
+                "Request is invalid",
+            )
+        },
+        Err(_) => return unavailable(),
+    };
     if let Err(response) = authorize_management_change(
         &state,
         &context,
@@ -4581,7 +5869,11 @@ async fn revoke_role(
         .await;
     }
 
-    if !roles_within_grantor_level(&session.roles, std::slice::from_ref(&role_key)) {
+    // Rank comes from the stored role level so a custom system-level role
+    // revokes like a builtin system role (and a bogus level ranks 0: no one
+    // can revoke it, fail closed).
+    let grantor_rank = grantor_rank(&state, &session).await;
+    if rank_for_level(&revoked_level) > grantor_rank {
         return denied(
             &state,
             &subject_from_session(&session, &headers),
@@ -4617,6 +5909,632 @@ async fn revoke_role(
             }),
         )
             .into_response(),
+        Err(AdminRbacError::RoleNotFound) => api_error(
+            StatusCode::BAD_REQUEST,
+            "INVALID_REQUEST",
+            "Request is invalid",
+        ),
+        Err(_) => unavailable(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Custom role definition management (docs/03-IDENTITY-RBAC-IMPERSONATION.md)
+// ---------------------------------------------------------------------------
+
+/// Safe browser projection of one catalog permission.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PermissionView {
+    key: &'static str,
+    display_name: &'static str,
+    description: &'static str,
+    group: &'static str,
+}
+
+/// Safe browser projection of a stored role definition.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RoleDefinitionView {
+    role_key: String,
+    display_name: String,
+    description: Option<String>,
+    role_level: String,
+    builtin: bool,
+    permissions: Vec<String>,
+    user_count: i64,
+}
+
+impl From<RoleDefinitionRecord> for RoleDefinitionView {
+    fn from(role: RoleDefinitionRecord) -> Self {
+        RoleDefinitionView {
+            role_key: role.role_key,
+            display_name: role.display_name,
+            description: role.description,
+            role_level: role.role_level,
+            builtin: role.builtin,
+            permissions: role.permissions,
+            user_count: role.user_count,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateRoleBody {
+    role_key: String,
+    display_name: String,
+    #[serde(default)]
+    description: Option<String>,
+    role_level: String,
+    permissions: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PatchRoleBody {
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    permissions: Option<Vec<String>>,
+}
+
+/// Role keys are machine identifiers: `^[a-z][a-z0-9_]{2,63}$`.
+fn valid_role_key(key: &str) -> bool {
+    let bytes = key.as_bytes();
+    (MIN_ROLE_KEY_LEN..=MAX_ROLE_KEY_LEN).contains(&bytes.len())
+        && bytes
+            .first()
+            .is_some_and(|first| first.is_ascii_lowercase())
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_')
+}
+
+/// Validates a (possibly absent) permission replacement list: non-empty,
+/// within the size bound, and every key inside the server-side catalog. An
+/// unknown key answers 400 naming the offending permission, but only when
+/// the key is a safe machine token (bounded alphanumeric/`:`/`_`/`-` charset);
+/// anything else falls back to the generic message.
+fn validate_permissions_list(permissions: &Option<Vec<String>>) -> Option<Response> {
+    let Some(permissions) = permissions else {
+        return None;
+    };
+    if permissions.is_empty() || permissions.len() > MAX_ROLE_PERMISSIONS {
+        return Some(api_error(
+            StatusCode::BAD_REQUEST,
+            "INVALID_REQUEST",
+            "Request is invalid",
+        ));
+    }
+    if permissions_in_catalog(permissions) {
+        return None;
+    }
+    if let Some(key) = permissions.iter().find(|key| !is_allowed_permission(key)) {
+        let safe = key.len() <= MAX_ROLE_KEY_LEN
+            && key
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '_' | '-'));
+        if safe {
+            return Some(
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "code": "INVALID_REQUEST",
+                        "message": format!("Unknown permission: {key}"),
+                    })),
+                )
+                    .into_response(),
+            );
+        }
+        return Some(api_error(
+            StatusCode::BAD_REQUEST,
+            "INVALID_REQUEST",
+            "Request is invalid",
+        ));
+    }
+    None
+}
+
+/// Guards role definition mutations: `admin:users:manage`, a fresh step-up
+/// and the shared fail-closed change budget (same order as `authorize_change`
+/// so a rate-limited request writes no audit), then the literal builtin
+/// `system_admin` membership on the session. Custom roles are privileged
+/// permission bundles, so only the platform's own top-level builtin identity
+/// may shape them; no custom role — however high its stored level — unlocks
+/// this API. Denials audit against the `admin_role` resource.
+async fn authorize_role_definition_change(
+    state: &AdminRbacState,
+    context: &TenantContext,
+    session: &ActiveSession,
+    headers: &HeaderMap,
+    action: &'static str,
+    role_key: Option<String>,
+) -> Result<(), Response> {
+    let subject = subject_from_session(session, headers);
+    if !context
+        .permissions
+        .iter()
+        .any(|permission| permission == ADMIN_USERS_MANAGE_PERMISSION)
+    {
+        return Err(denied_with(
+            state,
+            &subject,
+            &Denial {
+                action,
+                resource_type: RESOURCE_ROLE,
+                resource_id: role_key,
+                reason: "missing admin:users:manage permission",
+                status: StatusCode::FORBIDDEN,
+                code: "FORBIDDEN",
+                message: "Permission is required",
+            },
+        )
+        .await);
+    }
+    if !session.step_up_active(Utc::now(), state.0.session_config.step_up_ttl_secs) {
+        return Err(denied_with(
+            state,
+            &subject,
+            &Denial {
+                action,
+                resource_type: RESOURCE_ROLE,
+                resource_id: role_key,
+                reason: "step-up authentication expired",
+                status: StatusCode::FORBIDDEN,
+                code: "STEP_UP_REQUIRED",
+                message: "Step-up authentication is required",
+            },
+        )
+        .await);
+    }
+    if !state.change_token_available() {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            [(axum::http::header::RETRY_AFTER, "60")],
+            Json(ApiErrorBody {
+                code: "RATE_LIMITED",
+                message: "Too many high-risk changes",
+            }),
+        )
+            .into_response());
+    }
+    if !session
+        .roles
+        .iter()
+        .any(|role| role == SYSTEM_ADMIN_ROLE && is_builtin_role(role))
+    {
+        return Err(denied_with(
+            state,
+            &subject,
+            &Denial {
+                action,
+                resource_type: RESOURCE_ROLE,
+                resource_id: role_key,
+                reason: "role definition changes require the builtin system_admin role",
+                status: StatusCode::FORBIDDEN,
+                code: "FORBIDDEN",
+                message: "Permission is required",
+            },
+        )
+        .await);
+    }
+    Ok(())
+}
+
+/// Shared auth/session extraction for the role definition endpoints.
+fn role_endpoint_session(
+    context: Option<Extension<TenantContext>>,
+    session: Option<Extension<ActiveSession>>,
+) -> Option<(TenantContext, ActiveSession)> {
+    match (context, session) {
+        (Some(Extension(context)), Some(Extension(session))) => Some((context, session)),
+        _ => None,
+    }
+}
+
+/// The unauthenticated answer every role definition endpoint gives when the
+/// boundary middleware did not attach a session (defense in depth).
+fn role_endpoint_unauthenticated() -> Response {
+    api_error(
+        StatusCode::UNAUTHORIZED,
+        "UNAUTHENTICATED",
+        "Authentication is required",
+    )
+}
+
+async fn list_permissions(
+    State(state): State<AdminRbacState>,
+    headers: HeaderMap,
+    context: Option<Extension<TenantContext>>,
+    session: Option<Extension<ActiveSession>>,
+) -> Response {
+    let Some((context, session)) = role_endpoint_session(context, session) else {
+        return role_endpoint_unauthenticated();
+    };
+    if !context
+        .permissions
+        .iter()
+        .any(|permission| permission == ADMIN_USERS_MANAGE_PERMISSION)
+    {
+        return denied_with(
+            &state,
+            &subject_from_session(&session, &headers),
+            &Denial {
+                action: PERMISSION_LIST_ACTION,
+                resource_type: RESOURCE_ROLE,
+                resource_id: None,
+                reason: "missing admin:users:manage permission",
+                status: StatusCode::FORBIDDEN,
+                code: "FORBIDDEN",
+                message: "Permission is required",
+            },
+        )
+        .await;
+    }
+    let permissions: Vec<PermissionView> = PERMISSION_CATALOG
+        .iter()
+        .map(|permission| PermissionView {
+            key: permission.key,
+            display_name: permission.display_name,
+            description: permission.description,
+            group: permission.group,
+        })
+        .collect();
+    (StatusCode::OK, Json(ApiEnvelope { data: permissions })).into_response()
+}
+
+async fn list_roles(
+    State(state): State<AdminRbacState>,
+    headers: HeaderMap,
+    context: Option<Extension<TenantContext>>,
+    session: Option<Extension<ActiveSession>>,
+) -> Response {
+    let Some((context, session)) = role_endpoint_session(context, session) else {
+        return role_endpoint_unauthenticated();
+    };
+    if !context
+        .permissions
+        .iter()
+        .any(|permission| permission == ADMIN_USERS_MANAGE_PERMISSION)
+    {
+        return denied_with(
+            &state,
+            &subject_from_session(&session, &headers),
+            &Denial {
+                action: ROLE_DEFINITION_LIST_ACTION,
+                resource_type: RESOURCE_ROLE,
+                resource_id: None,
+                reason: "missing admin:users:manage permission",
+                status: StatusCode::FORBIDDEN,
+                code: "FORBIDDEN",
+                message: "Permission is required",
+            },
+        )
+        .await;
+    }
+    match state
+        .0
+        .store
+        .list_role_definitions(&state.0.deployment_id.0)
+        .await
+    {
+        Ok(roles) => {
+            let roles: Vec<RoleDefinitionView> =
+                roles.into_iter().map(RoleDefinitionView::from).collect();
+            (StatusCode::OK, Json(ApiEnvelope { data: roles })).into_response()
+        },
+        Err(_) => unavailable(),
+    }
+}
+
+async fn create_role(
+    State(state): State<AdminRbacState>,
+    headers: HeaderMap,
+    context: Option<Extension<TenantContext>>,
+    session: Option<Extension<ActiveSession>>,
+    Json(body): Json<CreateRoleBody>,
+) -> Response {
+    let Some((context, session)) = role_endpoint_session(context, session) else {
+        return role_endpoint_unauthenticated();
+    };
+    // Validation (400) runs before the gate so bad payloads never consume a
+    // rate-limit token or write a denial audit.
+    if !valid_role_key(&body.role_key)
+        || !valid_display_name(body.display_name.trim())
+        || !ROLE_LEVELS.contains(&body.role_level.as_str())
+    {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "INVALID_REQUEST",
+            "Request is invalid",
+        );
+    }
+    if let Some(description) = &body.description {
+        if description.chars().count() > MAX_ROLE_DESCRIPTION_LEN {
+            return api_error(
+                StatusCode::BAD_REQUEST,
+                "INVALID_REQUEST",
+                "Request is invalid",
+            );
+        }
+    }
+    if let Some(response) = validate_permissions_list(&Some(body.permissions.clone())) {
+        return response;
+    }
+    if let Err(response) = authorize_role_definition_change(
+        &state,
+        &context,
+        &session,
+        &headers,
+        ROLE_DEFINITION_CREATE_ACTION,
+        Some(body.role_key.clone()),
+    )
+    .await
+    {
+        return response;
+    }
+
+    let mut permissions = body.permissions.clone();
+    permissions.sort();
+    permissions.dedup();
+    let role_key = body.role_key.clone();
+    let draft = AuditEventDraft {
+        subject: subject_from_session(&session, &headers),
+        action: ROLE_DEFINITION_CREATE_ACTION.to_string(),
+        resource_type: RESOURCE_ROLE.to_string(),
+        resource_id: Some(role_key.clone()),
+        details: serde_json::json!({
+            "role_key": role_key,
+            "display_name": body.display_name.trim(),
+            "role_level": body.role_level,
+        }),
+    };
+    match state
+        .0
+        .store
+        .create_role(
+            &state.0.deployment_id.0,
+            NewRoleDefinition {
+                role_key: role_key.clone(),
+                display_name: body.display_name.trim().to_string(),
+                description: body.description.clone(),
+                role_level: body.role_level.clone(),
+                permissions,
+            },
+            draft,
+        )
+        .await
+    {
+        Ok(true) => match state
+            .0
+            .store
+            .get_role_definition(&state.0.deployment_id.0, &role_key)
+            .await
+        {
+            Ok(Some(role)) => (
+                StatusCode::CREATED,
+                Json(ApiEnvelope {
+                    data: RoleDefinitionView::from(role),
+                }),
+            )
+                .into_response(),
+            _ => unavailable(),
+        },
+        // The (deployment, role_key) pair already exists (including builtins);
+        // nothing was written, audit included.
+        Ok(false) => api_error(
+            StatusCode::CONFLICT,
+            "ROLE_EXISTS",
+            "An admin role with this key already exists",
+        ),
+        Err(_) => unavailable(),
+    }
+}
+
+async fn update_role(
+    State(state): State<AdminRbacState>,
+    Path(role_key): Path<String>,
+    headers: HeaderMap,
+    context: Option<Extension<TenantContext>>,
+    session: Option<Extension<ActiveSession>>,
+    Json(body): Json<PatchRoleBody>,
+) -> Response {
+    let Some((context, session)) = role_endpoint_session(context, session) else {
+        return role_endpoint_unauthenticated();
+    };
+    if body.display_name.is_none() && body.description.is_none() && body.permissions.is_none() {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "INVALID_REQUEST",
+            "Request is invalid",
+        );
+    }
+    if let Some(display_name) = &body.display_name {
+        if !valid_display_name(display_name.trim()) {
+            return api_error(
+                StatusCode::BAD_REQUEST,
+                "INVALID_REQUEST",
+                "Request is invalid",
+            );
+        }
+    }
+    if let Some(description) = &body.description {
+        if description.chars().count() > MAX_ROLE_DESCRIPTION_LEN {
+            return api_error(
+                StatusCode::BAD_REQUEST,
+                "INVALID_REQUEST",
+                "Request is invalid",
+            );
+        }
+    }
+    if let Some(response) = validate_permissions_list(&body.permissions) {
+        return response;
+    }
+    if let Err(response) = authorize_role_definition_change(
+        &state,
+        &context,
+        &session,
+        &headers,
+        ROLE_DEFINITION_UPDATE_ACTION,
+        Some(role_key.clone()),
+    )
+    .await
+    {
+        return response;
+    }
+
+    let patch = RolePatch {
+        display_name: body
+            .display_name
+            .as_deref()
+            .map(str::trim)
+            .map(str::to_string),
+        description: body.description.clone(),
+        permissions: body.permissions.clone().map(|mut permissions| {
+            permissions.sort();
+            permissions.dedup();
+            permissions
+        }),
+    };
+    // The store refuses builtin roles atomically (row lock), so immutability
+    // cannot race a concurrent definition change.
+    let draft = AuditEventDraft {
+        subject: subject_from_session(&session, &headers),
+        action: ROLE_DEFINITION_UPDATE_ACTION.to_string(),
+        resource_type: RESOURCE_ROLE.to_string(),
+        resource_id: Some(role_key.clone()),
+        details: serde_json::json!({ "role_key": role_key }),
+    };
+    match state
+        .0
+        .store
+        .update_role(&state.0.deployment_id.0, &role_key, patch, draft)
+        .await
+    {
+        Ok(RoleUpdateOutcome::Updated { .. }) => {
+            match state
+                .0
+                .store
+                .get_role_definition(&state.0.deployment_id.0, &role_key)
+                .await
+            {
+                Ok(Some(role)) => (
+                    StatusCode::OK,
+                    Json(ApiEnvelope {
+                        data: RoleDefinitionView::from(role),
+                    }),
+                )
+                    .into_response(),
+                _ => unavailable(),
+            }
+        },
+        Ok(RoleUpdateOutcome::Builtin) => {
+            denied_with(
+                &state,
+                &subject_from_session(&session, &headers),
+                &Denial {
+                    action: ROLE_DEFINITION_UPDATE_ACTION,
+                    resource_type: RESOURCE_ROLE,
+                    resource_id: Some(role_key),
+                    reason: "builtin roles are immutable",
+                    status: StatusCode::FORBIDDEN,
+                    code: "ROLE_BUILTIN",
+                    message: "Builtin roles cannot be modified",
+                },
+            )
+            .await
+        },
+        Ok(RoleUpdateOutcome::NotFound) => api_error(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            "Admin role was not found",
+        ),
+        Err(_) => unavailable(),
+    }
+}
+
+async fn delete_role(
+    State(state): State<AdminRbacState>,
+    Path(role_key): Path<String>,
+    headers: HeaderMap,
+    context: Option<Extension<TenantContext>>,
+    session: Option<Extension<ActiveSession>>,
+) -> Response {
+    let Some((context, session)) = role_endpoint_session(context, session) else {
+        return role_endpoint_unauthenticated();
+    };
+    if let Err(response) = authorize_role_definition_change(
+        &state,
+        &context,
+        &session,
+        &headers,
+        ROLE_DEFINITION_DELETE_ACTION,
+        Some(role_key.clone()),
+    )
+    .await
+    {
+        return response;
+    }
+    let draft = AuditEventDraft {
+        subject: subject_from_session(&session, &headers),
+        action: ROLE_DEFINITION_DELETE_ACTION.to_string(),
+        resource_type: RESOURCE_ROLE.to_string(),
+        resource_id: Some(role_key.clone()),
+        details: serde_json::json!({ "role_key": role_key }),
+    };
+    match state
+        .0
+        .store
+        .delete_role(&state.0.deployment_id.0, &role_key, draft)
+        .await
+    {
+        Ok(RoleDeleteOutcome::Deleted) => (
+            StatusCode::OK,
+            Json(ApiEnvelope {
+                data: serde_json::json!({ "deleted": true }),
+            }),
+        )
+            .into_response(),
+        Ok(RoleDeleteOutcome::Builtin) => {
+            denied_with(
+                &state,
+                &subject_from_session(&session, &headers),
+                &Denial {
+                    action: ROLE_DEFINITION_DELETE_ACTION,
+                    resource_type: RESOURCE_ROLE,
+                    resource_id: Some(role_key),
+                    reason: "builtin roles cannot be deleted",
+                    status: StatusCode::FORBIDDEN,
+                    code: "ROLE_BUILTIN",
+                    message: "Builtin roles cannot be modified",
+                },
+            )
+            .await
+        },
+        Ok(RoleDeleteOutcome::InUse) => {
+            denied_with(
+                &state,
+                &subject_from_session(&session, &headers),
+                &Denial {
+                    action: ROLE_DEFINITION_DELETE_ACTION,
+                    resource_type: RESOURCE_ROLE,
+                    resource_id: Some(role_key),
+                    reason: "users still hold this role",
+                    status: StatusCode::CONFLICT,
+                    code: "ROLE_IN_USE",
+                    message: "Role is still assigned to users",
+                },
+            )
+            .await
+        },
+        Ok(RoleDeleteOutcome::NotFound) => api_error(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            "Admin role was not found",
+        ),
         Err(_) => unavailable(),
     }
 }
@@ -4778,10 +6696,12 @@ async fn end_impersonation(
         );
     };
     // Ending entry must always stay possible for the real actor, so this
-    // gate checks the actor's own roles (entry never changes them) and skips
-    // the step-up and rate-limit budgets.
-    let real_permissions = permissions_for_roles(&session.roles);
-    if !real_permissions
+    // gate checks the actor's own permissions (`session.permissions` is
+    // always the real actor's effective set, even during entry) and skips
+    // the step-up and rate-limit budgets. Custom roles holding the
+    // impersonate permission can therefore end their own entry.
+    if !session
+        .permissions
         .iter()
         .any(|permission| permission == IMPERSONATE_PERMISSION)
     {
@@ -4986,13 +6906,11 @@ mod tests {
             .oneshot(login_request(Some(identity)))
             .await
             .expect("request runs");
-        assert_eq!(response.status(), StatusCode::OK);
-        let cookie = set_cookie_of(&response)
-            .split(';')
-            .next()
-            .expect("cookie pair")
-            .to_string();
+        let status = response.status();
+        let cookie = session_cookie_of(&response);
         let body = read_body(response).await;
+        assert_eq!(status, StatusCode::OK, "login failed: {body}");
+        let cookie = cookie.expect("login sets a session cookie");
         let csrf = serde_json::from_str::<serde_json::Value>(&body).expect("session json")["data"]
             ["csrfToken"]
             .as_str()
@@ -6571,5 +8489,1520 @@ mod tests {
                 && event.result == "success"
                 && event.details["auth_method"] == "oidc"
         }));
+    }
+
+    // -----------------------------------------------------------------------
+    // Deployment-defined role management (docs/03-IDENTITY-RBAC-IMPERSONATION.md)
+    // -----------------------------------------------------------------------
+
+    fn role_request(
+        method: &str,
+        uri: &str,
+        cookie: &str,
+        csrf: Option<&str>,
+        body: Option<&str>,
+    ) -> Request<Body> {
+        let mut builder = bearer(Request::builder())
+            .method(method)
+            .uri(uri)
+            .header("cookie", cookie);
+        if let Some(csrf) = csrf {
+            builder = builder.header("x-csrf-token", csrf);
+        }
+        let body = match body {
+            Some(body) => {
+                builder = builder.header("content-type", "application/json");
+                Body::from(body.to_string())
+            },
+            None => Body::empty(),
+        };
+        builder.body(body).expect("request builds")
+    }
+
+    fn create_role_body(role_key: &str, role_level: &str, permissions: &[&str]) -> String {
+        let permissions = permissions
+            .iter()
+            .map(|permission| format!("\"{permission}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            r#"{{"roleKey":"{role_key}","displayName":"{role_key} viewer","roleLevel":"{role_level}","permissions":[{permissions}]}}"#
+        )
+    }
+
+    fn data_of(body: &str) -> serde_json::Value {
+        serde_json::from_str::<serde_json::Value>(body)
+            .expect("json response")
+            .get("data")
+            .expect("envelope data")
+            .clone()
+    }
+
+    /// Logs in the bootstrapped platform admin and returns its session pair.
+    async fn admin_session(app: &Router) -> (String, String) {
+        login(app, "admin@example.test").await
+    }
+
+    /// Seeds a customer-admin identity in the fixture tenant and logs it in.
+    async fn customer_admin_session(
+        fixture: &Fixture,
+        app: &Router,
+        login_name: &str,
+    ) -> (String, String) {
+        fixture.store.seed_user(
+            "TEST-DEPLOYMENT",
+            login_name,
+            "Customer Admin",
+            Some("test-customer"),
+            "active",
+            &[CUSTOMER_ADMIN_ROLE],
+        );
+        login(app, login_name).await
+    }
+
+    async fn created_role(app: &Router, cookie: &str, csrf: &str, body: &str) -> serde_json::Value {
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "POST",
+                "/api/v1/admin/roles",
+                cookie,
+                Some(csrf),
+                Some(body),
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::CREATED, "{body}");
+        data_of(&read_body(response).await)
+    }
+
+    #[tokio::test]
+    async fn permission_catalog_requires_users_manage() {
+        let fixture = default_fixture();
+        let app = app(&fixture);
+        let (cookie, _) = admin_session(&app).await;
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "GET",
+                "/api/v1/admin/permissions",
+                &cookie,
+                None,
+                None,
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::OK);
+        let data = data_of(&read_body(response).await);
+        assert_eq!(
+            data.as_array().expect("catalog is an array").len(),
+            PERMISSION_CATALOG.len()
+        );
+        assert!(data
+            .as_array()
+            .expect("catalog is an array")
+            .iter()
+            .any(|entry| {
+                entry["key"] == ADMIN_USERS_MANAGE_PERMISSION && entry["group"] == "Administration"
+            }));
+
+        // Support has no user-management permission, so the vocabulary stays
+        // closed to it.
+        fixture.store.seed_user(
+            "TEST-DEPLOYMENT",
+            "support@example.test",
+            "Support",
+            Some("test-customer"),
+            "active",
+            &[SUPPORT_ROLE],
+        );
+        let (support_cookie, _) = login(&app, "support@example.test").await;
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "GET",
+                "/api/v1/admin/permissions",
+                &support_cookie,
+                None,
+                None,
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// The catalog is the only vocabulary the role-definition API accepts, so
+    /// it must cover everything a builtin role actually carries. Otherwise the
+    /// top builtin can never be reproduced or subset-checked through a custom
+    /// role, and the console publishes a role holding a permission no operator
+    /// is able to name.
+    #[tokio::test]
+    async fn builtin_role_permissions_are_all_published_in_the_catalog() {
+        for role in BUILTIN_ROLES.iter() {
+            for permission in role.permissions {
+                assert!(
+                    is_allowed_permission(permission),
+                    "builtin role {} carries {permission}, which the catalog does not publish",
+                    role.key
+                );
+                assert!(
+                    PERMISSION_CATALOG
+                        .iter()
+                        .any(|entry| entry.key == *permission),
+                    "{permission} is accepted but has no catalog entry (no display name or group)"
+                );
+            }
+        }
+        // Catalog keys are unique: a duplicate would make the published
+        // vocabulary ambiguous for the role editor.
+        let mut keys: Vec<&str> = PERMISSION_CATALOG.iter().map(|entry| entry.key).collect();
+        let total = keys.len();
+        keys.sort();
+        keys.dedup();
+        assert_eq!(keys.len(), total, "the catalog publishes a duplicate key");
+    }
+
+    #[tokio::test]
+    async fn role_listing_projects_builtins_with_flags_and_counts() {
+        let fixture = default_fixture();
+        let app = app(&fixture);
+        let (cookie, _) = admin_session(&app).await;
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "GET",
+                "/api/v1/admin/roles",
+                &cookie,
+                None,
+                None,
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::OK);
+        let data = data_of(&read_body(response).await);
+        let roles = data.as_array().expect("roles is an array");
+        assert_eq!(roles.len(), BUILTIN_ROLES.len());
+        assert!(roles.iter().all(|role| role["builtin"] == true));
+        let system_admin = roles
+            .iter()
+            .find(|role| role["roleKey"] == SYSTEM_ADMIN_ROLE)
+            .expect("system_admin is listed");
+        assert_eq!(system_admin["roleLevel"], "system");
+        assert_eq!(
+            system_admin["userCount"]
+                .as_i64()
+                .expect("count is an integer"),
+            1,
+            "the bootstrapped admin holds the builtin system role"
+        );
+        assert!(system_admin["permissions"]
+            .as_array()
+            .expect("permissions")
+            .contains(&serde_json::json!(ADMIN_USERS_MANAGE_PERMISSION)));
+    }
+
+    #[tokio::test]
+    async fn system_admin_creates_a_custom_role_and_it_is_audited() {
+        let fixture = default_fixture();
+        let app = app(&fixture);
+        let (cookie, csrf) = admin_session(&app).await;
+        // Unsorted with a duplicate: the stored definition is canonical.
+        let role = created_role(
+            &app,
+            &cookie,
+            &csrf,
+            &create_role_body(
+                "audit_helper",
+                "customer",
+                &["quarantine:view", "audit:view", "audit:view"],
+            ),
+        )
+        .await;
+        assert_eq!(role["builtin"], false);
+        assert_eq!(role["roleLevel"], "customer");
+        assert_eq!(role["userCount"], 0);
+        assert_eq!(
+            role["permissions"],
+            serde_json::json!(["audit:view", "quarantine:view"])
+        );
+
+        let events = fixture.audit.records();
+        let created = events
+            .iter()
+            .find(|event| event.action == ROLE_DEFINITION_CREATE_ACTION)
+            .expect("creation is audited");
+        assert_eq!(created.result, "success");
+        assert_eq!(created.resource_type, RESOURCE_ROLE);
+        assert_eq!(created.resource_id.as_deref(), Some("audit_helper"));
+
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "GET",
+                "/api/v1/admin/roles",
+                &cookie,
+                None,
+                None,
+            ))
+            .await
+            .expect("request runs");
+        let data = data_of(&read_body(response).await);
+        assert!(data
+            .as_array()
+            .expect("roles is an array")
+            .iter()
+            .any(|role| role["roleKey"] == "audit_helper" && role["builtin"] == false));
+    }
+
+    #[tokio::test]
+    async fn create_role_rejects_unknown_permission_before_writing() {
+        let fixture = default_fixture();
+        let app = app(&fixture);
+        let (cookie, csrf) = admin_session(&app).await;
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "POST",
+                "/api/v1/admin/roles",
+                &cookie,
+                Some(&csrf),
+                Some(&create_role_body(
+                    "sneaky",
+                    "system",
+                    &["audit:view", "not:a:permission"],
+                )),
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = read_body(response).await;
+        assert!(body.contains("Unknown permission: not:a:permission"));
+        assert!(!fixture
+            .audit
+            .records()
+            .iter()
+            .any(|event| event.action == ROLE_DEFINITION_CREATE_ACTION));
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "GET",
+                "/api/v1/admin/roles",
+                &cookie,
+                None,
+                None,
+            ))
+            .await
+            .expect("request runs");
+        let data = data_of(&read_body(response).await);
+        assert!(!data
+            .as_array()
+            .expect("roles is an array")
+            .iter()
+            .any(|role| role["roleKey"] == "sneaky"));
+    }
+
+    #[tokio::test]
+    async fn create_role_rejects_invalid_key_and_level() {
+        let fixture = default_fixture();
+        let app = app(&fixture);
+        let (cookie, csrf) = admin_session(&app).await;
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "POST",
+                "/api/v1/admin/roles",
+                &cookie,
+                Some(&csrf),
+                Some(&create_role_body("Bad Key", "customer", &["audit:view"])),
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "POST",
+                "/api/v1/admin/roles",
+                &cookie,
+                Some(&csrf),
+                Some(&create_role_body("fine_key", "owner", &["audit:view"])),
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(fixture
+            .audit
+            .records()
+            .iter()
+            .all(|event| event.action != ROLE_DEFINITION_CREATE_ACTION));
+    }
+
+    #[tokio::test]
+    async fn custom_role_requires_the_builtin_system_admin() {
+        let fixture = default_fixture();
+        let app = app(&fixture);
+        // A customer admin holds admin:users:manage and a fresh step-up, so
+        // only the builtin-role guard can stop it defining permissions.
+        let (cookie, csrf) = customer_admin_session(&fixture, &app, "owner@example.test").await;
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "POST",
+                "/api/v1/admin/roles",
+                &cookie,
+                Some(&csrf),
+                Some(&create_role_body("self_issued", "system", &["audit:view"])),
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = read_body(response).await;
+        assert!(body.contains("\"FORBIDDEN\""));
+        let events = fixture.audit.records();
+        assert!(events.iter().any(|event| {
+            event.action == ROLE_DEFINITION_CREATE_ACTION
+                && event.result == "denied"
+                && event.details["reason"]
+                    == "role definition changes require the builtin system_admin role"
+        }));
+        assert!(
+            fixture
+                .audit
+                .records()
+                .iter()
+                .all(|event| event.action != ROLE_DEFINITION_CREATE_ACTION
+                    || event.result == "denied")
+        );
+    }
+
+    #[tokio::test]
+    async fn custom_role_requires_fresh_step_up() {
+        let config = SessionConfig {
+            step_up_ttl_secs: 0,
+            ..SessionConfig::default()
+        };
+        let fixture = fixture(
+            config,
+            HighRiskLimits::permission_change(),
+            HighRiskLimits::impersonation_start(),
+        );
+        let app = app(&fixture);
+        let (cookie, csrf) = admin_session(&app).await;
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "POST",
+                "/api/v1/admin/roles",
+                &cookie,
+                Some(&csrf),
+                Some(&create_role_body(
+                    "audit_helper",
+                    "customer",
+                    &["audit:view"],
+                )),
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(read_body(response).await.contains("STEP_UP_REQUIRED"));
+    }
+
+    #[tokio::test]
+    async fn role_definition_changes_share_the_change_rate_budget() {
+        let limit = RateLimitConfig {
+            max_tokens: 1,
+            refill_rate_per_sec: 0.0,
+            ..HighRiskLimits::permission_change()
+        };
+        let fixture = fixture(
+            SessionConfig::default(),
+            limit,
+            HighRiskLimits::impersonation_start(),
+        );
+        let app = app(&fixture);
+        let (cookie, csrf) = admin_session(&app).await;
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "POST",
+                "/api/v1/admin/roles",
+                &cookie,
+                Some(&csrf),
+                Some(&create_role_body(
+                    "audit_helper",
+                    "customer",
+                    &["audit:view"],
+                )),
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "POST",
+                "/api/v1/admin/roles",
+                &cookie,
+                Some(&csrf),
+                Some(&create_role_body(
+                    "quarantine_helper",
+                    "customer",
+                    &["quarantine:view"],
+                )),
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok()),
+            Some("60")
+        );
+        assert_eq!(
+            fixture
+                .audit
+                .records()
+                .iter()
+                .filter(|event| event.action == ROLE_DEFINITION_CREATE_ACTION)
+                .count(),
+            1,
+            "a rate-limited change must not audit"
+        );
+    }
+
+    #[tokio::test]
+    async fn builtin_roles_cannot_be_edited_or_deleted() {
+        let fixture = default_fixture();
+        let app = app(&fixture);
+        let (cookie, csrf) = admin_session(&app).await;
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "PATCH",
+                "/api/v1/admin/roles/system_admin",
+                &cookie,
+                Some(&csrf),
+                Some(r#"{"displayName":"Root Administrator"}"#),
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(read_body(response).await.contains("ROLE_BUILTIN"));
+
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "DELETE",
+                "/api/v1/admin/roles/support",
+                &cookie,
+                Some(&csrf),
+                None,
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(read_body(response).await.contains("ROLE_BUILTIN"));
+
+        let events = fixture.audit.records();
+        assert!(events.iter().any(|event| {
+            event.action == ROLE_DEFINITION_UPDATE_ACTION
+                && event.result == "denied"
+                && event.details["reason"] == "builtin roles are immutable"
+        }));
+        assert!(events.iter().any(|event| {
+            event.action == ROLE_DEFINITION_DELETE_ACTION
+                && event.result == "denied"
+                && event.details["reason"] == "builtin roles cannot be deleted"
+        }));
+
+        // Nothing changed: the builtin catalog is still the whole vocabulary.
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "GET",
+                "/api/v1/admin/roles",
+                &cookie,
+                None,
+                None,
+            ))
+            .await
+            .expect("request runs");
+        let data = data_of(&read_body(response).await);
+        let roles = data.as_array().expect("roles is an array");
+        assert_eq!(roles.len(), BUILTIN_ROLES.len());
+        assert!(roles.iter().all(|role| role["builtin"] == true));
+    }
+
+    #[tokio::test]
+    async fn custom_role_cannot_be_deleted_while_assigned() {
+        let fixture = default_fixture();
+        let app = app(&fixture);
+        let (cookie, csrf) = admin_session(&app).await;
+        created_role(
+            &app,
+            &cookie,
+            &csrf,
+            &create_role_body("audit_helper", "customer", &["audit:view"]),
+        )
+        .await;
+        let target = fixture.store.seed_user(
+            "TEST-DEPLOYMENT",
+            "holder@example.test",
+            "Holder",
+            Some("test-customer"),
+            "active",
+            &[],
+        );
+        let response = app
+            .clone()
+            .oneshot(grant_request(&cookie, Some(&csrf), target, "audit_helper"))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "DELETE",
+                "/api/v1/admin/roles/audit_helper",
+                &cookie,
+                Some(&csrf),
+                None,
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert!(read_body(response).await.contains("ROLE_IN_USE"));
+
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "DELETE",
+                &format!("/api/v1/admin/users/{target}/roles/audit_helper"),
+                &cookie,
+                Some(&csrf),
+                None,
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "DELETE",
+                "/api/v1/admin/roles/audit_helper",
+                &cookie,
+                Some(&csrf),
+                None,
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(data_of(&read_body(response).await)["deleted"], true);
+        assert!(fixture.audit.records().iter().any(|event| {
+            event.action == ROLE_DEFINITION_DELETE_ACTION && event.result == "success"
+        }));
+    }
+
+    #[tokio::test]
+    async fn unknown_role_key_is_a_bad_request_not_a_silent_no_op() {
+        let fixture = default_fixture();
+        let app = app(&fixture);
+        let (cookie, csrf) = admin_session(&app).await;
+        let target = fixture.store.seed_user(
+            "TEST-DEPLOYMENT",
+            "target@example.test",
+            "Target",
+            Some("test-customer"),
+            "active",
+            &[],
+        );
+        let response = app
+            .clone()
+            .oneshot(grant_request(&cookie, Some(&csrf), target, "not_a_role"))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(fixture
+            .audit
+            .records()
+            .iter()
+            .all(|event| event.action != ROLE_GRANT_ACTION));
+    }
+
+    #[tokio::test]
+    async fn customer_admin_can_grant_a_subset_custom_role() {
+        let fixture = default_fixture();
+        let app = app(&fixture);
+        let (admin_cookie, admin_csrf) = admin_session(&app).await;
+        created_role(
+            &app,
+            &admin_cookie,
+            &admin_csrf,
+            &create_role_body("audit_helper", "customer", &["audit:view", "audit:export"]),
+        )
+        .await;
+
+        let (cookie, csrf) = customer_admin_session(&fixture, &app, "owner@example.test").await;
+        let target = fixture.store.seed_user(
+            "TEST-DEPLOYMENT",
+            "holder@example.test",
+            "Holder",
+            Some("test-customer"),
+            "active",
+            &[],
+        );
+        let response = app
+            .clone()
+            .oneshot(grant_request(&cookie, Some(&csrf), target, "audit_helper"))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // The holder's effective permissions come from the custom definition.
+        let (holder_cookie, _) = login(&app, "holder@example.test").await;
+        let response = app
+            .clone()
+            .oneshot(session_request(Some(&holder_cookie)))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::OK);
+        let data = data_of(&read_body(response).await);
+        assert_eq!(data["roles"], serde_json::json!(["audit_helper"]));
+        assert_eq!(
+            data["permissions"],
+            serde_json::json!(["audit:export", "audit:view"])
+        );
+        assert_eq!(data["customerId"], "test-customer");
+    }
+
+    #[tokio::test]
+    async fn custom_role_above_grantor_level_is_refused() {
+        let fixture = default_fixture();
+        let app = app(&fixture);
+        let (admin_cookie, admin_csrf) = admin_session(&app).await;
+        // Narrow permissions but a system-level rank: a customer admin cannot
+        // hand out anything that ranks above its own level.
+        created_role(
+            &app,
+            &admin_cookie,
+            &admin_csrf,
+            &create_role_body("system_helper", "system", &["audit:view"]),
+        )
+        .await;
+        let (cookie, csrf) = customer_admin_session(&fixture, &app, "owner@example.test").await;
+        let target = fixture.store.seed_user(
+            "TEST-DEPLOYMENT",
+            "target@example.test",
+            "Target",
+            Some("test-customer"),
+            "active",
+            &[],
+        );
+        let response = app
+            .clone()
+            .oneshot(grant_request(&cookie, Some(&csrf), target, "system_helper"))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(fixture.audit.records().iter().any(|event| {
+            event.action == ROLE_GRANT_ACTION
+                && event.result == "denied"
+                && event.details["reason"] == "cannot grant a role above own level"
+        }));
+    }
+
+    #[tokio::test]
+    async fn custom_role_beyond_grantor_permissions_is_refused() {
+        let fixture = default_fixture();
+        let app = app(&fixture);
+        let (admin_cookie, admin_csrf) = admin_session(&app).await;
+        // Customer level, but carries impersonation the grantor does not hold:
+        // the subset rule blocks the escalation path.
+        created_role(
+            &app,
+            &admin_cookie,
+            &admin_csrf,
+            &create_role_body(
+                "wide_helper",
+                "customer",
+                &["audit:view", IMPERSONATE_PERMISSION],
+            ),
+        )
+        .await;
+        let (cookie, csrf) = customer_admin_session(&fixture, &app, "owner@example.test").await;
+        let target = fixture.store.seed_user(
+            "TEST-DEPLOYMENT",
+            "target@example.test",
+            "Target",
+            Some("test-customer"),
+            "active",
+            &[],
+        );
+        let response = app
+            .clone()
+            .oneshot(grant_request(&cookie, Some(&csrf), target, "wide_helper"))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(fixture.audit.records().iter().any(|event| {
+            event.action == ROLE_GRANT_ACTION
+                && event.result == "denied"
+                && event.details["reason"]
+                    == "cannot grant a role containing permissions you do not hold"
+        }));
+    }
+
+    #[tokio::test]
+    async fn editing_a_custom_role_changes_what_holders_have() {
+        let fixture = default_fixture();
+        let app = app(&fixture);
+        let (admin_cookie, admin_csrf) = admin_session(&app).await;
+        created_role(
+            &app,
+            &admin_cookie,
+            &admin_csrf,
+            &create_role_body("triage", "customer", &["audit:view"]),
+        )
+        .await;
+        fixture.store.seed_user(
+            "TEST-DEPLOYMENT",
+            "holder@example.test",
+            "Holder",
+            Some("test-customer"),
+            "active",
+            &["triage"],
+        );
+        let (holder_cookie, _) = login(&app, "holder@example.test").await;
+        let response = app
+            .clone()
+            .oneshot(session_request(Some(&holder_cookie)))
+            .await
+            .expect("request runs");
+        assert_eq!(
+            data_of(&read_body(response).await)["permissions"],
+            serde_json::json!(["audit:view"])
+        );
+
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "PATCH",
+                "/api/v1/admin/roles/triage",
+                &admin_cookie,
+                Some(&admin_csrf),
+                Some(r#"{"permissions":["policies:view"]}"#),
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::OK);
+        let role = data_of(&read_body(response).await);
+        assert_eq!(role["permissions"], serde_json::json!(["policies:view"]));
+
+        // Effective permissions resolve from the stored definition per request,
+        // so a narrowed role stops applying without waiting for session expiry.
+        let response = app
+            .clone()
+            .oneshot(session_request(Some(&holder_cookie)))
+            .await
+            .expect("request runs");
+        assert_eq!(
+            data_of(&read_body(response).await)["permissions"],
+            serde_json::json!(["policies:view"])
+        );
+        assert!(fixture.audit.records().iter().any(|event| {
+            event.action == ROLE_DEFINITION_UPDATE_ACTION
+                && event.result == "success"
+                && event.details["permissions_before"] == serde_json::json!(["audit:view"])
+                && event.details["permissions_after"] == serde_json::json!(["policies:view"])
+        }));
+    }
+
+    #[tokio::test]
+    async fn editing_a_role_without_permissions_keeps_the_definition() {
+        let fixture = default_fixture();
+        let app = app(&fixture);
+        let (cookie, csrf) = admin_session(&app).await;
+        created_role(
+            &app,
+            &cookie,
+            &csrf,
+            &create_role_body("triage", "customer", &["audit:view"]),
+        )
+        .await;
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "PATCH",
+                "/api/v1/admin/roles/triage",
+                &cookie,
+                Some(&csrf),
+                Some("{}"),
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "PATCH",
+                "/api/v1/admin/roles/missing_role",
+                &cookie,
+                Some(&csrf),
+                Some(r#"{"displayName":"Renamed"}"#),
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn customer_bound_session_resolves_its_own_tenant() {
+        let fixture = default_fixture();
+        let app = app(&fixture);
+        // The platform admin bootstraps first, so the tenant assertions below
+        // are about an already-provisioned deployment.
+        let (admin_cookie, _) = admin_session(&app).await;
+        let response = app
+            .clone()
+            .oneshot(session_request(Some(&admin_cookie)))
+            .await
+            .expect("request runs");
+        assert_eq!(
+            data_of(&read_body(response).await)["customerId"],
+            "test-customer",
+            "unbound platform identities fall back to the deployment template tenant"
+        );
+
+        fixture.store.seed_customer(
+            "TEST-DEPLOYMENT",
+            "north-customer",
+            "North Customer",
+            "active",
+        );
+        fixture.store.seed_user(
+            "TEST-DEPLOYMENT",
+            "north@example.test",
+            "North Admin",
+            Some("north-customer"),
+            "active",
+            &[CUSTOMER_ADMIN_ROLE],
+        );
+        let (north_cookie, _) = login(&app, "north@example.test").await;
+        let response = app
+            .clone()
+            .oneshot(session_request(Some(&north_cookie)))
+            .await
+            .expect("request runs");
+        assert_eq!(
+            data_of(&read_body(response).await)["customerId"],
+            "north-customer",
+            "a customer-bound identity never resolves to the template tenant"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Deployment-defined role management: conflict, budget and tenancy edges
+    // -----------------------------------------------------------------------
+
+    /// Fixture with an explicit change-budget size, so a multi-step test is
+    /// never accidentally limited by the shared default bucket, and a
+    /// one-token bucket proves which paths spend a token.
+    fn budget_fixture(max_tokens: u64) -> Fixture {
+        fixture(
+            SessionConfig::default(),
+            RateLimitConfig {
+                max_tokens,
+                refill_rate_per_sec: 0.0,
+                ..HighRiskLimits::permission_change()
+            },
+            HighRiskLimits::impersonation_start(),
+        )
+    }
+
+    fn create_user_request(cookie: &str, csrf: &str, body: &str) -> Request<Body> {
+        bearer(Request::builder())
+            .method("POST")
+            .uri("/api/v1/admin/users")
+            .header("cookie", cookie)
+            .header("x-csrf-token", csrf)
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("request builds")
+    }
+
+    /// A session carrying only what tenant resolution reads, so every
+    /// `build_context` tenant source can be probed directly.
+    fn stored_session(customer_id: Option<&str>) -> ActiveSession {
+        let now = Utc::now();
+        ActiveSession {
+            session_id: Uuid::new_v4(),
+            deployment_id: "TEST-DEPLOYMENT".to_string(),
+            user_id: Uuid::new_v4(),
+            login: "operator@example.test".to_string(),
+            roles: vec![CUSTOMER_ADMIN_ROLE.to_string()],
+            permissions: vec![ADMIN_USERS_MANAGE_PERMISSION.to_string()],
+            customer_id: customer_id.map(str::to_string),
+            customer_internal_key: None,
+            customer_display_name: None,
+            customer_lifecycle: None,
+            csrf_token: "csrf-token".to_string(),
+            authenticated_at: now,
+            absolute_expires_at: now + Duration::hours(8),
+            step_up_at: Some(now),
+            impersonation: None,
+        }
+    }
+
+    async fn role_conflict(app: &Router, cookie: &str, csrf: &str, role_key: &str) {
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "POST",
+                "/api/v1/admin/roles",
+                cookie,
+                Some(csrf),
+                Some(&create_role_body(role_key, "system", &["audit:view"])),
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(
+            response.status(),
+            StatusCode::CONFLICT,
+            "key {role_key} is already taken in this deployment"
+        );
+        assert!(read_body(response).await.contains("ROLE_EXISTS"));
+    }
+
+    #[tokio::test]
+    async fn create_role_conflicts_with_builtin_and_existing_keys_and_writes_nothing() {
+        let fixture = budget_fixture(20);
+        let app = app(&fixture);
+        let (cookie, csrf) = admin_session(&app).await;
+        created_role(
+            &app,
+            &cookie,
+            &csrf,
+            &create_role_body("audit_helper", "customer", &["audit:view"]),
+        )
+        .await;
+
+        // Builtin keys exist in every deployment, and an existing custom key
+        // conflicts like the Postgres unique index: 409, never a silent patch.
+        for role_key in [
+            SYSTEM_ADMIN_ROLE,
+            SUPPORT_ROLE,
+            CUSTOMER_ADMIN_ROLE,
+            "audit_helper",
+        ] {
+            role_conflict(&app, &cookie, &csrf, role_key).await;
+        }
+
+        // A conflict writes nothing at all: the single create audit is the
+        // successful call above.
+        assert_eq!(
+            fixture
+                .audit
+                .records()
+                .iter()
+                .filter(|event| event.action == ROLE_DEFINITION_CREATE_ACTION)
+                .count(),
+            1,
+            "a refused create must not audit a change that never happened"
+        );
+
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "GET",
+                "/api/v1/admin/roles",
+                &cookie,
+                None,
+                None,
+            ))
+            .await
+            .expect("request runs");
+        let data = data_of(&read_body(response).await);
+        let roles = data.as_array().expect("roles is an array");
+        assert_eq!(roles.len(), BUILTIN_ROLES.len() + 1);
+        let helper = roles
+            .iter()
+            .find(|role| role["roleKey"] == "audit_helper")
+            .expect("created role is listed");
+        assert_eq!(
+            helper["roleLevel"], "customer",
+            "the rejected system-level payload must not rewrite the existing role"
+        );
+    }
+
+    #[tokio::test]
+    async fn role_definition_validation_never_spends_the_change_budget() {
+        // One token for the whole deployment: only a real change may spend it.
+        let fixture = budget_fixture(1);
+        let app = app(&fixture);
+        let (cookie, csrf) = admin_session(&app).await;
+
+        let long_description = "d".repeat(MAX_ROLE_DESCRIPTION_LEN + 1);
+        let rejected = [
+            // Key outside `^[a-z][a-z0-9_]{2,63}$`.
+            create_role_body("Bad Key", "customer", &["audit:view"]),
+            // Level outside the fixed vocabulary.
+            create_role_body("fine_key", "owner", &["audit:view"]),
+            // Permission outside the server-side catalog.
+            create_role_body("fine_key", "customer", &["not:a:permission"]),
+            // An empty bundle is not a role.
+            create_role_body("fine_key", "customer", &[]),
+            // Blank display name.
+            r#"{"roleKey":"fine_key","displayName":" ","roleLevel":"customer","permissions":["audit:view"]}"#.to_string(),
+            // Over-long description.
+            format!(
+                r#"{{"roleKey":"fine_key","displayName":"Fine","description":"{long_description}","roleLevel":"customer","permissions":["audit:view"]}}"#
+            ),
+        ];
+        for body in &rejected {
+            let response = app
+                .clone()
+                .oneshot(role_request(
+                    "POST",
+                    "/api/v1/admin/roles",
+                    &cookie,
+                    Some(&csrf),
+                    Some(body),
+                ))
+                .await
+                .expect("request runs");
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{body}");
+        }
+        assert!(fixture
+            .audit
+            .records()
+            .iter()
+            .all(|event| event.action != ROLE_DEFINITION_CREATE_ACTION));
+
+        // The budget is intact, so the first valid create still lands...
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "POST",
+                "/api/v1/admin/roles",
+                &cookie,
+                Some(&csrf),
+                Some(&create_role_body(
+                    "audit_helper",
+                    "customer",
+                    &["audit:view"],
+                )),
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::CREATED);
+        // ...and the very next change is the one that runs out.
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "POST",
+                "/api/v1/admin/roles",
+                &cookie,
+                Some(&csrf),
+                Some(&create_role_body(
+                    "triage_helper",
+                    "customer",
+                    &["audit:view"],
+                )),
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn role_key_shape_is_enforced_at_both_ends_of_the_documented_range() {
+        let fixture = budget_fixture(20);
+        let app = app(&fixture);
+        let (cookie, csrf) = admin_session(&app).await;
+
+        let at_limit = "k".to_string() + &"a".repeat(MAX_ROLE_KEY_LEN - 1);
+        let over_limit = "a".repeat(MAX_ROLE_KEY_LEN + 1);
+        for key in [
+            "ab",                // below the 3-character floor
+            "1abc",              // digits may not lead
+            "Abc",               // uppercase is not a machine key
+            "abc-def",           // only `_` separates words
+            at_limit.as_str(),   // exactly 64 is inside the range
+            over_limit.as_str(), // 65 is outside it
+        ] {
+            let expected = if key == at_limit {
+                StatusCode::CREATED
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            let response = app
+                .clone()
+                .oneshot(role_request(
+                    "POST",
+                    "/api/v1/admin/roles",
+                    &cookie,
+                    Some(&csrf),
+                    Some(&create_role_body(key, "customer", &["audit:view"])),
+                ))
+                .await
+                .expect("request runs");
+            assert_eq!(response.status(), expected, "role key {key}");
+        }
+
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "GET",
+                "/api/v1/admin/roles",
+                &cookie,
+                None,
+                None,
+            ))
+            .await
+            .expect("request runs");
+        let data = data_of(&read_body(response).await);
+        let roles = data.as_array().expect("roles is an array");
+        assert_eq!(
+            roles.len(),
+            BUILTIN_ROLES.len() + 1,
+            "only the in-range key was written"
+        );
+        assert!(roles.iter().any(|role| role["roleKey"] == at_limit));
+    }
+
+    #[tokio::test]
+    async fn user_creation_applies_the_custom_role_gates_and_unknown_key_rule() {
+        let fixture = budget_fixture(20);
+        let app = app(&fixture);
+        fixture.store.seed_custom_role(
+            "TEST-DEPLOYMENT",
+            "audit_helper",
+            "Audit helper",
+            "customer",
+            &["audit:view"],
+        );
+        fixture.store.seed_custom_role(
+            "TEST-DEPLOYMENT",
+            "wide_helper",
+            "Wide helper",
+            "customer",
+            &["audit:view", IMPERSONATE_PERMISSION],
+        );
+        fixture.store.seed_custom_role(
+            "TEST-DEPLOYMENT",
+            "system_helper",
+            "System helper",
+            "system",
+            &["audit:view"],
+        );
+        let (cookie, csrf) = customer_admin_session(&fixture, &app, "owner@example.test").await;
+
+        // Rank rule on the create path.
+        let response = app
+            .clone()
+            .oneshot(create_user_request(
+                &cookie,
+                &csrf,
+                r#"{"login":"rank@example.test","displayName":"Rank","roles":["system_helper"],"customerId":"test-customer"}"#,
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        // Subset rule on the create path.
+        let response = app
+            .clone()
+            .oneshot(create_user_request(
+                &cookie,
+                &csrf,
+                r#"{"login":"wide@example.test","displayName":"Wide","roles":["wide_helper"],"customerId":"test-customer"}"#,
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let events = fixture.audit.records();
+        assert!(events.iter().any(|event| {
+            event.action == USER_CREATE_ACTION
+                && event.result == "denied"
+                && event.details["reason"] == "cannot grant a role above own level"
+        }));
+        assert!(events.iter().any(|event| {
+            event.action == USER_CREATE_ACTION
+                && event.result == "denied"
+                && event.details["reason"]
+                    == "cannot grant a role containing permissions you do not hold"
+        }));
+
+        // An unknown key is validation, not a silent no-op: 400, no audit and
+        // no half-created identity.
+        let before = fixture
+            .audit
+            .records()
+            .iter()
+            .filter(|event| event.action == USER_CREATE_ACTION)
+            .count();
+        let response = app
+            .clone()
+            .oneshot(create_user_request(
+                &cookie,
+                &csrf,
+                r#"{"login":"ghost@example.test","displayName":"Ghost","roles":["not_a_role"],"customerId":"test-customer"}"#,
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            fixture
+                .audit
+                .records()
+                .iter()
+                .filter(|event| event.action == USER_CREATE_ACTION)
+                .count(),
+            before,
+            "a rejected payload writes no audit"
+        );
+        assert!(fixture
+            .store
+            .user_for_login("TEST-DEPLOYMENT", "ghost@example.test")
+            .is_none());
+
+        // The subset the customer admin does hold lands, and the holder's own
+        // session resolves the custom definition's permissions.
+        let response = app
+            .clone()
+            .oneshot(create_user_request(
+                &cookie,
+                &csrf,
+                r#"{"login":"holder@example.test","displayName":"Holder","roles":["audit_helper"],"customerId":"test-customer"}"#,
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let (holder_cookie, _) = login(&app, "holder@example.test").await;
+        let response = app
+            .clone()
+            .oneshot(session_request(Some(&holder_cookie)))
+            .await
+            .expect("request runs");
+        let data = data_of(&read_body(response).await);
+        assert_eq!(data["roles"], serde_json::json!(["audit_helper"]));
+        assert_eq!(data["permissions"], serde_json::json!(["audit:view"]));
+    }
+
+    #[tokio::test]
+    async fn revoking_ranks_from_the_stored_role_level_and_refuses_unknown_keys() {
+        let fixture = budget_fixture(20);
+        let app = app(&fixture);
+        let (admin_cookie, admin_csrf) = admin_session(&app).await;
+        // Levels that exist only in this deployment's role rows: no builtin
+        // constant carries them, so rank can only come from the store.
+        fixture.store.seed_custom_role(
+            "TEST-DEPLOYMENT",
+            "system_helper",
+            "System helper",
+            "system",
+            &["audit:view"],
+        );
+        fixture.store.seed_custom_role(
+            "TEST-DEPLOYMENT",
+            "support_helper",
+            "Support helper",
+            "support",
+            &["quarantine:view"],
+        );
+        // Rank 2 (support) plus the manage permission (customer admin).
+        fixture.store.seed_user(
+            "TEST-DEPLOYMENT",
+            "rank2@example.test",
+            "Rank Two",
+            Some("test-customer"),
+            "active",
+            &[CUSTOMER_ADMIN_ROLE, SUPPORT_ROLE],
+        );
+        let (cookie, csrf) = login(&app, "rank2@example.test").await;
+        let target = fixture.store.seed_user(
+            "TEST-DEPLOYMENT",
+            "holder@example.test",
+            "Holder",
+            Some("test-customer"),
+            "active",
+            &["system_helper", "support_helper"],
+        );
+
+        // Unknown role key: 400 before the gate, so nothing is audited.
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "DELETE",
+                &format!("/api/v1/admin/users/{target}/roles/not_a_role"),
+                &cookie,
+                Some(&csrf),
+                None,
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(fixture
+            .audit
+            .records()
+            .iter()
+            .all(|event| event.action != ROLE_REVOKE_ACTION));
+
+        // A custom system role revokes like the builtin one: above rank 2.
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "DELETE",
+                &format!("/api/v1/admin/users/{target}/roles/system_helper"),
+                &cookie,
+                Some(&csrf),
+                None,
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(fixture.audit.records().iter().any(|event| {
+            event.action == ROLE_REVOKE_ACTION
+                && event.result == "denied"
+                && event.details["reason"] == "cannot revoke a role above own level"
+        }));
+
+        // The role at its own stored level revokes, and revoking needs none
+        // of the role's permissions.
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "DELETE",
+                &format!("/api/v1/admin/users/{target}/roles/support_helper"),
+                &cookie,
+                Some(&csrf),
+                None,
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            fixture
+                .store
+                .user_for_login("TEST-DEPLOYMENT", "holder@example.test")
+                .expect("holder exists")
+                .roles,
+            vec!["system_helper".to_string()],
+            "the denied revoke left the role in place"
+        );
+
+        // The platform identity can revoke the custom system role.
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "DELETE",
+                &format!("/api/v1/admin/users/{target}/roles/system_helper"),
+                &admin_cookie,
+                Some(&admin_csrf),
+                None,
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn the_tenant_context_carries_the_bound_customer_facts() {
+        let fixture = default_fixture();
+        let mut session = stored_session(Some("north-customer"));
+        session.customer_display_name = Some("North Customer".to_string());
+        session.customer_internal_key = Some(42);
+        session.customer_lifecycle = Some("grace".to_string());
+
+        let context = build_context(&fixture.state, &session, &HeaderMap::new());
+        assert_eq!(context.customer_id.0, "north-customer");
+        assert_eq!(context.customer_display_name, "North Customer");
+        assert_eq!(context.customer_internal_key, 42);
+        assert_eq!(context.customer_lifecycle, CustomerLifecycle::Grace);
+        assert_eq!(context.deployment_id.0, "TEST-DEPLOYMENT");
+        // Identity and permission claims are never tenant-derived.
+        assert_eq!(context.actor.roles, vec![CUSTOMER_ADMIN_ROLE.to_string()]);
+        assert_eq!(
+            context.permissions,
+            vec![ADMIN_USERS_MANAGE_PERMISSION.to_string()]
+        );
+        assert_eq!(
+            context.actor.authentication_assurance,
+            AuthenticationAssurance::StepUp
+        );
+        assert!(context.impersonation.is_none());
+    }
+
+    #[tokio::test]
+    async fn an_unbound_session_keeps_the_template_tenant() {
+        let fixture = default_fixture();
+
+        // Bound, but the display facts did not load with the session: the id
+        // still wins and the metadata stays local to it.
+        let context = build_context(
+            &fixture.state,
+            &stored_session(Some("north-customer")),
+            &HeaderMap::new(),
+        );
+        assert_eq!(context.customer_id.0, "north-customer");
+        assert_eq!(
+            context.customer_display_name, "north-customer",
+            "the display name falls back to the bound id, never the template's"
+        );
+        assert_eq!(context.customer_internal_key, 0);
+        assert_eq!(context.customer_lifecycle, CustomerLifecycle::Active);
+
+        // Unbound platform identity: the deployment template tenant.
+        let context = build_context(&fixture.state, &stored_session(None), &HeaderMap::new());
+        assert_eq!(context.customer_id.0, "test-customer");
+        assert_eq!(context.customer_display_name, "Test Customer");
+        assert_eq!(context.customer_internal_key, 1);
+        assert_eq!(context.customer_lifecycle, CustomerLifecycle::Active);
+    }
+
+    #[tokio::test]
+    async fn customer_entry_overrides_the_binding_in_the_tenant_context() {
+        let fixture = default_fixture();
+        let mut session = stored_session(Some("north-customer"));
+        session.customer_display_name = Some("North Customer".to_string());
+        session.customer_internal_key = Some(42);
+        session.customer_lifecycle = Some("active".to_string());
+        session.impersonation = Some(ActiveImpersonation {
+            id: Uuid::new_v4(),
+            customer_id: "south-customer".to_string(),
+            customer_display_name: "South Customer".to_string(),
+            customer_internal_key: 7,
+            customer_lifecycle: "suspended".to_string(),
+            reason: "support triage".to_string(),
+            started_at: Utc::now(),
+        });
+
+        let context = build_context(&fixture.state, &session, &HeaderMap::new());
+        assert_eq!(
+            context.customer_id.0, "south-customer",
+            "customer entry beats the user's own binding"
+        );
+        assert_eq!(context.customer_display_name, "South Customer");
+        assert_eq!(context.customer_internal_key, 7);
+        assert_eq!(context.customer_lifecycle, CustomerLifecycle::Suspended);
+
+        // Attribution stays with the real actor.
+        let impersonation = context.impersonation.as_ref().expect("entry is visible");
+        assert_eq!(impersonation.impersonated_customer.0, "south-customer");
+        assert_eq!(impersonation.impersonated_subject, None);
+        assert_eq!(impersonation.reason, "support triage");
+        assert_eq!(
+            impersonation.real_actor.roles,
+            vec![CUSTOMER_ADMIN_ROLE.to_string()]
+        );
+        assert_eq!(
+            context.permissions,
+            vec![ADMIN_USERS_MANAGE_PERMISSION.to_string()],
+            "entry never intersects or extends permissions"
+        );
     }
 }

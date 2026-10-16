@@ -76,6 +76,32 @@ Tenant-scoped. Customer RBAC roles may include owner, security admin, mail admin
 
 The owner controls which roles may view headers/content/attachments, release quarantine, remediate, edit policies, view audit data and view reports.
 
+## Role definitions
+
+Each deployment seeds the three builtin roles above and may additionally define custom roles.
+
+Builtin roles:
+
+- `system_admin`, `support` and `customer_admin` are seeded idempotently per deployment;
+- their keys, levels and permission sets are not mutable through the management API.
+
+Custom roles:
+
+- are stored per deployment alongside the builtins and draw permissions only from the server-side permission catalog;
+- are created, edited and deleted only by an identity holding the builtin `system_admin` role, with the `admin:users:manage` permission, a fresh step-up and the shared permission-change rate limit;
+- are audited in the same transaction as the definition write, recording the permission set before and after a change;
+- carry one of the three builtin levels (`system`, `support`, `customer`) and take that level's position in the grantor ordering;
+- cannot be deleted while assigned to any user.
+
+A custom role composes permissions; it does not create a new administrative level and it does not acquire behaviors that are reserved to a builtin role identity, such as creating platform-scope administrative users or listing every customer of the deployment.
+
+### Granting and revoking
+
+- A grantor may only assign or revoke roles at or below their own highest level, resolved from the stored role level rather than a compiled-in table.
+- A custom role may additionally only be granted by an identity that already holds every permission inside it, so role composition cannot escalate laterally.
+- An unknown role key is rejected. Granting never succeeds as a silent no-op.
+- No identity may modify its own role membership.
+
 ## Authentication
 
 MFA is required for **all administrative accounts**:
@@ -115,6 +141,12 @@ Administrative sessions require:
 - reauthentication/step-up for sensitive actions where configured.
 
 ## Customer entry (impersonation)
+
+A customer-bound administrative identity resolves its default tenant from its
+own customer binding, not from the deployment's seeded customer. The
+deployment template customer applies only to platform-scope identities, which
+carry no customer binding. Customer entry below overrides the default for the
+duration of the interval.
 
 System Admin and Support can enter ("log in to") a customer account for a
 reasoned, step-up-gated, rate-limited interval. Entry switches the session's

@@ -65,7 +65,7 @@ GRANT SELECT, INSERT, UPDATE ON domain_security_notifications TO nullapart_mailc
 GRANT SELECT, INSERT, UPDATE ON domain_auth_telemetry TO nullapart_mailcore;
 GRANT SELECT, INSERT, UPDATE ON admin_users, admin_sessions TO nullapart_mailcore;
 GRANT SELECT, INSERT, UPDATE ON admin_impersonations TO nullapart_mailcore;
-GRANT SELECT, INSERT ON admin_roles TO nullapart_mailcore;
+GRANT SELECT, INSERT, UPDATE, DELETE ON admin_roles TO nullapart_mailcore;
 GRANT SELECT, INSERT, DELETE ON admin_role_permissions, admin_user_roles TO nullapart_mailcore;
 GRANT SELECT, INSERT, DELETE ON oidc_login_flows TO nullapart_mailcore;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO nullapart_mailcore;

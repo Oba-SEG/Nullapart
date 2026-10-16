@@ -149,6 +149,8 @@ Administrative levels:
 
 Customer RBAC may further restrict message content, headers, attachments, quarantine release, audit access and remediation.
 
+Deployments may define additional roles that compose catalog permissions at one of the three levels. A defined role never creates a fourth administrative level, never acquires builtin-only platform powers, and cannot be granted above the grantor's level or beyond the permissions the grantor already holds.
+
 No frontend-only permission check is sufficient.
 
 ## Impersonation

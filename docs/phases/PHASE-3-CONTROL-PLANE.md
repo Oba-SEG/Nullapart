@@ -55,6 +55,17 @@ Implement:
 - customer owner-defined RBAC;
 - configurable content/quarantine/remediation permissions.
 
+### Deployment-defined roles
+
+- custom roles stored per deployment beside the builtins;
+- permissions drawn only from the server-side permission catalog;
+- definition changes restricted to the builtin System Admin, step-up gated, rate limited and audited transactionally;
+- grantor level ordering resolved from the stored role level;
+- custom roles additionally grantable only by identities already holding every permission in them;
+- builtin-only platform powers (platform-scope users, cross-customer listing) are not composable into custom roles.
+
+See `docs/03-IDENTITY-RBAC-IMPERSONATION.md#role-definitions`.
+
 ## Impersonation
 
 Implement:
@@ -213,6 +224,7 @@ Do not sacrifice:
 ## Exit criteria
 
 - all three admin levels function end-to-end;
+- deployment-defined custom roles are creatable, assignable, revocable and audited without privilege escalation;
 - MFA enforced;
 - RBAC enforced server-side;
 - impersonation fully audited;
