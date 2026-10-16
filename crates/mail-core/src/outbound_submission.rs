@@ -10,6 +10,7 @@
 use std::{net::IpAddr, time::Duration};
 
 use async_trait::async_trait;
+use mailparse::{addrparse_header, parse_mail, MailAddr, MailHeaderMap};
 use nullapart_mail_contracts::transaction::{CustomerId, DeploymentId};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Row, Transaction};
@@ -291,6 +292,7 @@ pub fn authorize_outbound_submission(
     if raw_mime.is_empty() || !content_hash_matches(&request.content_hash, &raw_mime) {
         return Err(OutboundSubmissionError::MessageIntegrity);
     }
+    validate_header_sender_alignment(&raw_mime, sender)?;
 
     let intake = validate_outbound_with_signing_config(
         request,
@@ -483,13 +485,51 @@ fn valid_smtp_atom(value: &str) -> bool {
 }
 
 fn valid_smtp_path(value: &str) -> bool {
-    !value.is_empty()
-        && value.contains('@')
+    let Some((local_part, domain)) = value.rsplit_once('@') else {
+        return false;
+    };
+    !local_part.is_empty()
+        && !domain.is_empty()
+        && !domain.contains('@')
         && !value.bytes().any(|byte| {
             byte.is_ascii_control()
                 || byte.is_ascii_whitespace()
                 || matches!(byte, b'<' | b'>' | b'(' | b')' | b'[' | b']')
         })
+}
+
+/// The authenticated envelope sender and visible RFC 5322 sender must be
+/// domain-aligned before a message reaches the signing listener. Rspamd also
+/// enforces this at signing time, but rejecting here makes the authorization
+/// contract explicit and prevents an accepted-but-unsigned customer message.
+fn validate_header_sender_alignment(
+    raw_mime: &[u8],
+    envelope_sender: &str,
+) -> Result<(), OutboundSubmissionError> {
+    let parsed = parse_mail(raw_mime).map_err(|_| OutboundSubmissionError::HeaderFromMismatch)?;
+    let from_headers = parsed.headers.get_all_headers("From");
+    if from_headers.len() != 1 {
+        return Err(OutboundSubmissionError::HeaderFromMismatch);
+    }
+    let addresses = addrparse_header(from_headers[0])
+        .map_err(|_| OutboundSubmissionError::HeaderFromMismatch)?;
+    let [MailAddr::Single(header_from)] = addresses.as_slice() else {
+        return Err(OutboundSubmissionError::HeaderFromMismatch);
+    };
+    if !valid_smtp_path(&header_from.addr) {
+        return Err(OutboundSubmissionError::HeaderFromMismatch);
+    }
+
+    let Some((_, envelope_domain)) = envelope_sender.rsplit_once('@') else {
+        return Err(OutboundSubmissionError::HeaderFromMismatch);
+    };
+    let Some((_, header_domain)) = header_from.addr.rsplit_once('@') else {
+        return Err(OutboundSubmissionError::HeaderFromMismatch);
+    };
+    if !header_domain.eq_ignore_ascii_case(envelope_domain) {
+        return Err(OutboundSubmissionError::HeaderFromMismatch);
+    }
+    Ok(())
 }
 
 async fn write_dot_stuffed_message(
@@ -609,6 +649,8 @@ pub enum OutboundSubmissionError {
     NullEnvelopeSender,
     #[error("outbound message integrity validation failed")]
     MessageIntegrity,
+    #[error("outbound envelope sender and RFC 5322 From header are not aligned")]
+    HeaderFromMismatch,
     #[error("a matching provisioned outbound signer is unavailable")]
     SigningUnavailable,
     #[error("private outbound SMTP configuration is invalid")]
@@ -842,6 +884,39 @@ mod tests {
             .unwrap_err(),
             OutboundSubmissionError::NotAuthorized
         );
+    }
+
+    #[test]
+    fn authorization_requires_one_parseable_domain_aligned_from_header() {
+        let aligned = b"From: Nullapart Sender <sender@CUSTOMER-A.test>\r\n\r\nbody";
+        assert!(authorize_outbound_submission(
+            &request(aligned),
+            &domains(),
+            &DomainAuthorization::Internal,
+            &signer("customer-a.test"),
+            aligned.to_vec(),
+        )
+        .is_ok());
+
+        for raw_mime in [
+            b"From: sender@other.test\r\n\r\nbody".as_slice(),
+            b"From: sender@customer-a.test, other@customer-a.test\r\n\r\nbody".as_slice(),
+            b"From: malformed-address\r\n\r\nbody".as_slice(),
+            b"Subject: missing sender\r\n\r\nbody".as_slice(),
+            b"From: sender@customer-a.test\r\nFrom: other@customer-a.test\r\n\r\nbody".as_slice(),
+        ] {
+            assert_eq!(
+                authorize_outbound_submission(
+                    &request(raw_mime),
+                    &domains(),
+                    &DomainAuthorization::Internal,
+                    &signer("customer-a.test"),
+                    raw_mime.to_vec(),
+                )
+                .unwrap_err(),
+                OutboundSubmissionError::HeaderFromMismatch
+            );
+        }
     }
 
     #[tokio::test]
