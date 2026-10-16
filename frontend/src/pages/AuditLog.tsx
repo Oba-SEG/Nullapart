@@ -11,9 +11,11 @@ import { WorkflowGuide } from "../components/WorkflowGuide";
 import { Button } from "../components/primitives/Button";
 import { Dialog } from "../components/primitives/Dialog";
 import { Hint } from "../components/primitives/Hint";
+import { Input } from "../components/primitives/Input";
+import { Select } from "../components/primitives/Select";
 import "./AuditLog.css";
 
-import { auditActionLabel } from "../lib/labels";
+import { auditActionLabel, roleLevelLabel } from "../lib/labels";
 import { notify } from "../lib/notify";
 import { checkpointStatusLabel, resultLabel } from "../lib/status";
 import { humanizeToken } from "../lib/text";
@@ -277,7 +279,7 @@ export function AuditLog() {
             </div>
             <div>
               <dt>Root hash</dt>
-              <dd>{checkpoint.data.root_hash}</dd>
+              <dd className="audit-hash">{checkpoint.data.root_hash}</dd>
             </div>
             <div>
               <dt>Signer</dt>
@@ -288,35 +290,30 @@ export function AuditLog() {
       </section>
 
       <section className="audit-controls" aria-label="Audit filters">
-        <label className="search-box">
-          <span className="sr-only">Filter by actor</span>
-          <input
-            className="search-input"
-            value={filters.actor_login}
-            onChange={(event) => applyFilters({ ...filters, actor_login: event.target.value })}
-            placeholder="Filter by actor login"
-          />
-        </label>
-        <label>
-          <span className="sr-only">Filter by action</span>
-          <input
-            value={filters.action}
-            onChange={(event) => applyFilters({ ...filters, action: event.target.value })}
-            placeholder="Filter by action"
-          />
-        </label>
-        <label>
-          <span className="sr-only">Filter by result</span>
-          <select
-            value={filters.result}
-            onChange={(event) => applyFilters({ ...filters, result: event.target.value })}
-          >
-            <option value="">All results</option>
-            <option value="success">Success</option>
-            <option value="denied">Denied</option>
-            <option value="failed">Failed</option>
-          </select>
-        </label>
+        <Input
+          label="Actor login"
+          value={filters.actor_login}
+          onChange={(event) => applyFilters({ ...filters, actor_login: event.target.value })}
+          placeholder="For example ob1"
+        />
+        <Input
+          label="Action"
+          value={filters.action}
+          onChange={(event) => applyFilters({ ...filters, action: event.target.value })}
+          placeholder="For example session_login"
+          hint="Actions are recorded under their internal name, so this filter matches that name."
+        />
+        <Select
+          label="Result"
+          value={filters.result}
+          onChange={(event) => applyFilters({ ...filters, result: event.target.value })}
+          options={[
+            { value: "", label: "Any result" },
+            { value: "success", label: "Success" },
+            { value: "denied", label: "Denied" },
+            { value: "failed", label: "Failed" },
+          ]}
+        />
       </section>
 
       {page.isPending && (
@@ -373,7 +370,9 @@ export function AuditLog() {
                   </td>
                   <td>
                     {event.actor_login}
-                    <span className="audit-meta">{event.actor_roles.join(", ")}</span>
+                    <span className="audit-meta">
+                      {event.actor_roles.map(roleLevelLabel).join(", ")}
+                    </span>
                     {event.impersonated_subject && (
                       <span className="audit-meta">Acted as {event.impersonated_subject}</span>
                     )}
@@ -383,7 +382,6 @@ export function AuditLog() {
                   </td>
                   <td>
                     {auditActionLabel(event.action)}
-                    <span className="audit-meta">{event.action}</span>
                     <span className="audit-meta">{event.customer_id ?? "Platform"}</span>
                   </td>
                   <td>

@@ -117,6 +117,55 @@ session, against the rebuilt `mailcore` and `frontend` images:
 - The Roles page shows `System Administrator` holding 28 permissions against a
   27-entry catalog, which is the live shape of the orphan grant reported below.
 
+## Landed in the fourth pass (the last seven routes)
+
+Screenshotted the routes the third pass had converted but not re-checked since
+the global form-group rule landed: Messages, Quarantine, Customer detail,
+Domain security, Connectors, Audit log, Settings. Messages, Quarantine and
+Domain security came back clean. The other four carried real defects.
+
+- **Settings stopped quoting its own keys.** The theme signal showed `dark` and
+  the runtime signal `permitted` / `restricted`; both now read "Midnight" and
+  "Allowed" / "Not available". The role chip showed `system_admin` and now goes
+  through `roleLevelLabel`. "Re-authentication: Active" became "Verified" /
+  "Not verified", which is what the state actually means next to its tooltip.
+- **Audit log filters are labelled.** The three controls carried `sr-only`
+  labels only, so on screen the row read as two placeholders and a bare select
+  showing "All results". They are now `Input` / `Select` primitives with visible
+  labels, example placeholders, and a line explaining that the action filter
+  matches the recorded internal name (it does; the server filters on it).
+- **Audit rows no longer repeat the wire token.** Every row printed the human
+  action label with `deep_ai_analysis_result_recorded` under it. The label
+  stays; the token is evidence, so it now appears once, in the event detail
+  drawer. Actor roles read "System admin" instead of `system_admin`, and the
+  64-character checkpoint root hash is styled as secondary mono instead of
+  wrapping over three lines at body size.
+- **A whole field cannot live inside a tooltip.** Customer detail wrapped the
+  domain-type `Select` in `Hint`, whose `<span>` shrink-wraps, so the control
+  rendered at content width while every other field filled the column. It now
+  uses the primitive's own `hint`, so the rule is a permanently visible line
+  and the select is full width.
+- **Connector submit buttons stopped shouting.** Both forms stretched their
+  action across the full column; they are right-aligned at natural width now,
+  matching the rest of the console.
+- **`humanizeToken` keeps acronym caps.** `deep_ai_...` humanized to "Deep ai
+  analysis result recorded". Acronyms (AI, ID, DMARC, DKIM, SPF, MTA/STS, BIMI,
+  RUF, SMTP, TLS, URL, API, CSV, MX, DNS, IP, LLM, MFA, SSO, HTTP/S, TTL) now
+  keep their caps wherever they land, which fixes labels on every page that
+  derives them from a token.
+- New tests: `lib/text.test.ts` for the acronym pass, `Settings.test.tsx` for
+  the wording and the permission-gated deployment card, and the audit test now
+  asserts the row shows words while the drawer holds the token.
+
+## Verified live on `192.168.8.4` (fourth pass)
+
+Rebuilt and redeployed the frontend image, then re-screenshotted at 1440 wide
+with a fresh session: the four changed routes show the new labels, the
+un-touched three are pixel-identical or unchanged in content, and the deployed
+route chunks carry the copy (`Any result`, the action-filter explanation, `Not
+verified`, `audit-hash`, `justify-self:end`, the domain-type rule from the
+shared `labels` chunk).
+
 ## Functional map for the remaining surfaces
 
 Each entry lists the operations the page should expose and whether the

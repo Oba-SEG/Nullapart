@@ -132,12 +132,21 @@ describe("AuditLog", () => {
     stubFetch();
     renderInRouter();
 
-    expect(await screen.findByText("quarantine.release")).toBeTruthy();
+    // The row reads as an action in words; the wire name is evidence and stays
+    // in the detail drawer rather than repeating under every row.
+    expect(await screen.findByText("Quarantine release")).toBeTruthy();
+    expect(screen.queryByText("quarantine.release")).toBeNull();
     expect(screen.getByText("admin@example.test")).toBeTruthy();
+    expect(screen.getByText("Customer admin")).toBeTruthy();
     expect(screen.getByText("false positive")).toBeTruthy();
     const exportButton = screen.getByRole("button", { name: /export csv/i });
     await waitFor(() => expect(exportButton).toBeEnabled());
     expect(screen.getAllByText("Not configured").length).toBeGreaterThan(0);
+    // Each filter says what it narrows, so the row is usable without a
+    // placeholder that disappears the moment anything is typed.
+    expect(screen.getByLabelText("Actor login")).toBeTruthy();
+    expect(screen.getByLabelText("Action")).toBeTruthy();
+    expect(screen.getByLabelText("Result")).toBeTruthy();
   });
 
   it("opens a redacted key/value detail drawer instead of raw JSON", async () => {
@@ -149,5 +158,6 @@ describe("AuditLog", () => {
     expect(await screen.findByText("release_reason")).toBeTruthy();
     expect(screen.getByText("session_token")).toBeTruthy();
     expect(screen.getByText("[redacted]")).toBeTruthy();
+    expect(screen.getByText("quarantine.release")).toBeTruthy();
   });
 });

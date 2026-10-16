@@ -99,6 +99,14 @@
   gap: 0.75rem;
 }
 
+/* A submit control stretched across the whole column reads as a banner rather
+   than a button. The rest of the console right-aligns form actions, so these
+   follow the same cadence. */
+.connectors-form > .btn,
+.connectors-form > .hint {
+  justify-self: end;
+}
+
 .connector-card {
   display: grid;
   gap: 0.45rem;

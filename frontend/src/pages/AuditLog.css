@@ -61,6 +61,15 @@
   overflow-wrap: anywhere;
 }
 
+/* A 64-character digest set at body size is the loudest thing in the panel and
+   wraps over three lines. It is verification evidence, so it stays readable but
+   secondary to the checkpoint state above it. */
+.audit-checkpoint-detail .audit-hash {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
 .audit-controls {
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(0, 2fr) minmax(10rem, 1fr);

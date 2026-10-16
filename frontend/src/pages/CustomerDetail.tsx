@@ -604,17 +604,16 @@ export function CustomerDetail() {
                 maxLength={253}
                 error={domain.length > 0 ? domainValueError : undefined}
               />
-              <Hint label={HINTS.domainType}>
-                <Select
-                  label="Domain type"
-                  value={domainType}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    if (value === "internal" || value === "send_only") setDomainType(value);
-                  }}
-                  options={domainTypeOptions}
-                />
-              </Hint>
+              <Select
+                label="Domain type"
+                value={domainType}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  if (value === "internal" || value === "send_only") setDomainType(value);
+                }}
+                options={domainTypeOptions}
+                hint={HINTS.domainType}
+              />
               {!mayOfferSendOnly && sendOnlyLock !== "" ? (
                 <p className="customer-detail-hint" role="status">
                   {sendOnlyLock} Only internal domains can be added in this session.

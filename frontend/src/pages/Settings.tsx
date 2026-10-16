@@ -8,6 +8,7 @@ import { useSyncExternalStore } from "react";
 import { Button } from "../components/primitives/Button";
 import { ControlRail } from "../components/ControlRail";
 import { Hint } from "../components/primitives/Hint";
+import { roleLevelLabel } from "../lib/labels";
 import { WorkspaceHeader } from "../components/WorkspaceHeader";
 import { WorkflowGuide } from "../components/WorkflowGuide";
 import "./Settings.css";
@@ -43,6 +44,8 @@ export function Settings() {
     { value: "dark", label: "Midnight", Icon: Moon },
     { value: "light", label: "Light", Icon: Sun },
   ];
+  // The rail shows the word the picker uses, never the stored key.
+  const themeLabel = options.find((option) => option.value === theme)?.label ?? theme;
 
   return (
     <div className="settings-page">
@@ -57,7 +60,7 @@ export function Settings() {
         title="Session and local preference state"
         summary="Only the display mode is saved in this browser. Your identity, permissions and live status come from your sign-in."
         signals={[
-          { label: "Theme", value: theme, detail: "The display mode for this browser." },
+          { label: "Theme", value: themeLabel, detail: "The display mode for this browser." },
           {
             label: "Permissions",
             value: session?.permissions?.length ?? "—",
@@ -65,7 +68,7 @@ export function Settings() {
           },
           {
             label: "Runtime",
-            value: canSeeRuntime ? "permitted" : "restricted",
+            value: canSeeRuntime ? "Allowed" : "Not available",
             detail: "Runtime detail appears only when your role allows it.",
             tone: canSeeRuntime ? "healthy" : "neutral",
           },
@@ -129,7 +132,7 @@ export function Settings() {
                 <dd className="settings-chips">
                   {session.roles.map((role) => (
                     <span className="settings-chip" key={role}>
-                      {role}
+                      {roleLevelLabel(role)}
                     </span>
                   ))}
                 </dd>
@@ -144,7 +147,7 @@ export function Settings() {
                     <span className="hint-term">Re-authentication</span>
                   </Hint>
                 </dt>
-                <dd>{session.stepUpActive ? "Active" : "Not active"}</dd>
+                <dd>{session.stepUpActive ? "Verified" : "Not verified"}</dd>
               </dl>
               <Button variant="ghost" onClick={() => void logout()}>
                 <LogOut size={14} aria-hidden="true" />
