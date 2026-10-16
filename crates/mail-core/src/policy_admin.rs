@@ -44,7 +44,7 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::admin_audit::{source_ip_from, AuditEventRecord, AuditStore, PostgresAuditStore};
-use crate::admin_rbac::{BUILTIN_ROLES, SUPPORT_ROLE, SYSTEM_ADMIN_ROLE};
+use crate::admin_rbac::BUILTIN_ROLES;
 use crate::idempotency::{claim, complete, ClaimOutcome};
 use crate::inline_ml::thresholds::{validate_family_rules, ML_THREAT_CLASSIFICATION_FAMILY};
 use crate::outbound_intelligence::validate_outbound_policy_rules;
@@ -117,8 +117,9 @@ pub const POLICY_FAMILY_MANAGEMENT_LEVELS: [(&str, &str); 24] = [
     ("vip_protection", "support"),
 ];
 
-const FAMILY_ACTIVE_SQL: &str = "SELECT f.family_key, f.description, f.management_level, \
-     f.security_floor, r.revision_number, r.published_by, r.published_at, r.scope_level \
+const FAMILY_ACTIVE_SQL: &str = "SELECT f.family_key, f.display_name, f.description, \
+     f.management_level, f.security_floor, r.revision_number, r.published_by, r.published_at, \
+     r.scope_level \
      FROM policy_families f \
      LEFT JOIN LATERAL ( \
          SELECT pr.revision_number, pr.published_by, pr.published_at, pr.scope_level \
@@ -170,6 +171,9 @@ const OUTBOX_INSERT_SQL: &str = "INSERT INTO outbox_events \
 pub(crate) const FEATURE_DEFINITIONS_SQL: &str =
     "SELECT feature_id, description, default_value, mandatory, \
      kill_switch, allowed_scopes FROM feature_definitions ORDER BY feature_id";
+/// Console-only catalog labels. Kept out of `FEATURE_DEFINITIONS_SQL` so the
+/// runtime feature evaluator never carries presentation data.
+const FEATURE_LABELS_SQL: &str = "SELECT feature_id, display_name FROM feature_definitions";
 const FEATURE_DEFINITION_SQL: &str = "SELECT feature_id, description, default_value, mandatory, \
      kill_switch, allowed_scopes FROM feature_definitions WHERE feature_id = $1";
 pub(crate) const FEATURE_OVERRIDES_SQL: &str =
@@ -274,6 +278,9 @@ struct RevisionDetailResponse {
 #[derive(Serialize)]
 struct FamilySummaryResponse {
     family_key: String,
+    /// Catalog label for humans. The key stays alongside it because it is what
+    /// audit events and support evidence name.
+    display_name: String,
     description: String,
     management_level: String,
     security_floor: bool,
@@ -284,12 +291,20 @@ struct FamilySummaryResponse {
 #[derive(Serialize)]
 struct PolicyListResponse {
     families: Vec<FamilySummaryResponse>,
+    /// The management tier this session actually carries, resolved by the same
+    /// `caller_tier` that gates publishing. The console reads this instead of
+    /// re-deriving a tier from builtin role names, which silently locked out
+    /// custom roles that the server authorizes.
+    caller_tier: Option<&'static str>,
 }
 
 #[derive(Serialize)]
 struct PolicyDetailResponse {
     family: FamilySummaryResponse,
     revisions: Vec<RevisionDetailResponse>,
+    /// Same published decision input as the list response: the tier this
+    /// session resolved to, so the detail editor never re-derives it.
+    caller_tier: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -322,6 +337,8 @@ struct FeatureOverrideResponse {
 #[derive(Serialize)]
 struct FeatureResponse {
     feature_id: FeatureId,
+    /// Catalog label for humans; the id remains because audit names the id.
+    display_name: String,
     description: String,
     default_value: String,
     mandatory: bool,
@@ -335,6 +352,10 @@ struct FeatureResponse {
 #[derive(Serialize)]
 struct FeatureListResponse {
     features: Vec<FeatureResponse>,
+    /// The override scopes this session may actually write, resolved by the
+    /// same `scope_role_allowed` the write path enforces. The console renders
+    /// the picker from this rather than re-deriving it from role names.
+    allowed_override_scopes: Vec<OverrideScope>,
 }
 
 #[derive(Serialize)]
@@ -498,10 +519,6 @@ fn has_permission(context: &TenantContext, permission: &str) -> bool {
         .any(|granted| granted == permission)
 }
 
-fn has_role(context: &TenantContext, role: &str) -> bool {
-    context.actor.roles.iter().any(|granted| granted == role)
-}
-
 fn management_tier(management_level: &str) -> Option<u8> {
     match management_level {
         "customer" => Some(0),
@@ -511,9 +528,23 @@ fn management_tier(management_level: &str) -> Option<u8> {
     }
 }
 
-/// The highest policy tier this session's builtin roles carry. A session with
-/// no recognized role grants nothing, so the gate fails closed.
-fn caller_tier(context: &TenantContext) -> Option<u8> {
+/// Names a resolved tier for the console, so the UI can state the requirement
+/// a session meets rather than guessing it from role names.
+fn tier_name(tier: u8) -> Option<&'static str> {
+    match tier {
+        0 => Some("customer"),
+        1 => Some("support"),
+        2 => Some("system"),
+        _ => None,
+    }
+}
+
+/// The highest policy tier this session's roles carry. Builtin roles resolve
+/// through the static catalog (unchanged); custom roles resolve through their
+/// stored `role_level`, so a custom system-level role carrying
+/// `policies:manage` reaches system-tier families. A role that resolves to
+/// neither grants nothing, so the gate fails closed.
+fn caller_tier(context: &TenantContext, stored_levels: &HashMap<String, String>) -> Option<u8> {
     context
         .actor
         .roles
@@ -521,10 +552,69 @@ fn caller_tier(context: &TenantContext) -> Option<u8> {
         .filter_map(|role| {
             BUILTIN_ROLES
                 .iter()
-                .find(|builtin| builtin.key == role)
-                .and_then(|builtin| management_tier(builtin.role_level))
+                .find(|builtin| builtin.key == role.as_str())
+                .map(|builtin| builtin.role_level)
+                .or_else(|| stored_levels.get(role).map(String::as_str))
+                .and_then(management_tier)
         })
         .max()
+}
+
+/// Loads the stored `role_level` of the session's custom (non-builtin) roles
+/// for this deployment. Any lookup problem yields an empty map rather than a
+/// 503: an unresolved role grants no tier, so the gate stays fail closed,
+/// and builtin-only sessions (the vast majority) never touch the database.
+async fn custom_role_levels(
+    state: &AdminPolicyState,
+    context: &TenantContext,
+) -> HashMap<String, String> {
+    let custom: Vec<&str> = context
+        .actor
+        .roles
+        .iter()
+        .filter(|role| {
+            !BUILTIN_ROLES
+                .iter()
+                .any(|builtin| builtin.key == role.as_str())
+        })
+        .map(String::as_str)
+        .collect();
+    if custom.is_empty() {
+        return HashMap::new();
+    }
+    // admin_roles carries deployment row-level security (migration 010), so
+    // the read runs in a scoped transaction like every other policy query.
+    let Ok(mut transaction) = state.0.pool.begin().await else {
+        return HashMap::new();
+    };
+    if set_scope(
+        &mut transaction,
+        &state.0.deployment_id.0,
+        &context.customer_id.0,
+    )
+    .await
+    .is_err()
+    {
+        return HashMap::new();
+    }
+    let rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT role_key, role_level FROM admin_roles \
+         WHERE deployment_id = $1 AND role_key = ANY($2)",
+    )
+    .bind(&state.0.deployment_id.0)
+    .bind(&custom)
+    .fetch_all(&mut *transaction)
+    .await;
+    match rows {
+        Ok(rows) => {
+            // The commit is best-effort bookkeeping: a failed commit of a
+            // read-only transaction cannot leak writes, and the resolved
+            // levels stay valid.
+            let _ = transaction.commit().await;
+            rows.into_iter().collect()
+        },
+        Err(_) => HashMap::new(),
+    }
 }
 
 fn family_tier(family_key: &str) -> Option<u8> {
@@ -609,13 +699,15 @@ async fn authorize(
 
 /// Resolves the family through the static catalog first, so an unknown key is
 /// a 404 before a query, and then enforces the management tier of the family.
+/// Returns the tier the session actually resolved so a read handler can publish
+/// it to the console without resolving it a second time.
 async fn require_family_tier(
     state: &AdminPolicyState,
     context: &TenantContext,
     headers: &HeaderMap,
     route: &Route<'_>,
     family_key: &str,
-) -> Result<(), Response> {
+) -> Result<u8, Response> {
     let Some(required) = family_tier(family_key) else {
         return Err(denied(
             state,
@@ -626,13 +718,14 @@ async fn require_family_tier(
         )
         .await);
     };
-    let Some(caller) = caller_tier(context) else {
+    let stored_levels = custom_role_levels(state, context).await;
+    let Some(caller) = caller_tier(context, &stored_levels) else {
         return Err(denied(
             state,
             context,
             headers,
             route,
-            &Denial::forbidden("session holds no management tier"),
+            &Denial::forbidden("Your role does not include policy access"),
         )
         .await);
     };
@@ -642,20 +735,39 @@ async fn require_family_tier(
             context,
             headers,
             route,
-            &Denial::forbidden("management tier below the policy family level"),
+            &Denial::forbidden(format!(
+                "This policy needs {}-level access to change",
+                tier_name(required).unwrap_or("higher")
+            )),
         )
         .await);
     }
-    Ok(())
+    Ok(caller)
 }
 
-fn scope_role_allowed(context: &TenantContext, scope: OverrideScope) -> bool {
+/// Minimum management tier required to write an override at each scope.
+///
+/// This is the same tier ladder that gates policy families, so a deployment's
+/// custom role placed at `system` level reaches system-scope overrides instead
+/// of being locked out by a check on builtin role names.
+fn scope_tier(scope: OverrideScope) -> u8 {
     match scope {
-        OverrideScope::System => has_role(context, SYSTEM_ADMIN_ROLE),
-        OverrideScope::Deployment => {
-            has_role(context, SYSTEM_ADMIN_ROLE) || has_role(context, SUPPORT_ROLE)
-        },
-        OverrideScope::Tenant => true,
+        OverrideScope::System => 2,
+        OverrideScope::Deployment => 1,
+        OverrideScope::Tenant => 0,
+    }
+}
+
+/// Fail closed: a session that resolves to no tier at all writes nothing.
+fn scope_tier_allowed(caller: Option<u8>, scope: OverrideScope) -> bool {
+    caller.is_some_and(|tier| tier >= scope_tier(scope))
+}
+
+fn scope_label(scope: OverrideScope) -> &'static str {
+    match scope {
+        OverrideScope::System => "Platform-wide",
+        OverrideScope::Deployment => "Deployment-wide",
+        OverrideScope::Tenant => "Customer",
     }
 }
 
@@ -961,6 +1073,7 @@ type FamilyActiveRow = (
     String,
     String,
     String,
+    String,
     bool,
     Option<i64>,
     Option<String>,
@@ -1047,10 +1160,10 @@ fn override_response(loaded: &LoadedOverride) -> FeatureOverrideResponse {
 
 fn active_revision(row: &FamilyActiveRow) -> Option<RevisionSummaryResponse> {
     Some(RevisionSummaryResponse {
-        revision_number: row.4?,
-        published_by: row.5.clone()?,
-        published_at: row.6?,
-        scope_level: RevisionScope::parse(row.7.as_deref()?)?,
+        revision_number: row.5?,
+        published_by: row.6.clone()?,
+        published_at: row.7?,
+        scope_level: RevisionScope::parse(row.8.as_deref()?)?,
     })
 }
 
@@ -1120,6 +1233,10 @@ async fn list_families(
     if let Err(response) = authorize(&state, &context, &headers, &route).await {
         return response;
     }
+    // Resolved before the scoped transaction opens so only one pool connection
+    // is held at a time; an unresolved role grants no tier, so this fails closed.
+    let stored_levels = custom_role_levels(&state, &context).await;
+    let caller = caller_tier(&context, &stored_levels);
     let mut transaction = match state.0.pool.begin().await {
         Ok(transaction) => transaction,
         Err(_) => return unavailable(),
@@ -1157,9 +1274,10 @@ async fn list_families(
         .iter()
         .map(|row| FamilySummaryResponse {
             family_key: row.0.clone(),
-            description: row.1.clone(),
-            management_level: row.2.clone(),
-            security_floor: row.3,
+            display_name: row.1.clone(),
+            description: row.2.clone(),
+            management_level: row.3.clone(),
+            security_floor: row.4,
             revision_count: counts.get(&row.0).copied().unwrap_or(0),
             active_revision: active_revision(row),
         })
@@ -1167,7 +1285,10 @@ async fn list_families(
     (
         StatusCode::OK,
         Json(ApiEnvelope {
-            data: PolicyListResponse { families },
+            data: PolicyListResponse {
+                families,
+                caller_tier: caller.and_then(tier_name),
+            },
         }),
     )
         .into_response()
@@ -1194,11 +1315,10 @@ async fn get_family(
     if let Err(response) = authorize(&state, &context, &headers, &route).await {
         return response;
     }
-    if let Err(response) =
-        require_family_tier(&state, &context, &headers, &route, &family_key).await
-    {
-        return response;
-    }
+    let caller = match require_family_tier(&state, &context, &headers, &route, &family_key).await {
+        Ok(caller) => caller,
+        Err(response) => return response,
+    };
     let mut transaction = match state.0.pool.begin().await {
         Ok(transaction) => transaction,
         Err(_) => return unavailable(),
@@ -1249,7 +1369,7 @@ async fn get_family(
         Ok(rows) => rows,
         Err(_) => return unavailable(),
     };
-    let active_number = active_row.4;
+    let active_number = active_row.5;
     let mut revisions = Vec::with_capacity(rows.len());
     for row in rows {
         let Some(scope_level) = RevisionScope::parse(&row.3) else {
@@ -1276,19 +1396,25 @@ async fn get_family(
             },
         });
     }
+    let caller_tier = tier_name(caller);
     let summary = active_revision(&active_row);
     let family = FamilySummaryResponse {
         family_key: active_row.0,
-        description: active_row.1,
-        management_level: active_row.2,
-        security_floor: active_row.3,
+        display_name: active_row.1,
+        description: active_row.2,
+        management_level: active_row.3,
+        security_floor: active_row.4,
         revision_count: count,
         active_revision: summary,
     };
     (
         StatusCode::OK,
         Json(ApiEnvelope {
-            data: PolicyDetailResponse { family, revisions },
+            data: PolicyDetailResponse {
+                family,
+                revisions,
+                caller_tier,
+            },
         }),
     )
         .into_response()
@@ -1657,6 +1783,8 @@ async fn list_features(
     if let Err(response) = authorize(&state, &context, &headers, &route).await {
         return response;
     }
+    let stored_levels = custom_role_levels(&state, &context).await;
+    let caller = caller_tier(&context, &stored_levels);
     let mut transaction = match state.0.pool.begin().await {
         Ok(transaction) => transaction,
         Err(_) => return unavailable(),
@@ -1679,6 +1807,14 @@ async fn list_features(
         Ok(overrides) => overrides,
         Err(response) => return response,
     };
+    let labels: HashMap<String, String> =
+        match sqlx::query_as::<_, (String, String)>(FEATURE_LABELS_SQL)
+            .fetch_all(&mut *transaction)
+            .await
+        {
+            Ok(rows) => rows.into_iter().collect(),
+            Err(_) => return unavailable(),
+        };
     let now = Utc::now();
     let evaluator = FeatureEvaluator::new(definitions.clone());
     let mut features = Vec::with_capacity(definitions.len());
@@ -1703,6 +1839,13 @@ async fn list_features(
         };
         features.push(FeatureResponse {
             feature_id: definition.feature_id.clone(),
+            // A missing label degrades to the key, never to a 503: the label is
+            // presentation, and losing the whole console view over it would
+            // hide the state an operator needs to see.
+            display_name: labels
+                .get(definition.feature_id.0.as_str())
+                .cloned()
+                .unwrap_or_else(|| definition.feature_id.0.clone()),
             description: definition.description.clone(),
             default_value: encode_feature_value(&definition.default_value),
             mandatory: definition.mandatory,
@@ -1716,10 +1859,21 @@ async fn list_features(
                 .collect(),
         });
     }
+    let allowed_override_scopes = [
+        OverrideScope::System,
+        OverrideScope::Deployment,
+        OverrideScope::Tenant,
+    ]
+    .into_iter()
+    .filter(|scope| scope_tier_allowed(caller, *scope))
+    .collect();
     (
         StatusCode::OK,
         Json(ApiEnvelope {
-            data: FeatureListResponse { features },
+            data: FeatureListResponse {
+                features,
+                allowed_override_scopes,
+            },
         }),
     )
         .into_response()
@@ -1766,19 +1920,18 @@ async fn write_override(
     if let Err(response) = authorize(&state, &context, &headers, &route).await {
         return response;
     }
-    if !scope_role_allowed(&context, body.scope) {
+    let stored_levels = custom_role_levels(&state, &context).await;
+    let caller = caller_tier(&context, &stored_levels);
+    if !scope_tier_allowed(caller, body.scope) {
         return denied(
             &state,
             &context,
             &headers,
             &route,
             &Denial::forbidden(format!(
-                "{} scope requires a higher policy role",
-                match body.scope {
-                    OverrideScope::System => "system",
-                    OverrideScope::Deployment => "deployment",
-                    OverrideScope::Tenant => "tenant",
-                }
+                "{} overrides need {}-level access",
+                scope_label(body.scope),
+                tier_name(scope_tier(body.scope)).unwrap_or("higher")
             )),
         )
         .await;
@@ -1975,7 +2128,7 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
-    use crate::admin_rbac::CUSTOMER_ADMIN_ROLE;
+    use crate::admin_rbac::{CUSTOMER_ADMIN_ROLE, SUPPORT_ROLE, SYSTEM_ADMIN_ROLE};
 
     fn state() -> AdminPolicyState {
         // A short acquire timeout keeps failure paths deterministic: the
@@ -2682,5 +2835,179 @@ mod tests {
             let raw = body_text(response).await;
             assert_static_error_body(&raw);
         }
+    }
+
+    /// A session carrying only a custom role: the tier comes from the stored
+    /// `role_level`, exactly like a builtin of the same level.
+    #[test]
+    fn custom_role_tier_resolves_through_the_stored_role_level() {
+        let mut context = context();
+        context.actor.roles = vec!["triage_lead".to_string()];
+
+        let mut stored = HashMap::new();
+        stored.insert("triage_lead".to_string(), "system".to_string());
+        assert_eq!(
+            caller_tier(&context, &stored),
+            Some(2),
+            "a stored system level reaches the system tier"
+        );
+
+        stored.insert("triage_lead".to_string(), "support".to_string());
+        assert_eq!(caller_tier(&context, &stored), Some(1));
+
+        stored.insert("triage_lead".to_string(), "customer".to_string());
+        assert_eq!(caller_tier(&context, &stored), Some(0));
+    }
+
+    /// A role that resolves to neither the builtin catalog nor a stored level
+    /// grants no tier at all, so the gate fails closed instead of falling
+    /// back to some default tier.
+    #[test]
+    fn unresolvable_role_grants_no_tier() {
+        let mut context = context();
+        context.actor.roles = vec!["triage_lead".to_string()];
+        assert_eq!(
+            caller_tier(&context, &HashMap::new()),
+            None,
+            "an unlisted role must grant no tier"
+        );
+
+        let mut stored = HashMap::new();
+        stored.insert("triage_lead".to_string(), "owner".to_string());
+        assert_eq!(
+            caller_tier(&context, &stored),
+            None,
+            "an unknown stored level must grant no tier"
+        );
+    }
+
+    /// Builtins keep resolving through the static catalog without any stored
+    /// lookup, and a mixed session takes the highest tier its roles carry.
+    #[test]
+    fn builtin_roles_ignore_the_stored_level_map_and_the_max_tier_wins() {
+        let empty = HashMap::new();
+
+        let mut context = context();
+        context.actor.roles = vec![SYSTEM_ADMIN_ROLE.to_string()];
+        assert_eq!(caller_tier(&context, &empty), Some(2));
+        context.actor.roles = vec![SUPPORT_ROLE.to_string()];
+        assert_eq!(caller_tier(&context, &empty), Some(1));
+        context.actor.roles = vec![CUSTOMER_ADMIN_ROLE.to_string()];
+        assert_eq!(caller_tier(&context, &empty), Some(0));
+
+        // A poisoned/contradictory stored level can never lower a builtin.
+        let mut stored = HashMap::new();
+        stored.insert(SUPPORT_ROLE.to_string(), "customer".to_string());
+        context.actor.roles = vec![SUPPORT_ROLE.to_string()];
+        assert_eq!(
+            caller_tier(&context, &stored),
+            Some(1),
+            "builtin roles never read the stored level map"
+        );
+
+        // Highest tier wins; a lower custom role cannot reduce the session.
+        context.actor.roles = vec![CUSTOMER_ADMIN_ROLE.to_string(), "triage_lead".to_string()];
+        let mut stored = HashMap::new();
+        stored.insert("triage_lead".to_string(), "support".to_string());
+        assert_eq!(caller_tier(&context, &stored), Some(1));
+
+        // No roles at all grants nothing.
+        context.actor.roles = Vec::new();
+        assert_eq!(caller_tier(&context, &empty), None);
+    }
+
+    /// The stored-level lookup only runs for custom roles and never turns a
+    /// lookup problem into a 503: an unresolved role simply grants no tier, so
+    /// the gate stays fail closed and builtin-only sessions stay read-free.
+    #[tokio::test]
+    async fn custom_role_level_lookup_fails_closed_to_an_empty_map() {
+        let state = state();
+
+        let mut context = context();
+        let levels = custom_role_levels(&state, &context).await;
+        assert!(
+            levels.is_empty(),
+            "a builtin-only session must not consult the role table at all"
+        );
+
+        // Unreachable pool: the lookup degrades to no levels, never an error.
+        context.actor.roles = vec!["triage_lead".to_string()];
+        let levels = custom_role_levels(&state, &context).await;
+        assert!(
+            levels.is_empty(),
+            "a failed level lookup must yield no levels (fail closed)"
+        );
+        assert_eq!(
+            caller_tier(&context, &levels),
+            None,
+            "an unresolved custom role grants no tier"
+        );
+    }
+
+    /// The override ladder is the resolved tier ladder, not a list of builtin
+    /// role names. A session that resolves to no tier writes nothing.
+    #[test]
+    fn override_scope_ladder_follows_the_resolved_tier() {
+        assert!(!scope_tier_allowed(None, OverrideScope::Tenant));
+        assert!(scope_tier_allowed(Some(0), OverrideScope::Tenant));
+        assert!(!scope_tier_allowed(Some(0), OverrideScope::Deployment));
+        assert!(scope_tier_allowed(Some(1), OverrideScope::Deployment));
+        assert!(!scope_tier_allowed(Some(1), OverrideScope::System));
+        assert!(scope_tier_allowed(Some(2), OverrideScope::System));
+    }
+
+    /// Regression guard for the lock operators hit: a deployment-defined role
+    /// placed at system level reaches system-scope overrides, while the same
+    /// key placed at customer level does not. The old check only looked at
+    /// builtin role names, so both cases read as "not allowed".
+    #[test]
+    fn a_custom_role_reaches_the_scope_its_stored_level_grants() {
+        let mut context = context();
+        context.actor.roles = vec!["triage_lead".to_string()];
+
+        let mut stored = HashMap::new();
+        stored.insert("triage_lead".to_string(), "system".to_string());
+        let caller = caller_tier(&context, &stored);
+        assert_eq!(caller, Some(2));
+        assert!(
+            scope_tier_allowed(caller, OverrideScope::System),
+            "a custom system-level role must reach system scope"
+        );
+
+        stored.insert("triage_lead".to_string(), "customer".to_string());
+        let caller = caller_tier(&context, &stored);
+        assert_eq!(caller, Some(0));
+        assert!(
+            !scope_tier_allowed(caller, OverrideScope::Deployment),
+            "the same role placed at customer level reaches no further"
+        );
+    }
+
+    /// The tier names published to the console are the same ladder the gates
+    /// use, and an out-of-range tier publishes nothing rather than a guess.
+    #[test]
+    fn published_tier_names_match_the_ladder() {
+        assert_eq!(tier_name(0), Some("customer"));
+        assert_eq!(tier_name(1), Some("support"));
+        assert_eq!(tier_name(2), Some("system"));
+        assert_eq!(tier_name(3), None);
+    }
+
+    #[tokio::test]
+    async fn a_custom_role_that_resolves_to_no_level_is_denied_before_any_change() {
+        let mut context = context();
+        context.actor.roles = vec!["triage_lead".to_string()];
+        // System-tier family: with no resolvable level the session holds no
+        // management tier, so the gate denies instead of reaching the store.
+        let response = policy_admin_router(state())
+            .layer(Extension(context))
+            .oneshot(get("/api/v1/policies/malware"))
+            .await
+            .expect("test response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            body_value(response).await,
+            error_body("FORBIDDEN", "Permission is required")
+        );
     }
 }

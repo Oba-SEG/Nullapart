@@ -72,16 +72,17 @@ const RESOURCE_DOMAIN: &str = "domain";
 const RESOURCE_GROUP: &str = "source_ip_group";
 
 const LIST_ALL_SQL: &str = "SELECT c.id, c.display_name, c.internal_key, c.lifecycle, \
-     c.created_at, c.updated_at, count(d.id)::bigint \
+     c.created_at, c.updated_at, count(d.id)::bigint, c.region_code, c.sequence_no \
      FROM customers c LEFT JOIN domains d ON d.customer_id = c.id \
      WHERE c.deployment_id = $1 GROUP BY c.id ORDER BY c.internal_key LIMIT 200";
 const LIST_OWN_SQL: &str = "SELECT c.id, c.display_name, c.internal_key, c.lifecycle, \
-     c.created_at, c.updated_at, count(d.id)::bigint \
+     c.created_at, c.updated_at, count(d.id)::bigint, c.region_code, c.sequence_no \
      FROM customers c LEFT JOIN domains d ON d.customer_id = c.id \
      WHERE c.deployment_id = $1 AND c.id = $2 \
      GROUP BY c.id ORDER BY c.internal_key LIMIT 200";
 const CUSTOMER_SQL: &str =
-    "SELECT id, display_name, internal_key, lifecycle, created_at, updated_at \
+    "SELECT id, display_name, internal_key, lifecycle, created_at, updated_at, \
+     region_code, sequence_no \
      FROM customers WHERE id = $1 AND deployment_id = $2";
 const DOMAIN_COUNT_SQL: &str = "SELECT count(*) FROM domains WHERE customer_id = $1";
 const DOMAINS_LIST_SQL: &str = "SELECT id, domain, domain_type, verification_status, \
@@ -102,7 +103,7 @@ const CUSTOMER_NEXT_SEQUENCE_SQL: &str =
     "SELECT COALESCE(max(sequence_no), 0) + 1 FROM customers WHERE region_code = $1";
 const CUSTOMER_PATCH_SQL: &str = "UPDATE customers SET lifecycle = $3, updated_at = now() \
      WHERE id = $1 AND deployment_id = $2 \
-     RETURNING display_name, internal_key, created_at, updated_at";
+     RETURNING display_name, internal_key, created_at, updated_at, region_code, sequence_no";
 const DOMAIN_EXISTS_SQL: &str = "SELECT 1 FROM domains WHERE lower(domain) = $1";
 const DOMAIN_INSERT_SQL: &str = "INSERT INTO domains \
      (customer_id, domain, domain_type, verification_status, verification_token) \
@@ -174,6 +175,11 @@ struct CustomerSummaryResponse {
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     domain_count: i64,
+    /// Operational placement (migration 018). Nullable because direct
+    /// database fixtures may predate the columns; freshly created customers
+    /// always carry both.
+    region_code: Option<String>,
+    sequence_no: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -182,6 +188,7 @@ struct CustomerDetailResponse {
     summary: CustomerSummaryResponse,
     domains: Vec<DomainResponse>,
     source_ip_groups: Vec<SourceIpGroupResponse>,
+    capabilities: CustomerCapabilities,
 }
 
 #[derive(Serialize)]
@@ -212,9 +219,55 @@ struct DeletedResponse {
     deleted: bool,
 }
 
+/// Which gate of [`session_blocker`] / [`CUSTOMER_IDENTITY_ROLES`] refused a
+/// write. Published to the console so a withheld action can be *named* instead
+/// of surfacing as a button that only ever returns 403.
+#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "snake_case")]
+enum Blocker {
+    /// The session's roles do not grant the route permission.
+    Permission,
+    /// The actor's own customer is not active.
+    Lifecycle,
+    /// The session was issued for another deployment.
+    Deployment,
+    /// The permission is held, but no built-in role that may mint or retire a
+    /// customer identity backs it.
+    Role,
+}
+
+/// One server-resolved write capability. `blocker` is `None` exactly when
+/// `allowed` is true; the interactive step-up requirement is deliberately not
+/// modelled here because step-up is granted per request, not per session.
+#[derive(Serialize)]
+struct WriteCapability {
+    allowed: bool,
+    blocker: Option<Blocker>,
+}
+
+impl WriteCapability {
+    fn from_blocker(blocker: Option<Blocker>) -> Self {
+        WriteCapability {
+            allowed: blocker.is_none(),
+            blocker,
+        }
+    }
+}
+
+/// Published with the customer list and detail payloads. Every field is the
+/// output of the same predicates the write handlers run, so UI gating and API
+/// authorization cannot drift apart.
+#[derive(Serialize)]
+struct CustomerCapabilities {
+    create_customer: WriteCapability,
+    change_lifecycle: WriteCapability,
+    add_send_only_domain: WriteCapability,
+}
+
 #[derive(Serialize)]
 struct CustomerListResponse {
     customers: Vec<CustomerSummaryResponse>,
+    capabilities: CustomerCapabilities,
 }
 
 #[derive(Serialize)]
@@ -383,6 +436,69 @@ fn has_role(context: &TenantContext, role: &str) -> bool {
     context.actor.roles.iter().any(|granted| granted == role)
 }
 
+/// Built-in roles that may mint or retire a customer identity. A custom role
+/// can be granted `admin:customers:manage` and still manage the customers it is
+/// scoped to, while creating a customer or switching one off stays with the
+/// platform roles (docs/03-IDENTITY-RBAC-IMPERSONATION.md).
+const CUSTOMER_IDENTITY_ROLES: &[&str] = &[SYSTEM_ADMIN_ROLE, SUPPORT_ROLE];
+
+fn may_change_customer_identity(context: &TenantContext) -> bool {
+    CUSTOMER_IDENTITY_ROLES
+        .iter()
+        .any(|role| has_role(context, role))
+}
+
+/// Every non-interactive gate a customer write must clear, in the order
+/// [`authorize`] applies them. `authorize` and the published capabilities call
+/// this one predicate, so the reason the console states is the reason the API
+/// applied; a client never re-derives it from role names.
+fn session_blocker(
+    context: &TenantContext,
+    deployment_id: &DeploymentId,
+    permission: &str,
+    requires_identity_role: bool,
+) -> Option<Blocker> {
+    if !has_permission(context, permission) {
+        return Some(Blocker::Permission);
+    }
+    if context.customer_lifecycle != CustomerLifecycle::Active {
+        return Some(Blocker::Lifecycle);
+    }
+    if &context.deployment_id != deployment_id {
+        return Some(Blocker::Deployment);
+    }
+    if requires_identity_role && !may_change_customer_identity(context) {
+        return Some(Blocker::Role);
+    }
+    None
+}
+
+fn customer_capabilities(
+    context: &TenantContext,
+    deployment_id: &DeploymentId,
+) -> CustomerCapabilities {
+    CustomerCapabilities {
+        create_customer: WriteCapability::from_blocker(session_blocker(
+            context,
+            deployment_id,
+            CUSTOMERS_MANAGE_PERMISSION,
+            true,
+        )),
+        change_lifecycle: WriteCapability::from_blocker(session_blocker(
+            context,
+            deployment_id,
+            CUSTOMERS_MANAGE_PERMISSION,
+            true,
+        )),
+        add_send_only_domain: WriteCapability::from_blocker(session_blocker(
+            context,
+            deployment_id,
+            DOMAINS_MANAGE_PERMISSION,
+            true,
+        )),
+    }
+}
+
 /// Whether `target` sits inside this session's authorized customer scope.
 /// Customer entry narrows hard to the entered customer, even for a System
 /// Administrator: the actor's permissions stay their own, while the tenant
@@ -435,35 +551,17 @@ async fn authorize(
     headers: &HeaderMap,
     route: &Route<'_>,
 ) -> Result<(), Response> {
-    if !has_permission(context, route.permission) {
-        return Err(denied(
-            state,
-            context,
-            headers,
-            route,
-            &Denial::missing_permission(route.permission),
-        )
-        .await);
-    }
-    if context.customer_lifecycle != CustomerLifecycle::Active {
-        return Err(denied(
-            state,
-            context,
-            headers,
-            route,
-            &Denial::forbidden("customer lifecycle is not active"),
-        )
-        .await);
-    }
-    if context.deployment_id != state.0.deployment_id {
-        return Err(denied(
-            state,
-            context,
-            headers,
-            route,
-            &Denial::forbidden("deployment mismatch"),
-        )
-        .await);
+    // The role gate is not part of this call: only the routes that mint or
+    // retire customer identity carry it, and they run
+    // `may_change_customer_identity` explicitly after authorizing.
+    let denial = match session_blocker(context, &state.0.deployment_id, route.permission, false) {
+        Some(Blocker::Permission) => Some(Denial::missing_permission(route.permission)),
+        Some(Blocker::Lifecycle) => Some(Denial::forbidden("customer lifecycle is not active")),
+        Some(Blocker::Deployment) => Some(Denial::forbidden("deployment mismatch")),
+        Some(Blocker::Role) | None => None,
+    };
+    if let Some(denial) = denial {
+        return Err(denied(state, context, headers, route, &denial).await);
     }
     if let Some(target) = route.target {
         if !in_scope(context, target) {
@@ -802,7 +900,16 @@ fn transition_allowed(current: &str, target: &str) -> bool {
     }
 }
 
-type CustomerRow = (String, String, i64, String, DateTime<Utc>, DateTime<Utc>);
+type CustomerRow = (
+    String,
+    String,
+    i64,
+    String,
+    DateTime<Utc>,
+    DateTime<Utc>,
+    Option<String>,
+    Option<i64>,
+);
 type CustomerListRow = (
     String,
     String,
@@ -811,6 +918,8 @@ type CustomerListRow = (
     DateTime<Utc>,
     DateTime<Utc>,
     i64,
+    Option<String>,
+    Option<i64>,
 );
 type DomainRow = (
     Uuid,
@@ -913,7 +1022,17 @@ async fn list_customers(
     let customers = rows
         .into_iter()
         .map(
-            |(id, display_name, internal_key, lifecycle, created_at, updated_at, domain_count)| {
+            |(
+                id,
+                display_name,
+                internal_key,
+                lifecycle,
+                created_at,
+                updated_at,
+                domain_count,
+                region_code,
+                sequence_no,
+            )| {
                 CustomerSummaryResponse {
                     id,
                     display_name,
@@ -922,6 +1041,8 @@ async fn list_customers(
                     created_at,
                     updated_at,
                     domain_count,
+                    region_code,
+                    sequence_no,
                 }
             },
         )
@@ -929,7 +1050,10 @@ async fn list_customers(
     (
         StatusCode::OK,
         Json(ApiEnvelope {
-            data: CustomerListResponse { customers },
+            data: CustomerListResponse {
+                customers,
+                capabilities: customer_capabilities(&context, &state.0.deployment_id),
+            },
         }),
     )
         .into_response()
@@ -970,7 +1094,7 @@ async fn create_customer(
     if let Err(response) = authorize(&state, &context, &headers, &route).await {
         return response;
     }
-    if !has_role(&context, SYSTEM_ADMIN_ROLE) && !has_role(&context, SUPPORT_ROLE) {
+    if !may_change_customer_identity(&context) {
         return denied(
             &state,
             &context,
@@ -1037,6 +1161,8 @@ async fn create_customer(
         created_at: row.1,
         updated_at: row.2,
         domain_count: 0,
+        region_code: Some(region_code),
+        sequence_no: Some(sequence_no),
     };
     if let Err(response) = write_event(
         &mut transaction,
@@ -1114,7 +1240,17 @@ async fn get_customer(
         Ok(row) => row,
         Err(_) => return unavailable(),
     };
-    let Some((id, display_name, internal_key, lifecycle, created_at, updated_at)) = row else {
+    let Some((
+        id,
+        display_name,
+        internal_key,
+        lifecycle,
+        created_at,
+        updated_at,
+        region_code,
+        sequence_no,
+    )) = row
+    else {
         return not_found("Customer was not found");
     };
     let domain_count = match sqlx::query_scalar::<_, i64>(DOMAIN_COUNT_SQL)
@@ -1162,9 +1298,12 @@ async fn get_customer(
                     created_at,
                     updated_at,
                     domain_count,
+                    region_code,
+                    sequence_no,
                 },
                 domains,
                 source_ip_groups,
+                capabilities: customer_capabilities(&context, &state.0.deployment_id),
             },
         }),
     )
@@ -1211,7 +1350,7 @@ async fn update_customer(
     if let Err(response) = authorize(&state, &context, &headers, &route).await {
         return response;
     }
-    if !has_role(&context, SYSTEM_ADMIN_ROLE) && !has_role(&context, SUPPORT_ROLE) {
+    if !may_change_customer_identity(&context) {
         return denied(
             &state,
             &context,
@@ -1260,18 +1399,27 @@ async fn update_customer(
     if !transition_allowed(&current, &body.lifecycle) {
         return conflict("Customer lifecycle transition is not allowed");
     }
-    let row =
-        match sqlx::query_as::<_, (String, i64, DateTime<Utc>, DateTime<Utc>)>(CUSTOMER_PATCH_SQL)
-            .bind(&customer_id)
-            .bind(&state.0.deployment_id.0)
-            .bind(&body.lifecycle)
-            .fetch_optional(&mut *transaction)
-            .await
-        {
-            Ok(Some(row)) => row,
-            Ok(None) => return not_found("Customer was not found"),
-            Err(_) => return unavailable(),
-        };
+    let row = match sqlx::query_as::<
+        _,
+        (
+            String,
+            i64,
+            DateTime<Utc>,
+            DateTime<Utc>,
+            Option<String>,
+            Option<i64>,
+        ),
+    >(CUSTOMER_PATCH_SQL)
+    .bind(&customer_id)
+    .bind(&state.0.deployment_id.0)
+    .bind(&body.lifecycle)
+    .fetch_optional(&mut *transaction)
+    .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return not_found("Customer was not found"),
+        Err(_) => return unavailable(),
+    };
     let domain_count = match sqlx::query_scalar::<_, i64>(DOMAIN_COUNT_SQL)
         .bind(&customer_id)
         .fetch_one(&mut *transaction)
@@ -1288,6 +1436,8 @@ async fn update_customer(
         created_at: row.2,
         updated_at: row.3,
         domain_count,
+        region_code: row.4,
+        sequence_no: row.5,
     };
     if let Err(response) = write_event(
         &mut transaction,
@@ -1359,10 +1509,7 @@ async fn create_domain(
     if let Err(response) = authorize(&state, &context, &headers, &route).await {
         return response;
     }
-    if body.domain_type == "send_only"
-        && !has_role(&context, SYSTEM_ADMIN_ROLE)
-        && !has_role(&context, SUPPORT_ROLE)
-    {
+    if body.domain_type == "send_only" && !may_change_customer_identity(&context) {
         return denied(
             &state,
             &context,
@@ -1981,6 +2128,99 @@ mod tests {
         assert_eq!(format_customer_id("ZA", 1), "CZA-1");
         assert_eq!(format_customer_id("ZAB", 42), "CZAB-42");
         assert!(valid_path_id(&format_customer_id("EU", 7)));
+    }
+
+    fn deployment() -> DeploymentId {
+        DeploymentId::new("LOCAL-TEST")
+    }
+
+    #[test]
+    fn platform_roles_get_every_published_capability() {
+        let capabilities = customer_capabilities(&context(), &deployment());
+        assert!(capabilities.create_customer.allowed);
+        assert!(capabilities.change_lifecycle.allowed);
+        assert!(capabilities.add_send_only_domain.allowed);
+    }
+
+    #[test]
+    fn a_manage_permission_without_a_platform_role_publishes_the_role_blocker() {
+        // The defect this closes: a custom role can hold
+        // `admin:customers:manage`, so the console offered "New customer",
+        // while `create_customer` answered 403. The same predicate now decides
+        // both, so the button is replaced by a stated requirement.
+        let mut scoped = context();
+        scoped.actor.roles = vec![CUSTOMER_ADMIN_ROLE.to_string()];
+        let capabilities = customer_capabilities(&scoped, &deployment());
+        assert!(!capabilities.create_customer.allowed);
+        assert_eq!(capabilities.create_customer.blocker, Some(Blocker::Role));
+        assert_eq!(capabilities.change_lifecycle.blocker, Some(Blocker::Role));
+        assert_eq!(
+            capabilities.add_send_only_domain.blocker,
+            Some(Blocker::Role)
+        );
+    }
+
+    #[test]
+    fn capability_blockers_follow_the_authorization_gate_order() {
+        let mut no_permission = context();
+        no_permission.actor.roles = vec![CUSTOMER_ADMIN_ROLE.to_string()];
+        no_permission.permissions = vec![CUSTOMERS_VIEW_PERMISSION.to_string()];
+        assert_eq!(
+            session_blocker(
+                &no_permission,
+                &deployment(),
+                CUSTOMERS_MANAGE_PERMISSION,
+                true,
+            ),
+            Some(Blocker::Permission)
+        );
+
+        // Lifecycle and deployment refusals outrank the role requirement, the
+        // same order `authorize` enforces before any handler runs.
+        let mut suspended = context();
+        suspended.customer_lifecycle = CustomerLifecycle::Suspended;
+        assert_eq!(
+            session_blocker(&suspended, &deployment(), CUSTOMERS_MANAGE_PERMISSION, true),
+            Some(Blocker::Lifecycle)
+        );
+
+        let mut other_deployment = context();
+        other_deployment.deployment_id = DeploymentId::new("LOCAL-OTHER");
+        assert_eq!(
+            session_blocker(
+                &other_deployment,
+                &deployment(),
+                CUSTOMERS_MANAGE_PERMISSION,
+                true,
+            ),
+            Some(Blocker::Deployment)
+        );
+
+        assert_eq!(
+            session_blocker(
+                &context(),
+                &deployment(),
+                CUSTOMERS_MANAGE_PERMISSION,
+                false
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn capabilities_serialize_to_the_documented_wire_shape() {
+        let mut scoped = context();
+        scoped.actor.roles = vec![CUSTOMER_ADMIN_ROLE.to_string()];
+        let json = serde_json::to_value(customer_capabilities(&scoped, &deployment()))
+            .expect("capabilities must serialize");
+        assert_eq!(json["create_customer"]["allowed"], false);
+        assert_eq!(json["create_customer"]["blocker"], "role");
+        assert_eq!(json["add_send_only_domain"]["blocker"], "role");
+
+        let allowed = serde_json::to_value(customer_capabilities(&context(), &deployment()))
+            .expect("capabilities must serialize");
+        assert_eq!(allowed["change_lifecycle"]["allowed"], true);
+        assert!(allowed["change_lifecycle"]["blocker"].is_null());
     }
 
     fn state() -> AdminCustomersState {

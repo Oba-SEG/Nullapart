@@ -64,6 +64,14 @@ Do not surface UUIDs as customer identities.
 
 The database stores structured region/deployment/sequence fields in addition to the visible customer ID so authorization and routing do not depend on parsing a string.
 
+## Customer placement
+
+A customer is created inside one deployment and inherits that deployment's region. Region is never a per-customer choice at creation time, and the visible customer ID encodes it.
+
+The Control Plane surfaces placement (region code and sequence) through the customer administration API and the console so operators can see which deployment owns a customer.
+
+Placement is fixed at creation. Moving a customer between deployments is not supported: the customer identity embeds the region, and residency rules forbid routine cross-deployment data movement. Any future re-placement requires an explicit, reviewed architecture and security decision covering identity semantics, data movement, backup/DR and audit continuity.
+
 ## Regional URLs
 
 Canonical control endpoints should follow one predictable naming model on `nullapart.com`.

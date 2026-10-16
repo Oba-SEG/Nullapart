@@ -959,3 +959,109 @@ decision required before any identity-provider integration is recorded.
   synchronized to the remote checkout and the logo response is `image/png`.
   A live browser visual check confirmed the complete artwork, system-admin
   navigation and light-theme header contrast.
+
+### Deployment-defined roles and customer placement (2026-10-16)
+
+- **Gaps closed**: the role model previously offered only three platform-shipped
+  builtins, and customer placement (region code and sequence) was persisted but
+  never surfaced. Migration `038_custom_admin_roles.sql` marks the three shipped
+  roles `builtin`, the RBAC store now publishes a 27-entry permission catalog,
+  and `POST/GET/PATCH/DELETE /api/v1/admin/roles` create, edit and delete
+  deployment-defined roles whose permissions must be a catalog subset.
+  `admin_customers` returns `region_code`/`sequence_no` and the console renders
+  them, so `docs/02-CUSTOMER-AND-DOMAIN-MODEL.md` "Customer placement" is now
+  accurate.
+- **High-risk gate order**: role-definition mutation requires
+  `admin:users:manage`, a fresh step-up (600 s TTL), the shared fail-closed
+  permission-change token bucket (5 tokens, 1 refill per 20 s, `FailClosed`,
+  429 with `Retry-After`, no audit on throttle) and literal `system_admin`
+  membership. Request validation runs before the gate so a malformed body never
+  spends a token. Audit rows commit in the same transaction as the mutation.
+- **Production-only privilege defect found during live verification**:
+  `PATCH`/`DELETE /api/v1/admin/roles/:role_key` returned 503 for every role,
+  including builtins and unknown keys. Root cause: the store locks the row with
+  `SELECT ... FOR UPDATE`, which itself requires `UPDATE` privilege, and
+  `nullapart_mailcore` had only `SELECT, INSERT` on `admin_roles`. The 010
+  policies are `FOR ALL`, so grants were the binding constraint, and
+  `begin_scoped` performs no `SET LOCAL ROLE`. Owner-level database tests cannot
+  see this class of failure because the owner bypasses both RLS and privileges.
+- **Fix**: the 038 guarded `DO $$ ... IF EXISTS (pg_roles) ... GRANT` block plus
+  `infrastructure/containers/provision-local-runtime-role.sh` now grant
+  `SELECT, INSERT, UPDATE, DELETE` on `admin_roles` and
+  `SELECT, INSERT, DELETE` on `admin_role_permissions`. The store treats
+  `rows_affected != 1` on the update/delete statements as a fail-closed
+  `PersistenceFailed` after rollback rather than auditing a change that never
+  landed. The gap catcher for this class is
+  `runtime_role_holds_the_privileges_the_role_store_uses` in
+  `postgres_admin_rbac.rs`: it asserts `has_table_privilege` for the
+  runtime role and was proven by `REVOKE` (test FAILED) then `GRANT` (test ok).
+- **Console casing defect found live**: the REGION column rendered empty because
+  `Customers.tsx`/`CustomerDetail.tsx` read camelCase `regionCode` while
+  `/api/v1/admin/customers` is snake_case. Vitest stayed green because the
+  fixtures repeated the same wrong assumption. Types, cells and fixtures now use
+  `region_code`/`sequence_no` with an explicit `unplaced` fallback.
+- **Gates**: `cargo fmt --all -- --check` and
+  `cargo clippy --workspace --all-targets -- -D warnings` clean.
+  `cargo test --workspace --no-fail-fast` reported `test result: ok` for every
+  target (542 mail-core unit tests, 0 failures). The `--ignored` PostgreSQL
+  suite ran 83 tests: 82 passed, 1 pre-existing failure reported below.
+  `pnpm --dir frontend check-all` green (148 tests, 25 files).
+- **Live evidence on `192.168.8.4`**: migration 038 and the grants applied
+  manually because local migrations only run at `initdb`. API probes returned
+  403 `ROLE_BUILTIN` for builtin PATCH and DELETE, 404 for an unknown key,
+  201 on create, 200 on custom PATCH and DELETE, and 429 `RATE_LIMITED` with
+  `Retry-After` once the shared budget was exhausted. Audit shows
+  `admin_role_updated` with `permissions_before`/`permissions_after` and
+  denials with reasons. At 1440x900 the console completed the full round trip:
+  create `ui_verify_agent` from 3 catalog permissions, grant it to a probe
+  administrator, reject deletion while held with "Role is assigned to users;
+  remove assignments first.", revoke, then delete. Final state is 3 builtins,
+  0 custom roles and 27 catalog permissions, with Edit/Delete offered only on
+  custom rows.
+- **Reported, not changed**: (1)
+  `next_customer_id_mints_regional_operational_identities` fails with
+  `23505 duplicate key customers_pkey` because the minted identity is
+  `C` + region + a per-deployment sequence while `customers.id` is the globally
+  unique primary key, so a second deployment in the same region mints a
+  colliding key. This needs an architecture decision (region-scoped counter, or
+  an opaque primary key with a separate unique operational identifier).
+  (2) Migration 026 grants `domain-security:failure-report:view` to
+  `system_admin`, but that key exists in no Rust catalog, so live `system_admin`
+  shows 28 permissions against the 27-entry catalog invariant. Either the
+  permission must be published or the grant retired.
+
+### Operator-facing labels and server-published gating (2026-10-16)
+
+- **Catalog display names**: migration `039_catalog_display_names.sql` adds a
+  seeded `display_name` to the feature-switch and policy-family catalogs, and
+  both admin APIs return it. The raw key stays in the payload as secondary
+  metadata because it is what audit rows and support tickets cite, but the
+  console renders the name. Client-side label tables are no longer the source
+  of truth for a primary label.
+- **Server publishes the decision inputs**: `admin_customers.rs` derives a
+  `capabilities` object (`create_customer`, `change_lifecycle`,
+  `add_send_only_domain`) from the same `session_blocker` predicate that
+  `authorize` applies, so the reason the console states is the reason the API
+  enforces and a client never re-derives gating from role names. Wire shape:
+  each entry is `{ "allowed": bool, "blocker": "permission" | "lifecycle" |
+  "deployment" | "role" | null }`, with `blocker` null exactly when `allowed`
+  is true. Step-up is deliberately absent: it is granted per request, not per
+  session, so publishing it as a session capability would be wrong.
+- **API/schema compatibility** (`docs/27-API-VERSIONING-FEATURE-FLAGS.md`):
+  `capabilities` and `display_name` are additive optional fields on existing
+  `GET`/`POST` `/api/v1/admin/customers...`, feature-catalog and
+  policy-catalog responses. No major version bump, no field removed or
+  retyped, and an older client that ignores them still works.
+- **Migration defect caught before it shipped**: `040_deep_ai_result_origin.sql`
+  wrote `COMMENT ON COLUMN ... IS 'a' || 'b'`, which Postgres rejects
+  (`syntax error at or near "||"`). Because local migrations only run at
+  `initdb`, the failure surfaced on the long-lived `.4` volume, where the
+  `ALTER TABLE` had already succeeded and only the comment was lost. It would
+  also have broken a fresh `initdb`. Fixed to a single string literal and
+  re-applied; `recorded_by` is present and constrained on the live database.
+- **Gates**: `cargo fmt --all`, `cargo clippy --workspace --all-targets --
+  -D warnings` and `cargo test --workspace` clean (550 mail-core unit tests).
+  The ignored `postgres_deep_ai` suite ran 4 tests against the live `.4`
+  database through a tunnel, including the new `recorded_by` constraint test
+  that keeps legacy `NULL` rows valid. `pnpm --dir frontend check-all` green
+  (173 tests, 26 files).
