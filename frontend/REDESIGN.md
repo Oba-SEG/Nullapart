@@ -75,9 +75,9 @@ UI, and some sections cannot be changed at all.
   every label sat inline beside its control and a long label squeezed the field.
   The stacking convention already committed in `Models.css` is now global
   (`global.css`), which is what made the Deep AI finding form readable at all.
-- **Deep AI: recording a finding is a console affordance.** `POST
-  /api/v1/deep-ai/analysis-results` previously had no UI. Each live grant card
-  now offers "Record a finding", which prefills and scrolls to a full-width
+- **Deep AI: recording a finding is a console affordance.** The endpoint
+  `POST /api/v1/deep-ai/analysis-results` previously had no UI. Each live grant
+  card now offers "Record a finding", which prefills and scrolls to a full-width
   panel. The form mirrors the server contract: only accepted enum values, the
   server's own length and range bounds, evidence references taken from the
   chosen grant rather than typed. The two states that make recording impossible
@@ -103,10 +103,10 @@ Deployed through the review proxy at 1440x900+ with a fresh `system_admin`
 session, against the rebuilt `mailcore` and `frontend` images:
 
 - `POST /api/v1/deep-ai/artifact-grants` -> `201` with a 30-minute expiry.
-- `POST /api/v1/deep-ai/analysis-results` with `model_release:
-  not-an-approved-release-v9` -> `400 MODEL_RELEASE_NOT_APPROVED`.
-- Same request with the approved release -> `201`, `"recorded_by":
-  "administrator"`, `"validation_state": "valid"`.
+- `POST /api/v1/deep-ai/analysis-results` with an unapproved `model_release`
+  -> `400 MODEL_RELEASE_NOT_APPROVED`.
+- Same request with the approved release -> `201`, `recorded_by` is
+  `administrator`, `validation_state` is `valid`.
 - A body that tries to self-declare `"recorded_by": "model_runtime"` parses
   (the field is not part of the contract) and is still stored as
   `administrator`. Provenance cannot be minted by a caller.
