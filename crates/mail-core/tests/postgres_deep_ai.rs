@@ -388,6 +388,87 @@ async fn artifact_grant_rejects_unknown_skill_version() {
 }
 
 #[tokio::test]
+#[ignore = "requires migrated local PostgreSQL through 040_deep_ai_result_origin.sql"]
+async fn result_origin_records_only_a_real_source() {
+    let pool = connect().await;
+    ensure_request_role(&pool).await;
+    let fixture = seed(&pool).await;
+
+    // The two sources the console and the runtime actually record.
+    insert_result_with_origin(&pool, &fixture, Some("administrator"))
+        .await
+        .expect("console origin must insert");
+    insert_result_with_origin(&pool, &fixture, Some("model_runtime"))
+        .await
+        .expect("runtime origin must insert");
+    // A row written before origin tracking existed stays null; nothing backfills
+    // a source nobody recorded.
+    insert_result_with_origin(&pool, &fixture, None)
+        .await
+        .expect("null origin must insert");
+    // Provenance a caller would like to claim for itself is not a recorded source.
+    assert!(
+        insert_result_with_origin(&pool, &fixture, Some("model_runtime_self_report"))
+            .await
+            .is_err()
+    );
+
+    // seed() wrote one result for deployment A without an origin.
+    assert_eq!(
+        count_as_request(
+            &pool,
+            Some(&fixture.deployment_a),
+            Some(&fixture.customer_a),
+            "deep_ai_analysis_results",
+        )
+        .await,
+        4
+    );
+}
+
+async fn insert_result_with_origin(
+    pool: &PgPool,
+    fixture: &Fixture,
+    origin: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    let mut transaction =
+        begin_owner_scoped(pool, &fixture.deployment_a, &fixture.customer_a).await;
+    let outcome = sqlx::query(
+        "INSERT INTO deep_ai_analysis_results \
+            (deployment_id, customer_id, skill_id, skill_version, model_release, artifact_grant_id, \
+             classification, attack_type, severity, confidence, evidence_references, observations, \
+             recommended_action, analyst_summary, processing_duration_ms, validation_state, \
+             recorded_by) \
+         VALUES ($1,$2,'security.message.deep_analysis','v1','local-qwen3.5-9b-phase7',$3, \
+             'malicious','phishing','high',0.91,$4,'[\"credential lure\"]'::jsonb, \
+             'quarantine','Origin constraint verification.',1200,'valid',$5)",
+    )
+    .bind(&fixture.deployment_a)
+    .bind(&fixture.customer_a)
+    .bind(fixture.grant_a)
+    .bind(serde_json::json!([format!("grant:{}", fixture.grant_a)]))
+    .bind(origin)
+    .execute(&mut *transaction)
+    .await;
+    match outcome {
+        Ok(_) => {
+            transaction
+                .commit()
+                .await
+                .expect("origin insert must commit");
+            Ok(())
+        },
+        Err(error) => {
+            transaction
+                .rollback()
+                .await
+                .expect("origin rejection must roll back");
+            Err(error)
+        },
+    }
+}
+
+#[tokio::test]
 #[ignore = "requires migrated local PostgreSQL through 030_deep_ai.sql"]
 async fn training_governance_and_benchmarks_are_deployment_scoped() {
     let pool = connect().await;

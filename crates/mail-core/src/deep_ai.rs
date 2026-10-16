@@ -42,6 +42,11 @@ const ROLLBACK_OPERATION: &str = "deep-ai-rollback";
 const AUDIT_RESOURCE_GRANT: &str = "deep_ai_artifact_grant";
 const AUDIT_RESOURCE_RESULT: &str = "deep_ai_analysis_result";
 const AUDIT_RESOURCE_ROLLBACK: &str = "deep_ai_release_rollback";
+/// Origin stamped on a result posted through an authenticated console session.
+/// The only caller of that route is a person, so the origin is a property of
+/// the route, never of the request body: a client that could name its own
+/// origin could publish an assertion as model output.
+const RECORDED_BY_CONSOLE: &str = "administrator";
 
 #[derive(Clone)]
 pub struct DeepAiState {
@@ -203,6 +208,11 @@ struct DeepAiAnalysisResultView {
     processing_duration_ms: i64,
     validation_state: String,
     error_code: Option<String>,
+    /// `model_runtime` when the skill runtime produced the output,
+    /// `administrator` when a person entered it in the console, and `None` for
+    /// rows written before origin tracking existed. Server-derived; the request
+    /// body never supplies it.
+    recorded_by: Option<String>,
     created_at: DateTime<Utc>,
 }
 
@@ -266,6 +276,9 @@ struct RecordResultResponse {
     classification: String,
     severity: String,
     validation_state: &'static str,
+    /// Echoes the server-derived origin so the console can show the operator
+    /// what was actually stored. Never taken from the request body.
+    recorded_by: &'static str,
     created: bool,
 }
 
@@ -666,6 +679,22 @@ async fn post_analysis_result(
     if structured_output_is_valid(&request, &grant).is_err() {
         return invalid_request();
     }
+    if !match model_release_is_approved(
+        &mut transaction,
+        &state.deployment_id.0,
+        &request.model_release,
+    )
+    .await
+    {
+        Ok(approved) => approved,
+        Err(response) => return response,
+    } {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "MODEL_RELEASE_NOT_APPROVED",
+            "Model release is not an approved release of this deployment",
+        );
+    }
     let response = match insert_analysis_result(
         &mut transaction,
         &state.deployment_id.0,
@@ -673,6 +702,7 @@ async fn post_analysis_result(
         &context,
         &headers,
         &request,
+        RECORDED_BY_CONSOLE,
     )
     .await
     {
@@ -1263,7 +1293,7 @@ async fn load_analysis_results(
         "SELECT id, skill_id, skill_version, model_release, artifact_grant_id, classification, \
                 attack_type, severity, confidence::float8 AS confidence, impersonated_entity, \
                 evidence_references, recommended_action, analyst_summary, processing_duration_ms, \
-                validation_state, error_code, created_at \
+                validation_state, error_code, recorded_by, created_at \
          FROM deep_ai_analysis_results \
          WHERE deployment_id = $1 AND customer_id = $2 \
          ORDER BY created_at DESC LIMIT 50",
@@ -1291,6 +1321,7 @@ async fn load_analysis_results(
                 processing_duration_ms: row.get("processing_duration_ms"),
                 validation_state: row.get("validation_state"),
                 error_code: row.get("error_code"),
+                recorded_by: row.get("recorded_by"),
                 created_at: row.get("created_at"),
             })
             .collect()
@@ -1489,6 +1520,31 @@ async fn load_grant_for_result(
     })
 }
 
+/// True when `model_release` names an approved release of this deployment.
+///
+/// A recorded result cites a model as its source, so the citation must be a
+/// release the deployment approved rather than a string the caller typed.
+/// Approval state is read here, in the same transaction as the insert, so a
+/// release rejected or rolled back between page load and submit cannot still be
+/// cited.
+async fn model_release_is_approved(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    deployment_id: &str,
+    model_release: &str,
+) -> Result<bool, Response> {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS ( \
+            SELECT 1 FROM deep_ai_model_releases \
+            WHERE deployment_id = $1 AND model_release = $2 AND approval_state = 'approved' \
+         )",
+    )
+    .bind(deployment_id)
+    .bind(model_release)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(|_| unavailable())
+}
+
 async fn insert_analysis_result(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     deployment_id: &str,
@@ -1496,13 +1552,15 @@ async fn insert_analysis_result(
     context: &TenantContext,
     headers: &HeaderMap,
     request: &ValidatedResultRequest,
+    recorded_by: &'static str,
 ) -> Result<RecordResultResponse, Response> {
     let id = sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO deep_ai_analysis_results \
             (deployment_id, customer_id, skill_id, skill_version, model_release, artifact_grant_id, \
              classification, attack_type, severity, confidence, impersonated_entity, evidence_references, \
-             observations, recommended_action, analyst_summary, processing_duration_ms, validation_state) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'valid') \
+             observations, recommended_action, analyst_summary, processing_duration_ms, validation_state, \
+             recorded_by) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'valid',$17) \
          RETURNING id",
     )
     .bind(deployment_id)
@@ -1521,6 +1579,7 @@ async fn insert_analysis_result(
     .bind(&request.recommended_action)
     .bind(&request.analyst_summary)
     .bind(request.processing_duration_ms)
+    .bind(recorded_by)
     .fetch_one(&mut **transaction)
     .await
     .map_err(|_| unavailable())?;
@@ -1541,6 +1600,7 @@ async fn insert_analysis_result(
                 "classification": request.classification,
                 "severity": request.severity,
                 "recommended_action": request.recommended_action,
+                "recorded_by": recorded_by,
             }),
         },
     )
@@ -1550,6 +1610,7 @@ async fn insert_analysis_result(
         classification: request.classification.clone(),
         severity: request.severity.clone(),
         validation_state: "valid",
+        recorded_by,
         created: true,
     })
 }
@@ -2037,6 +2098,32 @@ mod tests {
         })
         .expect("result request should validate");
         assert!(structured_output_is_valid(&request, &grant).is_err());
+    }
+
+    #[test]
+    fn a_result_body_cannot_name_its_own_origin() {
+        // Provenance is not a request field. A caller that sends one gets it
+        // ignored, and the route attributes the finding to whoever is calling.
+        let request: RecordResultRequest = serde_json::from_value(json!({
+            "artifact_grant_id": Uuid::new_v4(),
+            "skill_id": "security.message.deep_analysis",
+            "skill_version": "v1",
+            "model_release": "local-qwen3.5-9b-phase7",
+            "classification": "malicious",
+            "attack_type": "phishing",
+            "severity": "high",
+            "confidence": 0.91,
+            "impersonated_entity": null,
+            "evidence_references": ["grant:any"],
+            "observations": ["Credential lure and brand impersonation."],
+            "recommended_action": "quarantine",
+            "analyst_summary": "Deep AI identified a credential lure with trusted evidence.",
+            "processing_duration_ms": 1200,
+            "recorded_by": "model_runtime",
+        }))
+        .expect("result body must parse");
+        assert!(validate_result_request(request).is_ok());
+        assert_eq!(RECORDED_BY_CONSOLE, "administrator");
     }
 
     #[test]

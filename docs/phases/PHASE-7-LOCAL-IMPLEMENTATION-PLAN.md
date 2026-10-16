@@ -41,6 +41,13 @@ keeping ordinary mail delivery independent of Deep AI availability.
   - strict classification, attack type, severity, recommendation and validation
     states;
   - model output requires evidence references tied to the scoped grant;
+  - a cited `model_release` must be an approved release of this deployment, or
+    the write is rejected with `MODEL_RELEASE_NOT_APPROVED`;
+  - `recorded_by` names the source of a finding (`model_runtime` or
+    `administrator`). Migration `040_deep_ai_result_origin.sql` adds the checked
+    column; each route sets it from the caller, never from the request body, so
+    a console entry can never be replayed as model provenance. Rows written
+    before the column exists stay null and are never backfilled;
   - audited result recording;
   - schema-invalid or hallucinated evidence is rejected rather than treated as
     clean.
@@ -63,6 +70,12 @@ keeping ordinary mail delivery independent of Deep AI availability.
   - `/deep-ai`;
   - actionable skill, serving, benchmark, grant, finding and dataset surfaces;
   - short-lived artifact grant form with idempotency;
+  - finding form records an administrator-issued result against one open grant,
+    offering only the values and bounds the server accepts, and states in the
+    operator's terms when no open grant or approved release makes a finding
+    possible;
+  - every finding is labelled with the server-decided origin so model output and
+    administrator input are never confused;
   - no raw JSON UI.
 - [x] Tests:
   - Rust unit tests for permission failure, grant validation, audited rollback,
@@ -70,8 +83,11 @@ keeping ordinary mail delivery independent of Deep AI availability.
     rejection;
   - ignored PostgreSQL tests for RLS fail-closed behavior, tenant isolation,
     cross-tenant write rejection, benchmark and training-governance scope;
+  - Rust unit test proving a result body cannot name its own origin;
+  - ignored PostgreSQL test for the `recorded_by` check constraint, including
+    the null origin of pre-existing rows;
   - frontend tests for rendering, idempotent grant creation and rollback
-    submission.
+    submission, and for recording, gating and labelling a finding.
 
 ## Non-goals preserved
 
