@@ -17,13 +17,17 @@ export interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
   options: SelectOption[];
   placeholder?: string;
   error?: string;
+  /** Explained once, next to the choice that needs it. Read out to assistive
+   * tech through `aria-describedby`, the same contract as `Input`. */
+  hint?: string;
 }
 
 export const Select = forwardRef<HTMLSelectElement, SelectProps>(
-  ({ label, options, placeholder, error, id: idProp, className, ...props }, ref) => {
+  ({ label, options, placeholder, error, hint, id: idProp, className, ...props }, ref) => {
     const autoId = useId();
     const id = idProp ?? autoId;
     const errorId = `${id}-error`;
+    const hintId = `${id}-hint`;
 
     return (
       <div className="select-group">
@@ -35,7 +39,9 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
           id={id}
           className={`select ${error ? "select-error" : ""} ${className ?? ""}`}
           aria-invalid={!!error}
-          aria-describedby={error ? errorId : undefined}
+          aria-describedby={
+            [error ? errorId : "", hint ? hintId : ""].filter(Boolean).join(" ") || undefined
+          }
           {...props}
         >
           {placeholder && (
@@ -49,6 +55,11 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
             </option>
           ))}
         </select>
+        {hint && !error && (
+          <p id={hintId} className="select-hint">
+            {hint}
+          </p>
+        )}
         {error && (
           <p id={errorId} className="select-error-message" role="alert">
             {error}

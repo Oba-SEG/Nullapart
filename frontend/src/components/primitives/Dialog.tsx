@@ -4,7 +4,7 @@
  * Modal dialog with focus trap, escape to close, and ARIA dialog semantics.
  */
 
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 
 export interface DialogProps {
   open: boolean;
@@ -15,6 +15,7 @@ export interface DialogProps {
 
 export function Dialog({ open, onClose, title, children }: DialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -40,7 +41,7 @@ export function Dialog({ open, onClose, title, children }: DialogProps) {
     <dialog
       ref={dialogRef}
       className="dialog"
-      aria-labelledby="dialog-title"
+      aria-labelledby={titleId}
       onClick={(e) => {
         if (e.target === dialogRef.current) {
           dialogRef.current?.close();
@@ -49,7 +50,7 @@ export function Dialog({ open, onClose, title, children }: DialogProps) {
     >
       <div className="dialog-content">
         <div className="dialog-header">
-          <h2 id="dialog-title" className="dialog-title">
+          <h2 id={titleId} className="dialog-title">
             {title}
           </h2>
           <button

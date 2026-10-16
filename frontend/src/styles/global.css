@@ -299,6 +299,40 @@ textarea::placeholder {
   color: var(--color-text-tertiary);
 }
 
+/* The Input and Select primitives each own a group. Without this the label sits
+   inline beside the control, so a long label squeezes the field and the hint
+   lands under the label instead of under the thing it explains. Stacking is the
+   convention already committed in Models.css. */
+.input-group,
+.select-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+.input-label,
+.select-label {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.input-group .input,
+.select-group .select {
+  width: 100%;
+}
+
+/* Field hint carried by the Input and Select primitives. It explains the rule
+   behind a control, so it sits directly under it and stays readable. */
+.input-hint,
+.select-hint {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  margin: var(--spacing-1) 0 0;
+  max-width: 65ch;
+}
+
 /* Cards — soft-UI panels with hairline borders (docs/12) */
 /* Inline stat list used by the Operations and Scanner stat strips. */
 .stat-row {
@@ -726,4 +760,84 @@ tbody tr:focus-within td {
   margin-bottom: var(--spacing-3);
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
+}
+
+/* 2026 console redesign: authority-first, editorial, deliberately flat. */
+body {
+  background: var(--color-bg-primary);
+}
+
+body::before,
+body::after {
+  display: none;
+}
+
+[data-theme="light"] body {
+  background:
+    linear-gradient(90deg, rgba(29, 33, 26, 0.035) 1px, transparent 1px),
+    linear-gradient(rgba(29, 33, 26, 0.035) 1px, transparent 1px),
+    var(--color-bg-primary);
+  background-size: 28px 28px;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-family-display);
+}
+
+.btn {
+  min-height: 38px;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+}
+
+.btn:hover {
+  box-shadow: none;
+  transform: translateY(-1px);
+}
+
+.btn-primary {
+  background: var(--color-btn-primary-bg);
+  border-color: var(--color-btn-primary-bg);
+  box-shadow: none;
+}
+
+.btn-ghost {
+  border-color: var(--color-border);
+}
+
+.card {
+  background: var(--color-bg-secondary);
+  background-image: none;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: none;
+}
+
+.card::before {
+  display: none;
+}
+
+.section-title {
+  padding-bottom: var(--spacing-3);
+  border-bottom-color: var(--color-border);
+  font-family: var(--font-family-display);
+  font-size: var(--font-size-xl);
+}
+
+.section-title::before {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 50%;
+  box-shadow: none;
+}
+
+input,
+textarea,
+select {
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-sm);
+  box-shadow: none;
 }
