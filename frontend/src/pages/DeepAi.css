@@ -29,9 +29,14 @@
 }
 
 .deep-ai-summary {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 0.85rem;
+  align-items: stretch;
+  background: var(--color-bg-glass);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
 }
 
 .deep-ai-summary-card,
@@ -43,9 +48,26 @@
 }
 
 .deep-ai-summary-card {
-  display: grid;
-  gap: 0.35rem;
-  padding: 1rem;
+  align-items: baseline;
+  border: 0;
+  border-left: 1px solid var(--color-border);
+  border-radius: 0;
+  box-shadow: none;
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: var(--spacing-1) var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-4);
+}
+
+.deep-ai-summary-card:first-child {
+  border-left: 0;
+}
+
+.deep-ai-summary-card svg {
+  align-self: center;
+  color: var(--color-primary);
+  flex-shrink: 0;
 }
 
 .deep-ai-summary-card svg {
@@ -65,12 +87,31 @@
 }
 
 .deep-ai-summary-card strong {
-  font-size: clamp(1.5rem, 3vw, 2.15rem);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-lg);
+}
+
+.deep-ai-summary-card span {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 760px) {
+  .deep-ai-summary-card {
+    flex-basis: 50%;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .deep-ai-summary-card:nth-child(odd) {
+    border-left: 0;
+  }
 }
 
 .deep-ai-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
+  grid-template-columns: minmax(0, 1.7fr) minmax(300px, 0.62fr);
   gap: 1rem;
 }
 
@@ -94,9 +135,17 @@
 .deep-ai-table th,
 .deep-ai-table td {
   border-bottom: 1px solid var(--color-border);
-  padding: 0.75rem 0.6rem;
+  padding: 0.65rem 0.55rem;
   text-align: left;
   vertical-align: top;
+}
+
+.deep-ai-table td {
+  font-size: 0.86rem;
+}
+
+.deep-ai-table td .btn {
+  white-space: nowrap;
 }
 
 .deep-ai-table th {
@@ -143,6 +192,40 @@
   gap: 0.75rem;
 }
 
+/* The text column has to be allowed to shrink below its longest word, otherwise
+   the pill/action column on the right squeezes it until labels break mid-token. */
+.deep-ai-release > div:first-child,
+.deep-ai-grant > div:first-child,
+.deep-ai-dataset > div:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.deep-ai-release strong + span,
+.deep-ai-grant strong + span,
+.deep-ai-dataset strong + span {
+  display: block;
+  margin-top: 0.15rem;
+  overflow-wrap: anywhere;
+}
+
+.deep-ai-release-side,
+.deep-ai-grant-side {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+/* An action label that breaks into three lines inside a narrow card reads as a
+   layout accident. The side column already wraps whole controls instead. */
+.deep-ai-release-side .btn,
+.deep-ai-grant-side .btn {
+  white-space: nowrap;
+}
+
 .deep-ai-benchmark {
   margin-top: 0.85rem;
 }
@@ -179,6 +262,72 @@
   grid-column: 1 / -1;
 }
 
+/* Multiline fields need the whole row, not one column of the form grid. */
+.deep-ai-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  grid-column: 1 / -1;
+}
+
+.deep-ai-field-label {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.deep-ai-textarea {
+  min-height: 4.5rem;
+  resize: vertical;
+  width: 100%;
+}
+
+.deep-ai-field-error {
+  color: var(--color-error);
+  font-size: var(--font-size-sm);
+  margin: 0;
+}
+
+/* The references the server will store beside the finding, shown as evidence. */
+.deep-ai-evidence {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.deep-ai-evidence code {
+  font-family: var(--font-family-mono);
+  overflow-wrap: anywhere;
+}
+
+/* Why the form is switched off, in the operator's terms rather than a code. */
+.deep-ai-note {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+}
+
+.deep-ai-result-foot {
+  align-items: center;
+  color: var(--color-text-secondary);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--font-size-sm);
+  gap: 0.6rem;
+}
+
+.deep-ai-origin {
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
+}
+
 .deep-ai-result {
   display: grid;
   gap: 0.45rem;
@@ -200,7 +349,6 @@
 }
 
 @media (max-width: 1100px) {
-  .deep-ai-summary,
   .deep-ai-grid {
     grid-template-columns: 1fr;
   }

@@ -25,6 +25,18 @@ const managerSession = {
   impersonation: null,
 };
 
+const viewerSession = {
+  ...managerSession,
+  roles: ["support_agent"],
+  permissions: ["deep-ai:view"],
+};
+
+/**
+ * A finding may only cite a grant that is still open, so the fixture grant
+ * expires relative to now rather than on a fixed historical date.
+ */
+const openUntil = new Date(Date.now() + 25 * 60_000).toISOString();
+
 const snapshot = {
   deployment_id: "LOCAL-TEST",
   generated_at: "2026-10-12T10:00:00Z",
@@ -105,10 +117,10 @@ const snapshot = {
       skill_id: "security.message.deep_analysis",
       skill_version: "v1",
       artifact_type: "message_rfc822",
-      expires_at: "2026-10-12T11:00:00Z",
+      expires_at: openUntil,
       created_by: "admin@example.test",
       created_at: "2026-10-12T10:00:00Z",
-      revoked_at: null,
+      revoked_at: null as string | null,
     },
   ],
   analysis_results: [
@@ -129,7 +141,28 @@ const snapshot = {
       processing_duration_ms: 1200,
       validation_state: "valid",
       error_code: null,
+      recorded_by: "model_runtime",
       created_at: "2026-10-12T10:01:00Z",
+    },
+    {
+      id: "44444444-4444-4444-4444-444444444444",
+      skill_id: "security.message.deep_analysis",
+      skill_version: "v1",
+      model_release: "local-qwen3.5-9b-phase7",
+      artifact_grant_id: "11111111-1111-1111-1111-111111111111",
+      classification: "suspicious",
+      attack_type: "bec",
+      severity: "medium",
+      confidence: 0.6,
+      impersonated_entity: "Finance director",
+      evidence_references: ["grant:11111111-1111-1111-1111-111111111111"],
+      recommended_action: "escalate",
+      analyst_summary: "Analyst read the payment request as an invoice diversion attempt.",
+      processing_duration_ms: 0,
+      validation_state: "valid",
+      error_code: null,
+      recorded_by: "administrator",
+      created_at: "2026-10-12T10:02:00Z",
     },
   ],
   training_datasets: [
@@ -168,21 +201,28 @@ function stepUpDenied() {
   };
 }
 
-function stubFetch() {
+function stubFetch(
+  overrides: Partial<typeof snapshot> = {},
+  session: typeof managerSession = managerSession,
+) {
+  const data = { ...snapshot, ...overrides };
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? "GET";
     if (url.includes("/auth/session")) {
-      return ok({ data: managerSession });
+      return ok({ data: session });
     }
     if (method === "POST" && url.endsWith("/deep-ai/artifact-grants")) {
-      return ok({ data: { id: "grant-new", expires_at: "2026-10-12T11:00:00Z" } });
+      return ok({ data: { id: "grant-new", expires_at: openUntil } });
     }
     if (method === "POST" && url.endsWith("/deep-ai/rollback")) {
       return ok({ data: { changed: true } });
     }
+    if (method === "POST" && url.endsWith("/deep-ai/analysis-results")) {
+      return ok({ data: { id: "result-new", recorded_by: "administrator" } });
+    }
     if (url.includes("/deep-ai")) {
-      return ok({ data: snapshot });
+      return ok({ data });
     }
     throw new Error(`unexpected fetch ${url}`);
   });
@@ -190,7 +230,9 @@ function stubFetch() {
   return fetchMock;
 }
 
-function stubFetchStepUpDenied(deniedPath: "/deep-ai/artifact-grants" | "/deep-ai/rollback") {
+function stubFetchStepUpDenied(
+  deniedPath: "/deep-ai/artifact-grants" | "/deep-ai/rollback" | "/deep-ai/analysis-results",
+) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? "GET";
@@ -288,6 +330,36 @@ describe("DeepAi", () => {
     });
   });
 
+  it("prefills rollback targets from the registry instead of free-text entry", async () => {
+    const fetchMock = stubFetch();
+    const user = userEvent.setup();
+    renderAt("/deep-ai");
+    await screen.findByRole("heading", { name: "Regional Deep AI" });
+
+    await user.click(screen.getByRole("button", { name: "Roll back" }));
+    expect(screen.getByLabelText("Skill ID")).toHaveValue("security.message.deep_analysis");
+    expect(screen.getByLabelText("Current skill version")).toHaveValue("v1");
+
+    await user.click(screen.getByRole("button", { name: "Roll back release" }));
+    expect(screen.getByLabelText("Model release")).toHaveValue("local-qwen3.5-9b-phase7");
+
+    await user.click(screen.getByRole("button", { name: "Roll back" }));
+    await user.type(screen.getByLabelText("Rollback skill version"), "v0");
+    await user.type(screen.getByLabelText("Rollback reason"), "Failed evaluation gate");
+    await user.click(screen.getByRole("button", { name: "Record rollback" }));
+
+    await waitFor(() => {
+      const rollbackCall = fetchMock.mock.calls.find(
+        ([input, init]) => String(input).endsWith("/deep-ai/rollback") && init?.method === "POST",
+      );
+      expect(rollbackCall).toBeTruthy();
+      const body = JSON.parse(String(rollbackCall?.[1]?.body));
+      expect(body.skill_id).toBe("security.message.deep_analysis");
+      expect(body.current_skill_version).toBe("v1");
+      expect(body.rollback_skill_version).toBe("v0");
+    });
+  });
+
   it("offers step-up re-authentication when grant creation requires step-up", async () => {
     stubFetchStepUpDenied("/deep-ai/artifact-grants");
     const user = userEvent.setup();
@@ -315,5 +387,144 @@ describe("DeepAi", () => {
 
     expect(await screen.findByRole("button", { name: "Re-authenticate" })).toBeTruthy();
     expect(screen.getByText("Re-authentication is required for this action.")).toBeTruthy();
+  });
+
+  it("records a finding against the grant it was read under", async () => {
+    const fetchMock = stubFetch();
+    const user = userEvent.setup();
+    renderAt("/deep-ai");
+    await screen.findByRole("heading", { name: "Regional Deep AI" });
+
+    await user.click(screen.getByRole("button", { name: "Record a finding" }));
+    await user.selectOptions(
+      screen.getByLabelText("Release that ran the analysis"),
+      "local-qwen3.5-9b-phase7",
+    );
+    await user.selectOptions(screen.getByLabelText("Verdict"), "malicious");
+    await user.type(screen.getByLabelText("Confidence (0 to 1)"), "0.8");
+    await user.type(
+      screen.getByLabelText("What was seen"),
+      "Sender domain registered four days ago\nReply-to differs from the sending address",
+    );
+    await user.type(
+      screen.getByLabelText("Summary for a reviewer"),
+      "Credential lure sent from a lookalike domain to finance staff.",
+    );
+    await user.click(screen.getByRole("button", { name: "Record finding" }));
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([input, init]) =>
+          String(input).endsWith("/deep-ai/analysis-results") && init?.method === "POST",
+      );
+      expect(call).toBeTruthy();
+      const body = JSON.parse(String(call?.[1]?.body));
+      expect(body.artifact_grant_id).toBe("11111111-1111-1111-1111-111111111111");
+      // Skill identity is copied from the cited grant, never typed.
+      expect(body.skill_id).toBe("security.message.deep_analysis");
+      expect(body.skill_version).toBe("v1");
+      expect(body.model_release).toBe("local-qwen3.5-9b-phase7");
+      expect(body.classification).toBe("malicious");
+      expect(body.confidence).toBeCloseTo(0.8);
+      expect(body.observations).toHaveLength(2);
+      expect(body.evidence_references).toContain("grant:11111111-1111-1111-1111-111111111111");
+      expect((call?.[1]?.headers as Record<string, string>)["X-Idempotency-Key"]).toBeTruthy();
+    });
+  });
+
+  it("names who recorded each finding so model output and admin input stay distinct", async () => {
+    stubFetch();
+    renderAt("/deep-ai");
+    await screen.findByRole("heading", { name: "Regional Deep AI" });
+
+    expect(screen.getByText("Produced by the analysis runtime")).toBeTruthy();
+    expect(screen.getByText("Entered by an administrator")).toBeTruthy();
+  });
+
+  it("refuses an incomplete finding and says which field is short", async () => {
+    const fetchMock = stubFetch();
+    const user = userEvent.setup();
+    renderAt("/deep-ai");
+    await screen.findByRole("heading", { name: "Regional Deep AI" });
+
+    await user.click(screen.getByRole("button", { name: "Record finding" }));
+
+    expect(
+      await screen.findByText("Choose the open grant this finding was made under."),
+    ).toBeTruthy();
+    expect(screen.getByText("Choose the approved release that ran this analysis.")).toBeTruthy();
+    expect(screen.getByText("Record at least one observation this finding rests on.")).toBeTruthy();
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+  });
+
+  it("explains why nothing can be recorded while no grant is open", async () => {
+    stubFetch({ artifact_grants: [] });
+    renderAt("/deep-ai");
+    await screen.findByRole("heading", { name: "Regional Deep AI" });
+
+    expect(
+      await screen.findByText(
+        "A finding has to cite an open artifact grant, and none is open for this customer. Create a scoped grant first.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Record finding" })).toBeDisabled();
+  });
+
+  it("offers step-up re-authentication when recording a finding requires step-up", async () => {
+    stubFetchStepUpDenied("/deep-ai/analysis-results");
+    const user = userEvent.setup();
+    renderAt("/deep-ai");
+    await screen.findByRole("heading", { name: "Regional Deep AI" });
+
+    await user.click(screen.getByRole("button", { name: "Record a finding" }));
+    await user.selectOptions(
+      screen.getByLabelText("Release that ran the analysis"),
+      "local-qwen3.5-9b-phase7",
+    );
+    await user.type(screen.getByLabelText("Confidence (0 to 1)"), "0.7");
+    await user.type(screen.getByLabelText("What was seen"), "Invoice total changed mid-thread");
+    await user.type(
+      screen.getByLabelText("Summary for a reviewer"),
+      "Payment details swapped inside an existing invoicing thread.",
+    );
+    await user.click(screen.getByRole("button", { name: "Record finding" }));
+
+    expect(await screen.findByRole("button", { name: "Re-authenticate" })).toBeTruthy();
+  });
+
+  it("explains why nothing can be recorded while no release is approved", async () => {
+    stubFetch({ model_releases: [] });
+    renderAt("/deep-ai");
+    await screen.findByRole("heading", { name: "Regional Deep AI" });
+
+    expect(
+      await screen.findByText(
+        "A finding cites an approved model release, and this deployment has none. Approve one on the model list first.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Record finding" })).toBeDisabled();
+  });
+
+  it("offers no finding action on a grant that is already closed", async () => {
+    stubFetch({
+      artifact_grants: [{ ...snapshot.artifact_grants[0], revoked_at: "2026-10-12T10:30:00Z" }],
+    });
+    renderAt("/deep-ai");
+    await screen.findByRole("heading", { name: "Regional Deep AI" });
+
+    expect(screen.queryByRole("button", { name: "Record a finding" })).toBeNull();
+  });
+
+  it("shows the finding form as read-only without the management permission", async () => {
+    stubFetch({}, viewerSession);
+    renderAt("/deep-ai");
+    await screen.findByRole("heading", { name: "Regional Deep AI" });
+
+    expect(
+      await screen.findByText(
+        "You can read findings, but recording one needs the Deep AI management permission.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Record a finding" })).toBeNull();
   });
 });

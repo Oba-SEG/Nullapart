@@ -1,18 +1,40 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, BrainCircuit, DatabaseZap, KeyRound, ShieldCheck } from "lucide-react";
-import { useMemo, useState } from "react";
+import {
+  AlertTriangle,
+  BrainCircuit,
+  ClipboardList,
+  DatabaseZap,
+  KeyRound,
+  ShieldCheck,
+  Undo2,
+} from "lucide-react";
+import { useMemo, useRef, useState } from "react";
 
 import { api, type ApiError } from "../api/client";
 import { hasPermission, loadSession } from "../auth/session";
 import { StepUpPrompt } from "../components/StepUpPrompt";
 import { StatusPill } from "../components/StatusPill";
 import { ControlRail } from "../components/ControlRail";
+import { Hint } from "../components/primitives/Hint";
 import { WorkspaceHeader } from "../components/WorkspaceHeader";
 import { WorkflowGuide } from "../components/WorkflowGuide";
 import { Button } from "../components/primitives/Button";
 import { Input } from "../components/primitives/Input";
 import { Select } from "../components/primitives/Select";
 import { randomUuid } from "../lib/ids";
+import {
+  analysisVerdictLabel,
+  approvalStateLabel,
+  attackTypeLabel,
+  deepAiStateLabel,
+  findingCategoryLabel,
+  grantResourceLabel,
+  HINTS,
+  recommendedActionLabel,
+  resultOriginLabel,
+  tokenLabel,
+} from "../lib/labels";
+import { severityLabel } from "../lib/status";
 import type { StatusTone } from "../lib/status";
 import "./DeepAi.css";
 
@@ -113,6 +135,9 @@ interface DeepAiResult {
   processing_duration_ms: number;
   validation_state: string;
   error_code: string | null;
+  /** `model_runtime` or `administrator`, decided by the server; null on rows
+   * written before origin tracking existed. */
+  recorded_by: string | null;
   created_at: string;
 }
 
@@ -158,6 +183,61 @@ interface RollbackDraft {
   rollback_to_model_release: string;
   reason: string;
 }
+
+interface ResultDraft {
+  grantId: string;
+  modelRelease: string;
+  classification: string;
+  attackType: string;
+  severity: string;
+  confidence: string;
+  recommendedAction: string;
+  impersonatedEntity: string;
+  observations: string;
+  analystSummary: string;
+  processingDurationMs: string;
+}
+
+const defaultResultDraft: ResultDraft = {
+  grantId: "",
+  modelRelease: "",
+  classification: "suspicious",
+  attackType: "unknown",
+  severity: "medium",
+  confidence: "",
+  recommendedAction: "escalate",
+  impersonatedEntity: "",
+  observations: "",
+  analystSummary: "",
+  processingDurationMs: "",
+};
+
+/**
+ * The finding vocabularies below mirror the server's checked lists in
+ * `validate_result_request`. The server stays authoritative; these exist so the
+ * form offers only values it will accept.
+ */
+const CLASSIFICATIONS = ["clean", "suspicious", "malicious", "unknown", "error"] as const;
+const ATTACK_TYPES = [
+  "none",
+  "phishing",
+  "bec",
+  "impersonation",
+  "malware",
+  "spam",
+  "scam",
+  "unknown",
+] as const;
+const SEVERITIES = ["info", "low", "medium", "high", "critical", "unknown"] as const;
+const RECOMMENDED_ACTIONS = [
+  "deliver",
+  "hold",
+  "quarantine",
+  "block",
+  "escalate",
+  "release",
+  "unknown",
+] as const;
 
 const defaultGrantDraft: GrantDraft = {
   artifact_id: "",
@@ -239,11 +319,72 @@ function skillKey(skill: DeepAiSkill): string {
   return `${skill.skill_id}/${skill.skill_version}`;
 }
 
+/**
+ * A grant can be cited by a new finding only while it is open. Revoked or
+ * expired grants stay listed as history, but the server refuses a result that
+ * references one.
+ */
+function grantIsLive(grant: DeepAiGrant): boolean {
+  return grant.revoked_at === null && new Date(grant.expires_at).getTime() > Date.now();
+}
+
+type ResultField =
+  | "grantId"
+  | "modelRelease"
+  | "observations"
+  | "analystSummary"
+  | "confidence"
+  | "processingDurationMs";
+
+/**
+ * Mirrors the bounds the server applies in `validate_result_request` so an
+ * operator is told which field is short before the request goes out. The server
+ * stays authoritative; nothing here relaxes it.
+ */
+function resultFieldErrors(draft: ResultDraft): Partial<Record<ResultField, string>> {
+  const errors: Partial<Record<ResultField, string>> = {};
+  if (draft.grantId === "") {
+    errors.grantId = "Choose the open grant this finding was made under.";
+  }
+  if (draft.modelRelease === "") {
+    errors.modelRelease = "Choose the approved release that ran this analysis.";
+  }
+  const summary = draft.analystSummary.trim();
+  if (summary.length < 12) {
+    errors.analystSummary = "Write at least 12 characters so a reader can act on this finding.";
+  } else if (summary.length > 4000) {
+    errors.analystSummary = "Keep the summary under 4000 characters.";
+  }
+  const confidence = Number(draft.confidence);
+  if (draft.confidence.trim() === "" || !Number.isFinite(confidence)) {
+    errors.confidence = "Confidence is required, from 0 to 1.";
+  } else if (confidence < 0 || confidence > 1) {
+    errors.confidence = "Confidence must be between 0 and 1.";
+  }
+  if (draft.observations.trim() === "") {
+    errors.observations = "Record at least one observation this finding rests on.";
+  }
+  const duration = Number(draft.processingDurationMs);
+  if (
+    draft.processingDurationMs.trim() !== "" &&
+    (!Number.isFinite(duration) || duration < 0 || !Number.isInteger(duration))
+  ) {
+    errors.processingDurationMs = "Duration is whole milliseconds, 0 or more.";
+  }
+  return errors;
+}
+
 export function DeepAi() {
   const queryClient = useQueryClient();
   const [grantDraft, setGrantDraft] = useState<GrantDraft>(defaultGrantDraft);
   const [rollbackDraft, setRollbackDraft] = useState<RollbackDraft>(defaultRollbackDraft);
-  const [formError, setFormError] = useState<string | null>(null);
+  const [grantFormError, setGrantFormError] = useState<string | null>(null);
+  const [rollbackFormError, setRollbackFormError] = useState<string | null>(null);
+  const [resultDraft, setResultDraft] = useState<ResultDraft>(defaultResultDraft);
+  const [resultErrors, setResultErrors] = useState<Partial<Record<ResultField, string>>>({});
+  const [resultFormError, setResultFormError] = useState<string | null>(null);
+  const rollbackPanelRef = useRef<HTMLElement>(null);
+  const resultPanelRef = useRef<HTMLElement>(null);
   const session = useQuery({
     queryKey: ["session"],
     queryFn: ({ signal }) => loadSession(signal),
@@ -263,6 +404,46 @@ export function DeepAi() {
         .filter((skill) => skill.release_state === "released")
         .map((skill) => ({ value: skillKey(skill), label: skillKey(skill) })),
     [deepAi.data?.skills],
+  );
+
+  /** Grants a new finding can cite: still open, not revoked, not expired. */
+  const liveGrants = useMemo(
+    () => (deepAi.data?.artifact_grants ?? []).filter(grantIsLive),
+    [deepAi.data?.artifact_grants],
+  );
+  const grantOptions = useMemo(
+    () =>
+      liveGrants.map((grant) => ({
+        value: grant.id,
+        label: `${grantResourceLabel(grant.resource_type)} · ${shortId(grant.artifact_id)} · ${grant.skill_id}/${grant.skill_version}`,
+      })),
+    [liveGrants],
+  );
+  const releaseOptions = useMemo(
+    () =>
+      (deepAi.data?.model_releases ?? [])
+        .filter((release) => release.approval_state === "approved")
+        .map((release) => ({
+          value: release.model_release,
+          label: `${release.model_release} · ${release.region}`,
+        })),
+    [deepAi.data?.model_releases],
+  );
+  const classificationOptions = useMemo(
+    () => CLASSIFICATIONS.map((value) => ({ value, label: analysisVerdictLabel(value) })),
+    [],
+  );
+  const attackTypeOptions = useMemo(
+    () => ATTACK_TYPES.map((value) => ({ value, label: attackTypeLabel(value) })),
+    [],
+  );
+  const severityOptions = useMemo(
+    () => SEVERITIES.map((value) => ({ value, label: severityLabel(value) })),
+    [],
+  );
+  const recommendedActionOptions = useMemo(
+    () => RECOMMENDED_ACTIONS.map((value) => ({ value, label: recommendedActionLabel(value) })),
+    [],
   );
 
   const createGrant = useMutation({
@@ -285,7 +466,7 @@ export function DeepAi() {
     },
     onSuccess: async () => {
       setGrantDraft({ ...defaultGrantDraft, skill: skillOptions[0]?.value ?? "" });
-      setFormError(null);
+      setGrantFormError(null);
       await queryClient.invalidateQueries({ queryKey: ["deep-ai"] });
     },
   });
@@ -305,10 +486,90 @@ export function DeepAi() {
       ),
     onSuccess: async () => {
       setRollbackDraft(defaultRollbackDraft);
-      setFormError(null);
+      setRollbackFormError(null);
       await queryClient.invalidateQueries({ queryKey: ["deep-ai"] });
     },
   });
+  const recordResult = useMutation({
+    mutationFn: (draft: ResultDraft) => {
+      const grant = (deepAi.data?.artifact_grants ?? []).find(
+        (candidate) => candidate.id === draft.grantId,
+      );
+      if (!grant) throw new Error("Choose an open artifact grant for this finding.");
+      return api.post<{ id: string; recorded_by: string }>(
+        "/deep-ai/analysis-results",
+        {
+          artifact_grant_id: grant.id,
+          // Skill identity is copied from the grant the finding cites, never
+          // typed: the server refuses a result whose skill does not match the
+          // grant it references.
+          skill_id: grant.skill_id,
+          skill_version: grant.skill_version,
+          model_release: draft.modelRelease,
+          classification: draft.classification,
+          attack_type: draft.attackType,
+          severity: draft.severity,
+          confidence: Number(draft.confidence),
+          impersonated_entity: draft.impersonatedEntity.trim() || null,
+          evidence_references: [`grant:${grant.id}`, `artifact:${grant.artifact_id}`],
+          observations: draft.observations
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => line !== ""),
+          recommended_action: draft.recommendedAction,
+          analyst_summary: draft.analystSummary.trim(),
+          processing_duration_ms:
+            draft.processingDurationMs.trim() === ""
+              ? 0
+              : Math.trunc(Number(draft.processingDurationMs)),
+        },
+        { idempotencyKey: randomUuid() },
+      );
+    },
+    onSuccess: async () => {
+      setResultDraft({ ...defaultResultDraft, grantId: resultDraft.grantId });
+      setResultErrors({});
+      setResultFormError(null);
+      await queryClient.invalidateQueries({ queryKey: ["deep-ai"] });
+    },
+  });
+
+  function beginSkillRollback(skill: DeepAiSkill) {
+    setRollbackDraft({
+      skill_id: skill.skill_id,
+      current_skill_version: skill.skill_version,
+      rollback_skill_version: skill.rollback_skill_version ?? "",
+      model_release: "",
+      rollback_to_model_release: "",
+      reason: "",
+    });
+    setRollbackFormError(null);
+    rollbackRelease.reset();
+    rollbackPanelRef.current?.scrollIntoView?.({ block: "start" });
+  }
+
+  function beginModelRollback(release: DeepAiModelRelease) {
+    setRollbackDraft({
+      skill_id: "",
+      current_skill_version: "",
+      rollback_skill_version: "",
+      model_release: release.model_release,
+      rollback_to_model_release: release.rollback_to_model_release ?? "",
+      reason: "",
+    });
+    setRollbackFormError(null);
+    rollbackRelease.reset();
+    rollbackPanelRef.current?.scrollIntoView?.({ block: "start" });
+  }
+
+  /** Opens the finding form pre-cited to the grant this card belongs to. */
+  function beginResultFromGrant(grant: DeepAiGrant) {
+    setResultDraft({ ...defaultResultDraft, grantId: grant.id });
+    setResultErrors({});
+    setResultFormError(null);
+    recordResult.reset();
+    resultPanelRef.current?.scrollIntoView?.({ block: "start" });
+  }
 
   if (deepAi.isPending) {
     return (
@@ -327,9 +588,21 @@ export function DeepAi() {
 
   const data = deepAi.data;
   const activeSkill = grantDraft.skill || skillOptions[0]?.value || "";
-  const latestBenchmark = data.regional_benchmarks[0] ?? null;
   const grantError = createGrant.isError ? errorMessage(createGrant.error) : null;
   const rollbackError = rollbackRelease.isError ? errorMessage(rollbackRelease.error) : null;
+  const latestBenchmark = data.regional_benchmarks[0] ?? null;
+  const citedGrant = liveGrants.find((grant) => grant.id === resultDraft.grantId) ?? null;
+  const resultError = recordResult.isError ? errorMessage(recordResult.error) : null;
+  /**
+   * Why the form cannot be submitted yet, in the words an operator acts on.
+   * Empty when every input the server needs is available.
+   */
+  const resultLock =
+    grantOptions.length === 0
+      ? "A finding has to cite an open artifact grant, and none is open for this customer. Create a scoped grant first."
+      : releaseOptions.length === 0
+        ? "A finding cites an approved model release, and this deployment has none. Approve one on the model list first."
+        : "";
 
   return (
     <div className="deep-ai-page">
@@ -431,6 +704,7 @@ export function DeepAi() {
                   <th>State</th>
                   <th>Budgets</th>
                   <th>Tools</th>
+                  {canManage ? <th>Actions</th> : null}
                 </tr>
               </thead>
               <tbody>
@@ -445,7 +719,7 @@ export function DeepAi() {
                     <td>
                       <StatusPill
                         tone={stateTone(skill.release_state)}
-                        label={skill.release_state}
+                        label={deepAiStateLabel(skill.release_state)}
                       />
                     </td>
                     <td>
@@ -456,6 +730,18 @@ export function DeepAi() {
                       </small>
                     </td>
                     <td>{skill.allowed_tools.join(", ") || "none"}</td>
+                    {canManage ? (
+                      <td>
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          onClick={() => beginSkillRollback(skill)}
+                        >
+                          <Undo2 size={13} aria-hidden="true" />
+                          Roll back
+                        </button>
+                      </td>
+                    ) : null}
                   </tr>
                 ))}
               </tbody>
@@ -475,10 +761,22 @@ export function DeepAi() {
                     {release.backend} · {release.serving_contract}
                   </small>
                 </div>
-                <StatusPill
-                  tone={stateTone(release.approval_state)}
-                  label={release.approval_state}
-                />
+                <div className="deep-ai-release-side">
+                  <StatusPill
+                    tone={stateTone(release.approval_state)}
+                    label={approvalStateLabel(release.approval_state)}
+                  />
+                  {canManage ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={() => beginModelRollback(release)}
+                    >
+                      <Undo2 size={13} aria-hidden="true" />
+                      Roll back release
+                    </button>
+                  ) : null}
+                </div>
               </div>
             ))}
           </div>
@@ -525,10 +823,10 @@ export function DeepAi() {
                 event.preventDefault();
                 const nextDraft = { ...grantDraft, skill: activeSkill };
                 if (!nextDraft.artifact_id.trim() || !nextDraft.skill) {
-                  setFormError("Artifact ID and released skill are required.");
+                  setGrantFormError("Artifact ID and released skill are required.");
                   return;
                 }
-                setFormError(null);
+                setGrantFormError(null);
                 createGrant.mutate(nextDraft);
               }}
             >
@@ -538,15 +836,15 @@ export function DeepAi() {
                 onChange={(event) =>
                   setGrantDraft({ ...grantDraft, artifact_id: event.target.value })
                 }
-                placeholder="UUID from quarantine/report/case"
+                placeholder="Copy it from the message or case page"
               />
               <Input
-                label="Tenant message ID"
+                label="Message it came from (optional)"
                 value={grantDraft.tenant_message_id}
                 onChange={(event) =>
                   setGrantDraft({ ...grantDraft, tenant_message_id: event.target.value })
                 }
-                placeholder="optional unless quarantine case"
+                placeholder="Only needed for a quarantine case"
               />
               <Select
                 label="Skill"
@@ -578,8 +876,8 @@ export function DeepAi() {
                   setGrantDraft({ ...grantDraft, ttl_minutes: event.target.value })
                 }
               />
-              {formError || grantError ? (
-                <p className="deep-ai-error">{formError ?? grantError}</p>
+              {grantFormError || grantError ? (
+                <p className="deep-ai-error">{grantFormError ?? grantError}</p>
               ) : null}
               {createGrant.isError ? <StepUpPrompt error={createGrant.error} /> : null}
               <Button type="submit" disabled={createGrant.isPending}>
@@ -595,12 +893,28 @@ export function DeepAi() {
             {data.artifact_grants.map((grant) => (
               <div className="deep-ai-grant" key={grant.id}>
                 <div>
-                  <strong>{grant.resource_type.replaceAll("_", " ")}</strong>
+                  <strong>{grantResourceLabel(grant.resource_type)}</strong>
                   <span>
                     {shortId(grant.artifact_id)} · {grant.skill_id}
                   </span>
                 </div>
-                <small>expires {formatDate(grant.expires_at)}</small>
+                <div className="deep-ai-grant-side">
+                  {grant.revoked_at ? (
+                    <StatusPill tone="threat" label={`revoked ${formatDate(grant.revoked_at)}`} />
+                  ) : (
+                    <small>expires {formatDate(grant.expires_at)}</small>
+                  )}
+                  {canManage && grantIsLive(grant) ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={() => beginResultFromGrant(grant)}
+                    >
+                      <ClipboardList size={13} aria-hidden="true" />
+                      Record a finding
+                    </button>
+                  ) : null}
+                </div>
               </div>
             ))}
           </div>
@@ -615,31 +929,221 @@ export function DeepAi() {
             {data.analysis_results.map((result) => (
               <div className="deep-ai-result" key={result.id}>
                 <div className="deep-ai-result-head">
-                  <StatusPill tone={severityTone(result.severity)} label={result.severity} />
+                  <StatusPill
+                    tone={severityTone(result.severity)}
+                    label={severityLabel(result.severity)}
+                  />
                   <StatusPill
                     tone={stateTone(result.validation_state)}
-                    label={result.validation_state}
+                    label={deepAiStateLabel(result.validation_state)}
                   />
                 </div>
                 <strong>
-                  {result.classification} · {result.attack_type}
+                  {analysisVerdictLabel(result.classification)} ·{" "}
+                  {findingCategoryLabel(result.attack_type)}
                 </strong>
                 <p>{result.analyst_summary}</p>
                 <small>
                   {result.skill_id}/{result.skill_version} · confidence{" "}
                   {Math.round(result.confidence * 100)}% · {formatDate(result.created_at)}
                 </small>
+                <div className="deep-ai-result-foot">
+                  <Hint label={HINTS.resultOrigin}>
+                    <span className="deep-ai-origin">{resultOriginLabel(result.recorded_by)}</span>
+                  </Hint>
+                  <span>Recommends: {recommendedActionLabel(result.recommended_action)}</span>
+                </div>
               </div>
             ))}
           </div>
         </article>
       </section>
 
-      <section className="deep-ai-panel">
+      <section className="deep-ai-panel" ref={resultPanelRef}>
+        <h2>Record a finding</h2>
+        <p className="deep-ai-subtitle">
+          Write down what an analysis concluded so it can be reviewed, cited and measured against
+          later mail. A finding made here is labelled as entered by an administrator, never as model
+          output.
+        </p>
+        {canManage ? (
+          <form
+            className="deep-ai-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const nextErrors = resultFieldErrors(resultDraft);
+              setResultErrors(nextErrors);
+              if (Object.keys(nextErrors).length > 0) {
+                setResultFormError("Fix the highlighted fields before recording this finding.");
+                return;
+              }
+              setResultFormError(null);
+              recordResult.mutate(resultDraft);
+            }}
+          >
+            <Select
+              label="Open grant this finding cites"
+              value={resultDraft.grantId}
+              onChange={(event) => setResultDraft({ ...resultDraft, grantId: event.target.value })}
+              options={grantOptions}
+              placeholder={grantOptions.length === 0 ? "No open grant" : "Choose a grant"}
+              error={resultErrors.grantId}
+              hint={HINTS.citedEvidence}
+            />
+            <Select
+              label="Release that ran the analysis"
+              value={resultDraft.modelRelease}
+              onChange={(event) =>
+                setResultDraft({ ...resultDraft, modelRelease: event.target.value })
+              }
+              options={releaseOptions}
+              placeholder={releaseOptions.length === 0 ? "No approved release" : "Choose a release"}
+              error={resultErrors.modelRelease}
+              hint={HINTS.modelReleaseChoice}
+            />
+            <Select
+              label="Verdict"
+              value={resultDraft.classification}
+              onChange={(event) =>
+                setResultDraft({ ...resultDraft, classification: event.target.value })
+              }
+              options={classificationOptions}
+            />
+            <Select
+              label="Attack type"
+              value={resultDraft.attackType}
+              onChange={(event) =>
+                setResultDraft({ ...resultDraft, attackType: event.target.value })
+              }
+              options={attackTypeOptions}
+            />
+            <Select
+              label="Severity"
+              value={resultDraft.severity}
+              onChange={(event) => setResultDraft({ ...resultDraft, severity: event.target.value })}
+              options={severityOptions}
+            />
+            <Select
+              label="Recommended action"
+              value={resultDraft.recommendedAction}
+              onChange={(event) =>
+                setResultDraft({ ...resultDraft, recommendedAction: event.target.value })
+              }
+              options={recommendedActionOptions}
+            />
+            <Input
+              label="Confidence (0 to 1)"
+              type="number"
+              min="0"
+              max="1"
+              step="0.05"
+              value={resultDraft.confidence}
+              onChange={(event) =>
+                setResultDraft({ ...resultDraft, confidence: event.target.value })
+              }
+              error={resultErrors.confidence}
+              placeholder="0.85"
+            />
+            <Input
+              label="How long the analysis took (milliseconds)"
+              type="number"
+              min="0"
+              step="1"
+              value={resultDraft.processingDurationMs}
+              onChange={(event) =>
+                setResultDraft({ ...resultDraft, processingDurationMs: event.target.value })
+              }
+              error={resultErrors.processingDurationMs}
+              placeholder="optional"
+            />
+            <div className="deep-ai-field">
+              <label htmlFor="deep-ai-observations" className="deep-ai-field-label">
+                What was seen
+              </label>
+              <textarea
+                id="deep-ai-observations"
+                className="deep-ai-textarea"
+                rows={3}
+                value={resultDraft.observations}
+                onChange={(event) =>
+                  setResultDraft({ ...resultDraft, observations: event.target.value })
+                }
+                placeholder={
+                  "One observation per line, for example: sender domain registered 4 days ago"
+                }
+                aria-describedby={
+                  resultErrors.observations ? "deep-ai-observations-error" : undefined
+                }
+              />
+              {resultErrors.observations ? (
+                <p id="deep-ai-observations-error" className="deep-ai-field-error" role="alert">
+                  {resultErrors.observations}
+                </p>
+              ) : null}
+            </div>
+            <div className="deep-ai-field">
+              <label htmlFor="deep-ai-summary" className="deep-ai-field-label">
+                Summary for a reviewer
+              </label>
+              <textarea
+                id="deep-ai-summary"
+                className="deep-ai-textarea"
+                rows={3}
+                maxLength={4000}
+                value={resultDraft.analystSummary}
+                onChange={(event) =>
+                  setResultDraft({ ...resultDraft, analystSummary: event.target.value })
+                }
+                placeholder="What this finding means for the message and what you recommend doing about it."
+                aria-describedby={resultErrors.analystSummary ? "deep-ai-summary-error" : undefined}
+              />
+              {resultErrors.analystSummary ? (
+                <p id="deep-ai-summary-error" className="deep-ai-field-error" role="alert">
+                  {resultErrors.analystSummary}
+                </p>
+              ) : (
+                <p className="input-hint">
+                  Between 12 and 4000 characters. This is the text a reviewer reads first.
+                </p>
+              )}
+            </div>
+            <Input
+              label="Accounted for as (optional)"
+              value={resultDraft.impersonatedEntity}
+              onChange={(event) =>
+                setResultDraft({ ...resultDraft, impersonatedEntity: event.target.value })
+              }
+              placeholder="person or brand the message posed as"
+            />
+            {citedGrant ? (
+              <p className="deep-ai-evidence">
+                Cites <code>grant:{shortId(citedGrant.id)}</code> and{" "}
+                <code>artifact:{shortId(citedGrant.artifact_id)}</code> · skill{" "}
+                {citedGrant.skill_id}/{citedGrant.skill_version}
+              </p>
+            ) : null}
+            {resultLock !== "" ? <p className="deep-ai-note">{resultLock}</p> : null}
+            {resultFormError || resultError ? (
+              <p className="deep-ai-error">{resultFormError ?? resultError}</p>
+            ) : null}
+            {recordResult.isError ? <StepUpPrompt error={recordResult.error} /> : null}
+            <Button type="submit" disabled={recordResult.isPending || resultLock !== ""}>
+              {recordResult.isPending ? "Recording finding…" : "Record finding"}
+            </Button>
+          </form>
+        ) : (
+          <p className="deep-ai-muted">
+            You can read findings, but recording one needs the Deep AI management permission.
+          </p>
+        )}
+      </section>
+
+      <section className="deep-ai-panel" ref={rollbackPanelRef}>
         <h2>Release rollback</h2>
         <p className="deep-ai-muted">
-          Roll back a released skill and/or approved model release. This is audited and requires an
-          idempotency key; it does not execute mail or remediation actions.
+          Roll back a released skill, an approved model release, or both. Pressing the button once
+          is enough: repeating it does not roll back twice. This changes which version answers
+          future analyses, it does not act on any message.
         </p>
         {canManage ? (
           <form
@@ -654,10 +1158,12 @@ export function DeepAi() {
                 rollbackDraft.model_release.trim() &&
                 rollbackDraft.rollback_to_model_release.trim();
               if ((!hasSkill && !hasModel) || rollbackDraft.reason.trim().length < 12) {
-                setFormError("Provide a skill or model rollback target and a substantive reason.");
+                setRollbackFormError(
+                  "Provide a skill or model rollback target and a substantive reason.",
+                );
                 return;
               }
-              setFormError(null);
+              setRollbackFormError(null);
               rollbackRelease.mutate(rollbackDraft);
             }}
           >
@@ -712,8 +1218,8 @@ export function DeepAi() {
               }
               placeholder="Failed evaluation gate; restoring prior release"
             />
-            {formError || rollbackError ? (
-              <p className="deep-ai-error">{formError ?? rollbackError}</p>
+            {rollbackFormError || rollbackError ? (
+              <p className="deep-ai-error">{rollbackFormError ?? rollbackError}</p>
             ) : null}
             {rollbackRelease.isError ? <StepUpPrompt error={rollbackRelease.error} /> : null}
             <Button type="submit" variant="danger" disabled={rollbackRelease.isPending}>
@@ -735,10 +1241,14 @@ export function DeepAi() {
               <div>
                 <strong>{dataset.dataset_version}</strong>
                 <span>
-                  {dataset.region} · {dataset.allowed_data_classes.join(", ")}
+                  {dataset.region} · data in it:{" "}
+                  {dataset.allowed_data_classes.map(tokenLabel).join(", ")}
                 </span>
               </div>
-              <StatusPill tone={stateTone(dataset.approval_state)} label={dataset.approval_state} />
+              <StatusPill
+                tone={stateTone(dataset.approval_state)}
+                label={approvalStateLabel(dataset.approval_state)}
+              />
               <p>{dataset.provenance}</p>
               <small>{dataset.deletion_withdrawal_process}</small>
             </div>
