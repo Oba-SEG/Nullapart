@@ -841,3 +841,45 @@ select {
   border-radius: var(--radius-sm);
   box-shadow: none;
 }
+
+/* Route headers used to recreate the same decorative hero on every page.  The
+ * operator console uses the header as a document masthead instead: the work
+ * surface starts immediately below a single, deliberate rule. */
+.page-header,
+.dashboard-header,
+.policies-header {
+  min-height: 0;
+  padding: 0 0 var(--spacing-5);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid var(--color-text-primary);
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.page-header::before,
+.dashboard-header::before,
+.policies-header::before {
+  display: none;
+}
+
+.page-title,
+.policies-title {
+  font-family: var(--font-family-display);
+  font-size: clamp(2.25rem, 4vw, 3.7rem);
+  font-weight: 600;
+  letter-spacing: -0.045em;
+  text-shadow: none;
+}
+
+/* Dense system controls should read as a ledger, not a collection of floating
+ * glass cards.  Page-level styles can add emphasis where a decision needs it. */
+.card-elevated {
+  background: var(--color-bg-secondary);
+  box-shadow: var(--shadow-sm);
+}
+
+[data-theme="light"] .card {
+  box-shadow: none;
+}

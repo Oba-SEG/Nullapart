@@ -182,6 +182,27 @@
   padding: 0.85rem;
 }
 
+/* Keep the governance workspace in the same document-like system as the
+ * command center.  Its panels contain independently auditable controls; they
+ * should be separated by rules rather than soft, floating containers. */
+.deep-ai-state,
+.deep-ai-summary,
+.deep-ai-summary-card,
+.deep-ai-panel,
+.deep-ai-release,
+.deep-ai-grant,
+.deep-ai-result,
+.deep-ai-dataset,
+.deep-ai-benchmark {
+  background: var(--color-bg-secondary);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.deep-ai-panel {
+  border-top: 2px solid var(--color-text-primary);
+}
+
 .deep-ai-release,
 .deep-ai-grant,
 .deep-ai-result-head,

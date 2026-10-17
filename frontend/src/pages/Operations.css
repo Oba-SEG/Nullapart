@@ -245,6 +245,73 @@
   justify-content: flex-end;
 }
 
+/* Console redesign: operations is a deployment record, not a hero card with
+ * a decorative image.  Keep its data and actions prominent on both themes. */
+.operations-header {
+  min-height: 0;
+  padding: 0 0 var(--spacing-5);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid var(--color-text-primary);
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.operations-title {
+  font-family: var(--font-family-display);
+  font-size: clamp(2.25rem, 4vw, 3.7rem);
+  font-weight: 600;
+  letter-spacing: -0.045em;
+}
+
+.operations-header-actions {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.operations-state {
+  padding: var(--spacing-5) 0;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--color-border-strong);
+  border-bottom: 1px solid var(--color-border);
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.operations-stats {
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.operations-stats .stat-row {
+  min-height: 0;
+  padding: var(--spacing-4);
+  background: transparent;
+  border: 0;
+  border-right: 1px solid var(--color-border);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.operations-stats .stat-row:last-child {
+  border-right: 0;
+}
+
+.operations-table-wrap {
+  border-radius: 0;
+  box-shadow: none;
+}
+
 @media (max-width: 760px) {
   .operations-header {
     min-height: auto;
