@@ -25,7 +25,7 @@
 //!   stage reads its artifacts from configuration, so this API can never
 //!   mutate a running message path directly.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use axum::{
@@ -50,7 +50,7 @@ use uuid::Uuid;
 use crate::admin_audit::{source_ip_from, AuditEventRecord, AuditStore, PostgresAuditStore};
 use crate::admin_rbac::SYSTEM_ADMIN_ROLE;
 use crate::idempotency::{claim, complete, ClaimOutcome};
-use crate::policy_admin::set_scope;
+use crate::policy_admin::{actor_display_name, load_actor_display_names, set_scope};
 
 pub const MODELS_VIEW_PERMISSION: &str = "models:view";
 pub const MODELS_MANAGE_PERMISSION: &str = "models:manage";
@@ -339,25 +339,35 @@ struct ModelResponse {
     deployment_regions: Vec<String>,
     approval_state: ApprovalState,
     approved_by: Option<String>,
+    /// The `*_by` fields store the acting identity's id, which is what the
+    /// record has to keep. The matching `_by_name` fields carry what a person
+    /// reading the approval history needs: the name that identity was issued
+    /// under, or the stored reference when no account matches it.
+    approved_by_name: Option<String>,
     approved_at: Option<DateTime<Utc>>,
     approval_note: Option<String>,
     activated_at: Option<DateTime<Utc>>,
     activated_by: Option<String>,
+    activated_by_name: Option<String>,
     deactivated_at: Option<DateTime<Utc>>,
     deactivated_by: Option<String>,
+    deactivated_by_name: Option<String>,
     deactivation_reason: Option<String>,
     rollback_model_id: Option<String>,
     rollback_model_version: Option<String>,
     registered_by: String,
+    registered_by_name: String,
     registered_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
 
-impl TryFrom<ModelRecord> for ModelResponse {
-    type Error = ();
-
-    fn try_from(record: ModelRecord) -> Result<Self, Self::Error> {
+impl ModelResponse {
+    fn from_record(record: ModelRecord, names: &HashMap<String, String>) -> Result<Self, ()> {
         let approval_state = ApprovalState::parse(&record.approval_state).ok_or(())?;
+        let approved_by = record.approved_by.clone();
+        let activated_by = record.activated_by.clone();
+        let deactivated_by = record.deactivated_by.clone();
+        let registered_by = record.registered_by.clone();
         Ok(Self {
             id: record.id,
             model_id: record.model_id,
@@ -371,20 +381,30 @@ impl TryFrom<ModelRecord> for ModelResponse {
             deployment_regions: record.deployment_regions,
             approval_state,
             approved_by: record.approved_by,
+            approved_by_name: display_for(names, approved_by),
             approved_at: record.approved_at,
             approval_note: record.approval_note,
             activated_at: record.activated_at,
             activated_by: record.activated_by,
+            activated_by_name: display_for(names, activated_by),
             deactivated_at: record.deactivated_at,
             deactivated_by: record.deactivated_by,
+            deactivated_by_name: display_for(names, deactivated_by),
             deactivation_reason: record.deactivation_reason,
             rollback_model_id: record.rollback_model_id,
             rollback_model_version: record.rollback_model_version,
             registered_by: record.registered_by,
+            registered_by_name: actor_display_name(names, &registered_by),
             registered_at: record.registered_at,
             updated_at: record.updated_at,
         })
     }
+}
+
+/// Resolves a nullable stored actor reference to its display name, keeping
+/// `None` where no decision was recorded.
+fn display_for(names: &HashMap<String, String>, stored: Option<String>) -> Option<String> {
+    stored.map(|value| actor_display_name(names, &value))
 }
 
 #[derive(Serialize)]
@@ -888,10 +908,17 @@ async fn select_active(
         .map_err(|_| unavailable())
 }
 
-/// Async like every other `Result<_, Response>` helper in this codebase so
-/// the large error type stays inside a future, not a sync signature.
-async fn response_from_record(record: ModelRecord) -> Result<ModelResponse, Response> {
-    ModelResponse::try_from(record).map_err(|_| unavailable())
+/// Builds the console view of a model row.
+///
+/// `names` comes from the caller's already-scoped transaction, so one read
+/// covers the whole list rather than one lookup per row. Async like the other
+/// `Result<_, Response>` helpers here, which keeps the large error type inside a
+/// future rather than a sync signature.
+async fn response_from_record(
+    record: ModelRecord,
+    names: &HashMap<String, String>,
+) -> Result<ModelResponse, Response> {
+    ModelResponse::from_record(record, names).map_err(|_| unavailable())
 }
 
 // ---------------------------------------------------------------------------
@@ -1064,9 +1091,13 @@ async fn list_models(
         Ok(records) => records,
         Err(_) => return unavailable(),
     };
+    let actor_names = match load_actor_display_names(&mut transaction).await {
+        Ok(names) => names,
+        Err(response) => return response,
+    };
     let mut models = Vec::with_capacity(records.len());
     for record in records {
-        match response_from_record(record).await {
+        match response_from_record(record, &actor_names).await {
             Ok(response) => models.push(response),
             Err(response) => return response,
         }
@@ -1133,7 +1164,11 @@ async fn get_model(
     let Some(record) = record else {
         return not_found("Model was not found");
     };
-    let response = match response_from_record(record).await {
+    let actor_names = match load_actor_display_names(&mut transaction).await {
+        Ok(names) => names,
+        Err(response) => return response,
+    };
+    let response = match response_from_record(record, &actor_names).await {
         Ok(response) => response,
         Err(response) => return response,
     };
@@ -1514,7 +1549,11 @@ async fn register_model(
     {
         return response;
     }
-    let response = match response_from_record(record).await {
+    let actor_names = match load_actor_display_names(&mut transaction).await {
+        Ok(names) => names,
+        Err(response) => return response,
+    };
+    let response = match response_from_record(record, &actor_names).await {
         Ok(response) => response,
         Err(response) => return response,
     };
@@ -1723,7 +1762,11 @@ async fn approval_transition(
     {
         return response;
     }
-    let response = match response_from_record(record).await {
+    let actor_names = match load_actor_display_names(&mut transaction).await {
+        Ok(names) => names,
+        Err(response) => return response,
+    };
+    let response = match response_from_record(record, &actor_names).await {
         Ok(response) => response,
         Err(response) => return response,
     };
@@ -1892,7 +1935,11 @@ async fn activate_model(
     {
         return response;
     }
-    let response = match response_from_record(record).await {
+    let actor_names = match load_actor_display_names(&mut transaction).await {
+        Ok(names) => names,
+        Err(response) => return response,
+    };
+    let response = match response_from_record(record, &actor_names).await {
         Ok(response) => response,
         Err(response) => return response,
     };
@@ -2061,7 +2108,11 @@ async fn rollback_model(
     {
         return response;
     }
-    let response = match response_from_record(record).await {
+    let actor_names = match load_actor_display_names(&mut transaction).await {
+        Ok(names) => names,
+        Err(response) => return response,
+    };
+    let response = match response_from_record(record, &actor_names).await {
         Ok(response) => response,
         Err(response) => return response,
     };

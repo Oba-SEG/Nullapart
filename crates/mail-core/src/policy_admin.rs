@@ -182,6 +182,13 @@ pub(crate) const FEATURE_OVERRIDES_SQL: &str =
      ORDER BY revision, created_at";
 const OVERRIDE_MAX_REVISION_SQL: &str = "SELECT COALESCE(MAX(revision), 0) + 1 \
      FROM feature_overrides WHERE feature_id = $1 AND scope = $2 AND scope_id = $3";
+/// Console-only actor names. Overrides record the writing actor's id, which is
+/// the right thing to store and the wrong thing to show: an operator reading
+/// "set by 3f2a…" cannot tell who ended a protection. `admin_users` is
+/// deployment-scoped by RLS, so this resolves only identities the caller's
+/// deployment can already see, and a suspended account keeps its name because
+/// the person who wrote the row does not change when they lose access.
+const ACTOR_DISPLAY_NAMES_SQL: &str = "SELECT id::text, display_name FROM admin_users";
 const OVERRIDE_INSERT_SQL: &str = "INSERT INTO feature_overrides \
      (id, feature_id, scope, scope_id, value, owner, reason, revision, expires_at) \
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
@@ -328,6 +335,9 @@ struct FeatureOverrideResponse {
     scope_id: String,
     value: String,
     owner: String,
+    /// Whose decision this is, in the words an operator reads. `owner` stays
+    /// because it is the stored reference audit names.
+    owner_display_name: String,
     reason: String,
     revision: i64,
     created_at: DateTime<Utc>,
@@ -365,6 +375,7 @@ struct OverrideWriteResponse {
     scope_id: String,
     value: String,
     owner: String,
+    owner_display_name: String,
     reason: String,
     revision: i64,
     created_at: DateTime<Utc>,
@@ -1143,7 +1154,10 @@ pub(crate) struct LoadedOverride {
     pub(crate) item: FeatureOverride,
 }
 
-fn override_response(loaded: &LoadedOverride) -> FeatureOverrideResponse {
+fn override_response(
+    loaded: &LoadedOverride,
+    names: &HashMap<String, String>,
+) -> FeatureOverrideResponse {
     let item = &loaded.item;
     FeatureOverrideResponse {
         id: loaded.id,
@@ -1151,6 +1165,7 @@ fn override_response(loaded: &LoadedOverride) -> FeatureOverrideResponse {
         scope_id: item.scope_id.clone(),
         value: encode_feature_value(&item.value),
         owner: item.owner.clone(),
+        owner_display_name: actor_display_name(names, &item.owner),
         reason: item.reason.clone(),
         revision: item.revision,
         created_at: item.created_at,
@@ -1211,6 +1226,33 @@ pub(crate) async fn load_overrides(
         overrides.push(loaded);
     }
     Ok(overrides)
+}
+
+/// Reads the deployment's actor display names for the console read model.
+///
+/// Shared with the model registry: both write histories store an actor id, and
+/// both are console views that have to say who.
+pub(crate) async fn load_actor_display_names(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<HashMap<String, String>, Response> {
+    sqlx::query_as::<_, (String, String)>(ACTOR_DISPLAY_NAMES_SQL)
+        .fetch_all(&mut **transaction)
+        .await
+        .map(|rows| rows.into_iter().collect())
+        .map_err(|_| unavailable())
+}
+
+/// The human name for a stored actor reference.
+///
+/// Older rows and non-console writers recorded a login rather than an id, and an
+/// identity can be deleted while its history stays. Falling back to the stored
+/// value keeps the row honest about what is on the record instead of blanking
+/// out or failing the whole view.
+pub(crate) fn actor_display_name(names: &HashMap<String, String>, stored: &str) -> String {
+    names
+        .get(stored)
+        .cloned()
+        .unwrap_or_else(|| stored.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -1815,6 +1857,10 @@ async fn list_features(
             Ok(rows) => rows.into_iter().collect(),
             Err(_) => return unavailable(),
         };
+    let actor_names = match load_actor_display_names(&mut transaction).await {
+        Ok(names) => names,
+        Err(response) => return response,
+    };
     let now = Utc::now();
     let evaluator = FeatureEvaluator::new(definitions.clone());
     let mut features = Vec::with_capacity(definitions.len());
@@ -1855,7 +1901,7 @@ async fn list_features(
             winning_scope: evaluation.winning_scope,
             overrides: applicable
                 .iter()
-                .map(|loaded| override_response(loaded))
+                .map(|loaded| override_response(loaded, &actor_names))
                 .collect(),
         });
     }
@@ -2064,6 +2110,10 @@ async fn write_override(
         Ok(overrides) => overrides,
         Err(response) => return response,
     };
+    let actor_names = match load_actor_display_names(&mut transaction).await {
+        Ok(names) => names,
+        Err(response) => return response,
+    };
     let now = Utc::now();
     let evaluator = FeatureEvaluator::new(vec![definition.clone()]);
     let evaluation = match evaluator.evaluate(
@@ -2084,7 +2134,8 @@ async fn write_override(
         scope: body.scope,
         scope_id,
         value: encoded,
-        owner,
+        owner: owner.clone(),
+        owner_display_name: actor_display_name(&actor_names, &owner),
         reason: reason.to_string(),
         revision,
         created_at,
