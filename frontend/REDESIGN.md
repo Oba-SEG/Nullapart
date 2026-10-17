@@ -239,6 +239,55 @@ refetch, step-up offered on refusal, and the reason still visible to a reader
 without `deep-ai:manage`); `FeatureOverrides.test.tsx` and `Models.test.tsx`
 assert the names appear and the UUIDs do not.
 
+## Verified live on `192.168.8.4` (fifth pass)
+
+Rsynced the tree, rebuilt and restarted both `mailcore` and `frontend` compose
+services, then probed the deployed API with a real authenticated session
+(bearer token plus `nullapart_session` cookie, `X-CSRF-Token`, `X-Idempotency-Key`)
+and screenshotted the console through the local review proxy at 1440 wide.
+
+**No migration was applied, because none was needed.** Confirmed against the
+running database: `deep_ai_artifact_access_grants` already has `revoked_at`,
+`revoked_by` and `revoke_reason` (from `030_deep_ai.sql`) and `admin_users`
+already has `display_name`. The latest migration file is
+`040_deep_ai_result_origin.sql`; nothing was added to `migrations/`.
+
+G15 probe outcomes on the live stack:
+
+- fresh revoke → `200` with `{"changed": true, "revoked_by": "ob1"}`;
+- replay of the same idempotency key → the identical stored envelope, no second
+  write;
+- second key on the already-revoked grant → `200` with `changed: false` and the
+  **original** reason retained;
+- reason shorter than 12 characters → `400 INVALID_REQUEST`;
+- missing idempotency key → `400 IDEMPOTENCY_REQUIRED`;
+- malformed grant identifier → `400 INVALID_REQUEST`;
+- a grant belonging to another deployment → `404 NOT_FOUND`;
+- `GET /api/v1/deep-ai` afterwards returns `revoked_at`, `revoked_by`,
+  `revoke_reason` on the record and `active_artifact_grants: 0`;
+- `GET /api/v1/audit` shows `deep_ai_artifact_grant_revoked` with
+  `actor_login: ob1` and `result: success`.
+
+G16 probe outcomes: `/api/v1/features` returns both `owner` (UUID) and
+`owner_display_name`; `/api/v1/admin/models` returns
+`registered_by_name` / `approved_by_name` / `activated_by_name` with
+`deactivated_by_name: null` on a model that was never retired. Screenshots show
+`set by ob1 · Sep 30, 2026, 6:18 PM · no expiry` on `/policies/features` and the
+model card naming the person beside each decision timestamp.
+
+In the browser (not only headless) the revoke loop ran end to end: a thin
+reason was stopped client-side with no POST on the wire, and a valid reason
+produced two `Revoked by ob1: …` records and removed the finding action from
+both cards. Two leftover verification grants on this dev stack were revoked as
+part of the exercise.
+
+Not verified live: the `STEP_UP_REQUIRED` refusal and the permission-denied path
+on `.4`, because the local single-administrator stack cannot present a
+step-down session or a session without `deep-ai:manage`. Both are covered by
+unit tests (`grant_revocation_requires_manage_permission`,
+`grant_revocation_requires_an_idempotency_key`) and by the console's
+`StepUpPrompt` wiring, not by a live refusal.
+
 ## Functional map for the remaining surfaces
 
 Each entry lists the operations the page should expose and whether the
