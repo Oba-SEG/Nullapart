@@ -288,6 +288,97 @@ unit tests (`grant_revocation_requires_manage_permission`,
 `grant_revocation_requires_an_idempotency_key`) and by the console's
 `StepUpPrompt` wiring, not by a live refusal.
 
+## Landed in the sixth pass (platform settings)
+
+Settings was the last route that described itself better than it delivered. It
+offered a theme picker, a session card and a deployment card that printed a bare
+id, while everything an operator actually needs to know about the installation
+they are standing on (which deployment, how sign-in is proved, how long a
+session lasts) was only readable out of band.
+
+**The facts come from the session, not from a new endpoint.** `/auth/session`
+and the login exchange now carry a `platform` block, populated server-side only
+when the authenticated actor's own role keys resolve to a system role level
+through the stored `admin_roles.role_level`, so a custom system-level role
+counts and a client cannot ask for the block. No new route, no new permission,
+no write path, no migration. `resolve_session` is untouched: the extra reads
+happen on the two session-shaped responses, not on every authenticated request.
+
+- What is published: the deployment id, its `deployments` row (name, region,
+  lifecycle, provisioned date), the identity mode, the OIDC issuer when OIDC is
+  the mode in use, and the three session windows that govern the caller.
+- What is deliberately not published: rate-limit budgets. An abuse threshold
+  does not belong in a payload a browser can read.
+- Failure behavior: a role level that cannot be resolved fails closed to no
+  block at all; a `deployments` row that cannot be read degrades to
+  `deploymentRecordAvailable: false` with the region taken from the configured
+  template, so the console says the record is unavailable instead of inventing
+  a name.
+- Console: a read-only Platform card, in words. Seconds are what the server
+  enforces, so `sessionWindowLabel` renders "1 hour without activity", "8 hours
+  from sign-in", "10 minutes"; lifecycle and identity mode go through their own
+  label maps; `Hint` tooltips carry the three rules (why the readout exists,
+  what the sign-in method is for, what each session window means). The runtime
+  card was renamed Runtime and lost its duplicate id row, because the Platform
+  card is now where the installation is named.
+- The `published_by` leak on Operations: `ConfigScopeResponse` gained
+  `published_by_name`, resolved inside the snapshot transaction through the same
+  `policy_admin::load_actor_display_names` read model the override and model
+  histories use, degrading to the stored id when display data is missing.
+  `published_by` stays, because audit records name ids; the table cell now shows
+  the name with the id as its `title`, and the column header explains that.
+
+New coverage: `admin_rbac` unit tests for the system-tier gate (a customer
+session sees nothing), the published values, the identity provider without any
+client credential in the payload, and the missing-record path; `Settings.test.tsx`
+asserts the card renders for a published session, is absent when the server
+published nothing, says the record could not be read rather than naming it, and
+never shows a raw second count; `Operations.test.tsx` asserts the publisher
+renders as a name with the identifier kept as hover evidence.
+
+## Verified live on `192.168.8.4` (sixth pass)
+
+Rsynced, rebuilt and restarted `mailcore` and `frontend`. **No migration was
+applied, because none was needed:** the `deployments` table already exists and
+already holds the running deployment (`LOCAL-TEST`, region `ZA`, display name
+"Nullapart local development", `active`).
+
+API probes against the published mailcore port with the local control bearer and
+a real `nullapart_session` cookie, checked on both the login response and a
+follow-up `GET /api/v1/auth/session`:
+
+- `ob1` (builtin `system_admin`, stored level `system`) → the `platform` block,
+  with `deploymentName: "Nullapart local development"`, `deploymentRegion: "ZA"`,
+  `deploymentLifecycle: "active"`, `identityProvider: "proxy-header"`,
+  `identityIssuer: null`, `idleTtlSecs: 3600`, `absoluteTtlSecs: 28800`,
+  `stepUpTtlSecs: 600`, `deploymentRecordAvailable: true`;
+- `ob2-customer-admin` (`customer_admin`, level `customer`) → `platform: null`;
+- `ob2-support` (`support`, level `support`) → `platform: null`.
+
+`GET /api/v1/operations/runtime` returned the system scope with
+`published_by: "32e35eba-…"` and `published_by_name: "ob1"`.
+
+In the browser at 1440 wide the Platform card reads "Nullapart local
+development / LOCAL-TEST / ZA / In service / 9/27/2026 / This installation's
+sign-in boundary / 1 hour without activity / 8 hours from sign-in / 10 minutes",
+with no raw second count anywhere on the page, and the Config versions row shows
+`ob1` with the UUID reachable only as the cell's `title`.
+
+Not verified live: the unavailable-record branch (this stack has a readable
+deployment row), a custom system-level role receiving the block (only the three
+builtin roles exist in `LOCAL-TEST`), and the OIDC issuer path (this stack runs
+`NULLAPART_IDENTITY_PROVIDER=proxy_header`). All three are covered by unit tests.
+
+Two things observed on this stack while verifying, neither caused by nor fixed
+in this pass: the frontend logs `The Content Security Policy directive
+'frame-ancestors' is ignored when delivered via a <meta> element`, so that
+directive needs a response header to have any effect; and `mailcore` logs
+`inline ml registry gate failed; runtime is unavailable` because the ONNX
+artifacts the compose file mounts read-only from
+`ml/inline/checkpoints/multilabel-v1/{model,onnx}` are not present on the host,
+which leaves inline ML gated off (fail-closed, not silently CLEAN) until the
+model is re-exported with `ml/inline/export_onnx.py`.
+
 ## Functional map for the remaining surfaces
 
 Each entry lists the operations the page should expose and whether the
@@ -318,8 +409,10 @@ backend already serves them.
   Next: drain/offline node drill-down evidence and links into message trace.
 - **Audit log**: functional (filters, audited export, step-up). Next: saved
   filter views and impersonation-chain rendering (data exists).
-- **Settings**: functional core (theme, session facts, sign out). Next:
-  "sign out other sessions" when the backend exposes session listing (gap G12).
+- **Settings**: functional core (theme, session facts, sign out) plus the
+  read-only Platform readout (installation, sign-in method, session policy).
+  Next: "sign out other sessions" when the backend exposes session listing
+  (gap G12).
 
 ## Backend gaps flagged (need endpoints before UI can act)
 
