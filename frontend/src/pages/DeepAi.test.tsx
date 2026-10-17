@@ -121,6 +121,8 @@ const snapshot = {
       created_by: "admin@example.test",
       created_at: "2026-10-12T10:00:00Z",
       revoked_at: null as string | null,
+      revoked_by: null as string | null,
+      revoke_reason: null as string | null,
     },
   ],
   analysis_results: [
@@ -206,6 +208,12 @@ function stubFetch(
   session: typeof managerSession = managerSession,
 ) {
   const data = { ...snapshot, ...overrides };
+  /**
+   * A revocation is durable, so a read after it must show the closed grant. The
+   * console refetches on success, and this is what lets a test assert the card
+   * actually changes instead of only that the request was sent.
+   */
+  let revocation: { at: string; by: string; reason: string } | null = null;
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? "GET";
@@ -215,6 +223,24 @@ function stubFetch(
     if (method === "POST" && url.endsWith("/deep-ai/artifact-grants")) {
       return ok({ data: { id: "grant-new", expires_at: openUntil } });
     }
+    if (method === "POST" && url.endsWith("/revoke")) {
+      const body = JSON.parse(String(init?.body)) as { reason: string };
+      revocation = {
+        at: "2026-10-12T10:30:00Z",
+        by: "admin@example.test",
+        reason: body.reason,
+      };
+      return ok({
+        data: {
+          id: "11111111-1111-1111-1111-111111111111",
+          artifact_id: "22222222-2222-2222-2222-222222222222",
+          revoked_at: revocation.at,
+          revoked_by: revocation.by,
+          reason: revocation.reason,
+          changed: true,
+        },
+      });
+    }
     if (method === "POST" && url.endsWith("/deep-ai/rollback")) {
       return ok({ data: { changed: true } });
     }
@@ -222,7 +248,21 @@ function stubFetch(
       return ok({ data: { id: "result-new", recorded_by: "administrator" } });
     }
     if (url.includes("/deep-ai")) {
-      return ok({ data });
+      const closed = revocation;
+      if (!closed) {
+        return ok({ data });
+      }
+      return ok({
+        data: {
+          ...data,
+          artifact_grants: data.artifact_grants.map((grant) => ({
+            ...grant,
+            revoked_at: closed.at,
+            revoked_by: closed.by,
+            revoke_reason: closed.reason,
+          })),
+        },
+      });
     }
     throw new Error(`unexpected fetch ${url}`);
   });
@@ -231,7 +271,11 @@ function stubFetch(
 }
 
 function stubFetchStepUpDenied(
-  deniedPath: "/deep-ai/artifact-grants" | "/deep-ai/rollback" | "/deep-ai/analysis-results",
+  deniedPath:
+    | "/deep-ai/artifact-grants"
+    | "/deep-ai/rollback"
+    | "/deep-ai/analysis-results"
+    | "/deep-ai/artifact-grants/11111111-1111-1111-1111-111111111111/revoke",
 ) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -513,6 +557,97 @@ describe("DeepAi", () => {
     await screen.findByRole("heading", { name: "Regional Deep AI" });
 
     expect(screen.queryByRole("button", { name: "Record a finding" })).toBeNull();
+  });
+
+  it("revokes an open grant with a reason and shows the closed record afterwards", async () => {
+    const fetchMock = stubFetch();
+    const user = userEvent.setup();
+    renderAt("/deep-ai");
+    await screen.findByRole("heading", { name: "Regional Deep AI" });
+
+    await user.click(screen.getByRole("button", { name: "Revoke grant" }));
+    const reason = screen.getByLabelText("Reason this access ends");
+    await user.type(reason, "Review done");
+    await user.click(screen.getByRole("button", { name: "Revoke this grant" }));
+
+    expect(
+      await screen.findByText(
+        "Write at least 12 characters so a reader knows why this access ended.",
+      ),
+    ).toBeTruthy();
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+
+    await user.clear(reason);
+    await user.type(reason, "Analyst finished review; no further access is needed.");
+    await user.click(screen.getByRole("button", { name: "Revoke this grant" }));
+
+    await waitFor(() => {
+      const revokeCall = fetchMock.mock.calls.find(
+        ([input, init]) => String(input).endsWith("/revoke") && init?.method === "POST",
+      );
+      expect(revokeCall).toBeTruthy();
+      expect(
+        (revokeCall?.[1]?.headers as Record<string, string>)["X-Idempotency-Key"],
+      ).toBeTruthy();
+      expect(JSON.parse(String(revokeCall?.[1]?.body)).reason).toBe(
+        "Analyst finished review; no further access is needed.",
+      );
+    });
+
+    // The refetched card says who ended the access and why, and offers no way to
+    // revoke the same grant a second time.
+    expect(
+      await screen.findByText(
+        "Revoked by admin@example.test: Analyst finished review; no further access is needed.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Revoke grant" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Record a finding" })).toBeNull();
+  });
+
+  it("offers step-up re-authentication when a revocation requires step-up", async () => {
+    stubFetchStepUpDenied("/deep-ai/artifact-grants/11111111-1111-1111-1111-111111111111/revoke");
+    const user = userEvent.setup();
+    renderAt("/deep-ai");
+    await screen.findByRole("heading", { name: "Regional Deep AI" });
+
+    await user.click(screen.getByRole("button", { name: "Revoke grant" }));
+    await user.type(
+      screen.getByLabelText("Reason this access ends"),
+      "The artifact was mislabeled and never needed analysis.",
+    );
+    await user.click(screen.getByRole("button", { name: "Revoke this grant" }));
+
+    expect(await screen.findByRole("button", { name: "Re-authenticate" })).toBeTruthy();
+    // The reason stays typed so a re-authenticated operator does not retype it.
+    expect(screen.getByLabelText("Reason this access ends")).toHaveValue(
+      "The artifact was mislabeled and never needed analysis.",
+    );
+  });
+
+  it("keeps the revocation reason on a revoked grant for readers without the permission", async () => {
+    stubFetch(
+      {
+        artifact_grants: [
+          {
+            ...snapshot.artifact_grants[0],
+            revoked_at: "2026-10-12T10:30:00Z",
+            revoked_by: "dana@example.test",
+            revoke_reason: "Case closed after the sender was confirmed legitimate.",
+          },
+        ],
+      },
+      viewerSession,
+    );
+    renderAt("/deep-ai");
+    await screen.findByRole("heading", { name: "Regional Deep AI" });
+
+    expect(
+      await screen.findByText(
+        "Revoked by dana@example.test: Case closed after the sender was confirmed legitimate.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Revoke grant" })).toBeNull();
   });
 
   it("shows the finding form as read-only without the management permission", async () => {

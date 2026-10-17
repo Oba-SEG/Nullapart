@@ -6,6 +6,7 @@ import {
   DatabaseZap,
   KeyRound,
   ShieldCheck,
+  ShieldOff,
   Undo2,
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
@@ -116,6 +117,23 @@ interface DeepAiGrant {
   created_by: string;
   created_at: string;
   revoked_at: string | null;
+  /** Set by the revoke route from the authenticated session, never by a client. */
+  revoked_by: string | null;
+  revoke_reason: string | null;
+}
+
+/**
+ * Returned by `POST /api/v1/deep-ai/artifact-grants/:grant_id/revoke`.
+ * `changed` is false when the grant was already revoked, so a repeated request
+ * reports the existing record instead of pretending to have ended access again.
+ */
+interface RevokeGrantResponse {
+  id: string;
+  artifact_id: string;
+  revoked_at: string;
+  revoked_by: string;
+  reason: string;
+  changed: boolean;
 }
 
 interface DeepAiResult {
@@ -328,6 +346,28 @@ function grantIsLive(grant: DeepAiGrant): boolean {
   return grant.revoked_at === null && new Date(grant.expires_at).getTime() > Date.now();
 }
 
+/**
+ * Mirrors `validate_revocation_reason` on the server. A revocation reason is
+ * stored on the grant and in the audit record, so it has to read as a sentence
+ * someone later can act on. The server stays authoritative; this only reports
+ * the failure before the request goes out.
+ */
+const REVOCATION_REASON_MIN = 12;
+const REVOCATION_REASON_MAX = 500;
+
+/** Named apart from the component's `revocationReasonError` state, which would
+ * otherwise shadow this helper inside the render body. */
+function revocationReasonProblem(reason: string): string | null {
+  const trimmed = reason.trim();
+  if (trimmed.length < REVOCATION_REASON_MIN) {
+    return `Write at least ${REVOCATION_REASON_MIN} characters so a reader knows why this access ended.`;
+  }
+  if (trimmed.length > REVOCATION_REASON_MAX) {
+    return `Keep the reason under ${REVOCATION_REASON_MAX} characters.`;
+  }
+  return null;
+}
+
 type ResultField =
   | "grantId"
   | "modelRelease"
@@ -383,6 +423,11 @@ export function DeepAi() {
   const [resultDraft, setResultDraft] = useState<ResultDraft>(defaultResultDraft);
   const [resultErrors, setResultErrors] = useState<Partial<Record<ResultField, string>>>({});
   const [resultFormError, setResultFormError] = useState<string | null>(null);
+  /** Only one grant can be mid-revocation at a time, so the reason form belongs
+   * to a single card rather than appearing beside every open grant. */
+  const [revokingGrantId, setRevokingGrantId] = useState<string | null>(null);
+  const [revocationReason, setRevocationReason] = useState("");
+  const [revocationReasonError, setRevocationReasonError] = useState<string | null>(null);
   const rollbackPanelRef = useRef<HTMLElement>(null);
   const resultPanelRef = useRef<HTMLElement>(null);
   const session = useQuery({
@@ -534,6 +579,21 @@ export function DeepAi() {
     },
   });
 
+  const revokeGrant = useMutation({
+    mutationFn: ({ grantId, reason }: { grantId: string; reason: string }) =>
+      api.post<RevokeGrantResponse>(
+        `/deep-ai/artifact-grants/${grantId}/revoke`,
+        { reason },
+        { idempotencyKey: randomUuid() },
+      ),
+    onSuccess: async () => {
+      setRevokingGrantId(null);
+      setRevocationReason("");
+      setRevocationReasonError(null);
+      await queryClient.invalidateQueries({ queryKey: ["deep-ai"] });
+    },
+  });
+
   function beginSkillRollback(skill: DeepAiSkill) {
     setRollbackDraft({
       skill_id: skill.skill_id,
@@ -571,6 +631,25 @@ export function DeepAi() {
     resultPanelRef.current?.scrollIntoView?.({ block: "start" });
   }
 
+  /**
+   * Opens the reason form inside this grant's card. A revocation ends access for
+   * good, so the reason is collected before anything is sent rather than asked
+   * for after the fact.
+   */
+  function beginGrantRevocation(grant: DeepAiGrant) {
+    setRevokingGrantId(grant.id);
+    setRevocationReason("");
+    setRevocationReasonError(null);
+    revokeGrant.reset();
+  }
+
+  function cancelGrantRevocation() {
+    setRevokingGrantId(null);
+    setRevocationReason("");
+    setRevocationReasonError(null);
+    revokeGrant.reset();
+  }
+
   if (deepAi.isPending) {
     return (
       <div className="deep-ai-state" role="status">
@@ -593,6 +672,7 @@ export function DeepAi() {
   const latestBenchmark = data.regional_benchmarks[0] ?? null;
   const citedGrant = liveGrants.find((grant) => grant.id === resultDraft.grantId) ?? null;
   const resultError = recordResult.isError ? errorMessage(recordResult.error) : null;
+  const revocationError = revokeGrant.isError ? errorMessage(revokeGrant.error) : null;
   /**
    * Why the form cannot be submitted yet, in the words an operator acts on.
    * Empty when every input the server needs is available.
@@ -814,7 +894,8 @@ export function DeepAi() {
           <h2>Scoped artifact access</h2>
           <p>
             Grant short-lived access only to eligible security artifacts. The model never receives
-            broad S3, database, shell or browser authority.
+            broad S3, database, shell or browser authority. Access that should not wait for its
+            expiry can be revoked here, with the reason kept on the record.
           </p>
           {canManage ? (
             <form
@@ -897,6 +978,12 @@ export function DeepAi() {
                   <span>
                     {shortId(grant.artifact_id)} · {grant.skill_id}
                   </span>
+                  {grant.revoked_at ? (
+                    <small className="deep-ai-revoked-by">
+                      Revoked by {grant.revoked_by ?? "a record before this console"}
+                      {grant.revoke_reason ? `: ${grant.revoke_reason}` : ""}
+                    </small>
+                  ) : null}
                 </div>
                 <div className="deep-ai-grant-side">
                   {grant.revoked_at ? (
@@ -914,7 +1001,77 @@ export function DeepAi() {
                       Record a finding
                     </button>
                   ) : null}
+                  {/* An expired grant can still be closed out: the record should
+                      say the access ended and why, not trail off silently. */}
+                  {canManage && grant.revoked_at === null && revokingGrantId !== grant.id ? (
+                    <Hint label={HINTS.grantRevocation}>
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={() => beginGrantRevocation(grant)}
+                      >
+                        <ShieldOff size={13} aria-hidden="true" />
+                        Revoke grant
+                      </button>
+                    </Hint>
+                  ) : null}
                 </div>
+                {revokingGrantId === grant.id ? (
+                  <form
+                    className="deep-ai-grant-revoke"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      const reasonError = revocationReasonProblem(revocationReason);
+                      if (reasonError) {
+                        setRevocationReasonError(reasonError);
+                        return;
+                      }
+                      setRevocationReasonError(null);
+                      revokeGrant.mutate({
+                        grantId: grant.id,
+                        reason: revocationReason.trim(),
+                      });
+                    }}
+                  >
+                    <Input
+                      label="Reason this access ends"
+                      autoFocus
+                      value={revocationReason}
+                      onChange={(event) => {
+                        setRevocationReason(event.target.value);
+                        if (revocationReasonError) setRevocationReasonError(null);
+                      }}
+                      placeholder="Review is complete; no further analysis needed on this artifact."
+                      hint="Saved with the grant and in the audit record. 12 to 500 characters."
+                      error={revocationReasonError ?? undefined}
+                      disabled={revokeGrant.isPending}
+                    />
+                    {revocationError ? (
+                      <p className="deep-ai-error" role="alert">
+                        {revocationError}
+                      </p>
+                    ) : null}
+                    {revokeGrant.isError ? <StepUpPrompt error={revokeGrant.error} /> : null}
+                    <div className="deep-ai-grant-revoke-actions">
+                      <Button
+                        type="submit"
+                        variant="danger"
+                        loading={revokeGrant.isPending}
+                        disabled={revokeGrant.isPending}
+                      >
+                        {revokeGrant.isPending ? "Revoking grant…" : "Revoke this grant"}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        onClick={cancelGrantRevocation}
+                        disabled={revokeGrant.isPending}
+                      >
+                        Cancel revocation
+                      </Button>
+                    </div>
+                  </form>
+                ) : null}
               </div>
             ))}
           </div>

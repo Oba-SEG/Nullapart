@@ -685,4 +685,6 @@ export const HINTS = {
     "A finding has to cite the authorization it read under. These references are taken from the grant you picked, so the finding traces back to one permitted view of one message.",
   modelReleaseChoice:
     "Only a release this deployment approved can be cited. A finding cannot claim a model that does not exist or one that was rejected.",
+  grantRevocation:
+    "Ends this access now instead of waiting for it to expire. No new finding can cite the grant afterwards, and your name and reason stay on the record. Changing this signs you in again first.",
 } as const;

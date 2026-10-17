@@ -226,6 +226,37 @@
   white-space: nowrap;
 }
 
+/* Starting a revocation grows a reason form across the bottom of the grant card
+   it belongs to, so the card stays the single frame for the consequence. */
+.deep-ai-grant {
+  flex-wrap: wrap;
+}
+
+.deep-ai-grant-revoke {
+  border-top: 1px solid var(--color-border);
+  display: grid;
+  flex: 1 1 100%;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+}
+
+.deep-ai-grant-revoke-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* The reason an administrator gave is the sentence a later reader needs, so it
+   gets its own line and breaks anywhere rather than pushing the card wider. */
+.deep-ai-revoked-by {
+  color: var(--color-text-secondary);
+  display: block;
+  margin-top: 0.3rem;
+  overflow-wrap: anywhere;
+}
+
 .deep-ai-benchmark {
   margin-top: 0.85rem;
 }
