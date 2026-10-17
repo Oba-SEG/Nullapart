@@ -166,6 +166,79 @@ route chunks carry the copy (`Any result`, the action-filter explanation, `Not
 verified`, `audit-hash`, `justify-self:end`, the domain-type rule from the
 shared `labels` chunk).
 
+## Landed in the fifth pass (the two blocking gaps)
+
+### G15 Deep AI artifact-grant revocation
+
+**No migration was required.** The grant table already carried the revocation
+triple (`revoked_at`, `revoked_by`, `revoke_reason`) with an all-or-nothing
+`CHECK`, and the visible state was already derived from
+`revoked_at IS NULL AND expires_at > now()` in `030_deep_ai.sql`. What was
+missing was only the route that could write that triple, so this gap closed
+with an endpoint plus the console affordance, not schema.
+
+- `POST /api/v1/deep-ai/artifact-grants/{grant_id}/revoke` with a `reason`. The
+  handler runs the standard mutation contract: `deep-ai:manage` authorization,
+  a `STEP_UP_REQUIRED` check before the write, a required idempotency key, then
+  a single transaction that scopes to the authenticated deployment/customer,
+  claims the idempotency operation, updates the grant, writes the audit event
+  and completes the claim. `revoked_by` is the authenticated administrator id,
+  never a body field.
+- Reason bounds match the table: 12 to 500 characters, rejected before the
+  transaction with `INVALID_REQUEST`.
+- The idempotency table keys on `(deployment_id, customer_id, key)` with no
+  body fingerprint, so a resource-scoped mutation has to put the resource in
+  the operation string. The claim operation is `revoke:` plus the grant id,
+  which is what stops one key from closing two different grants.
+- A grant id that belongs to another tenant is `NOT_FOUND`, not `FORBIDDEN`.
+  A second call under a fresh key on an already-revoked grant succeeds with
+  `changed: false` and leaves the original record untouched; a replay under the
+  same key returns the stored outcome.
+- The update is all-or-nothing in SQL, so a part-filled triple cannot be
+  written by any path in the service.
+- Console: an unrevoked grant gets a `Revoke grant` action with a tooltip that
+  names the consequence. It opens an inline reason form inside the same card
+  ("Reason this access ends", with the 12-to-500 rule visible and the reason
+  described as staying on the record), a danger submit, a cancel, the
+  `StepUpPrompt` on refusal, and a client-side block before a thin reason ever
+  reaches the network. Revoked cards read `Revoked by <name>: <reason>`, and
+  the finding action disappears with the grant's liveness. A grant that expired
+  without ever being revoked still offers revocation, because the record should
+  say the access ended and why.
+
+### G16 Human actor names on write history
+
+`admin_users` (`id`, `login`, `display_name`, `deployment_id`) is the only
+resolution source, so the console read models now resolve the id server-side
+instead of handing the UI a bare UUID.
+
+- `policy_admin.rs` carries `ACTOR_DISPLAY_NAMES_SQL`, `load_actor_display_names`
+  and `actor_display_name`. It is a separate SQL constant used only by the
+  console read paths, so the runtime policy evaluator never carries presentation
+  data on its hot path.
+- Missing display data degrades to the stored id rather than failing the
+  request. An operator reading overrides should not get a 503 because one
+  administrator row has no `display_name`.
+- Additive compatibility per `docs/27`: the API gained `owner_display_name` on
+  feature overrides and `registered_by_name`, `approved_by_name`,
+  `activated_by_name`, `deactivated_by_name` on inline models. The existing
+  `owner` / `*_by` fields are unchanged, because audit records name ids and
+  the console still needs the identifier for evidence.
+- Console wording: override rows read `set by Lerato Mokoena` instead of
+  `set by 32e35eba-a628-...`; the model card shows who approved, activated and
+  retired it next to each timestamp, and an undecided row stays a plain em-dash
+  rather than inventing an actor.
+
+New coverage: `deep_ai.rs` unit tests for the permission, the malformed
+identifier, the missing idempotency key, and both reason-length rules; the
+ignored `postgres_deep_ai.rs` test
+`grant_revocation_is_all_or_nothing_and_stays_inside_the_tenant` for the real
+write; `DeepAi.test.tsx` drives the full loop (thin reason blocked locally,
+revocation posted with an idempotency key, the closed record rendered on the
+refetch, step-up offered on refusal, and the reason still visible to a reader
+without `deep-ai:manage`); `FeatureOverrides.test.tsx` and `Models.test.tsx`
+assert the names appear and the UUIDs do not.
+
 ## Functional map for the remaining surfaces
 
 Each entry lists the operations the page should expose and whether the
@@ -177,10 +250,11 @@ backend already serves them.
 - **Operations**: already functional (scoped refresh). Next: per-node stale
   revision drill-down and dead-letter triage actions (gap G9).
 - **Models**: already functional (register, approve, activate, rollback,
-  shadow evaluations). Keep; tighten copy to task language.
+  shadow evaluations). Write history now names the person (gap G16 closed).
 - **Policy families**: already functional (rule editor, publish, refresh).
   Next: policy simulation/dry-run (gap G10).
-- **Feature overrides**: complete (set + clear override, both audited).
+- **Feature overrides**: complete (set + clear override, both audited, both
+  attributed by name).
 - **Domain security**: one action today (source classification). Next:
   BIMI validation view, ruf sample inspection, domain observer history
   (gaps G5, G6, G11).
@@ -188,9 +262,9 @@ backend already serves them.
   deactivate/reactivate, edit). Next: hard revoke (gap G1), ledger claim
   visibility (gap G2).
 - **Deep AI / Connectors & remediation**: complete against the current API
-  (scoped grants, rollback with prefill, connector upsert with edit,
-  remediation intent with purpose). Next: grant revocation endpoint (gap
-  G15), remediation outcome lifecycle (gap G3).
+  (scoped grants, grant revocation with a retained reason, rollback with
+  prefill, connector upsert with edit, remediation intent with purpose).
+  Next: remediation outcome lifecycle (gap G3).
 - **Scanner operations**: readout by design; fabric mutations are in-process.
   Next: drain/offline node drill-down evidence and links into message trace.
 - **Audit log**: functional (filters, audited export, step-up). Next: saved
@@ -220,12 +294,10 @@ backend already serves them.
   carries the three documented platform roles plus directory-observed roles.
 - **G14** Quarantine reject/hold-edit mutations (release is the only
   quarantine mutation today).
-- **G15** Deep AI artifact-grant revocation (grants expire but cannot be
-  actively revoked before their TTL runs out).
-- **G16** Actor display names on write history. Feature-override rows show
-  "set by 32e35eba-a628-..." because the API returns the administrator id and
-  no display name; the console cannot resolve a login without a new read route
-  or an embedded name.
+
+Closed in the fifth pass: **G15** Deep AI artifact-grant revocation (route +
+console affordance; no migration needed) and **G16** actor display names on
+write history. Both are described under "Landed in the fifth pass".
 
 ## Rules this redesign keeps
 
