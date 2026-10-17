@@ -9,10 +9,12 @@ import { WorkflowGuide } from "../components/WorkflowGuide";
 import { ControlRail } from "../components/ControlRail";
 import { Button } from "../components/primitives/Button";
 import { Dialog } from "../components/primitives/Dialog";
+import { Hint } from "../components/primitives/Hint";
 import { Input } from "../components/primitives/Input";
 import { Select } from "../components/primitives/Select";
 import { randomUuid } from "../lib/ids";
 import {
+  HINTS,
   commissioningLabel,
   destinationLabel,
   nodeRoleLabel,
@@ -31,6 +33,8 @@ interface ConfigScope {
   scope_id: string;
   revision_number: number;
   published_by: string;
+  /** The publisher's name, resolved by the server; falls back to the id. */
+  published_by_name: string;
   published_at: string;
 }
 
@@ -732,7 +736,11 @@ export function Operations() {
                       <th scope="col">Scope</th>
                       <th scope="col">Scope id</th>
                       <th scope="col">Version</th>
-                      <th scope="col">Published by</th>
+                      <th scope="col">
+                        <Hint label={HINTS.configPublisher} placement="bottom">
+                          <span className="hint-term">Published by</span>
+                        </Hint>
+                      </th>
                       <th scope="col">Published at</th>
                     </tr>
                   </thead>
@@ -746,7 +754,7 @@ export function Operations() {
                           {entry.scope_id}
                         </td>
                         <td>{entry.revision_number}</td>
-                        <td>{entry.published_by}</td>
+                        <td title={entry.published_by}>{entry.published_by_name}</td>
                         <td>{new Date(entry.published_at).toLocaleString()}</td>
                       </tr>
                     ))}

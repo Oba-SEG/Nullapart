@@ -39,14 +39,16 @@ const baseSnapshot = {
         scope: "system",
         scope_id: "system",
         revision_number: 4,
-        published_by: "ops@example.test",
+        published_by: "32e35eba-a628-4f1c-9b0a-0fd4c1e2d777",
+        published_by_name: "Lerato Mokoena",
         published_at: "2026-01-05T10:00:00Z",
       },
       {
         scope: "tenant",
         scope_id: "customer-with-a-very-long-identifier",
         revision_number: 7,
-        published_by: "admin@example.test",
+        published_by: "77c1f0d2-2a5e-4f3b-8f6d-9cb0f5f2b1ae",
+        published_by_name: "Samuel Adeyemi",
         published_at: "2026-01-06T10:00:00Z",
       },
     ],
@@ -331,6 +333,20 @@ describe("Operations", () => {
     expect(within(summary).getByText("1")).toBeTruthy();
     expect(within(summary).getByText("Scanner nodes")).toBeTruthy();
     expect(within(summary).getByText("2/4")).toBeTruthy();
+  });
+
+  it("names the person who published each configuration scope", async () => {
+    stubFetch({ session: managerSession, snapshot: baseSnapshot });
+    renderAt("/operations");
+
+    const config = await screen.findByRole("region", { name: "Config versions" });
+    expect(within(config).getByText("Lerato Mokoena")).toBeTruthy();
+    expect(within(config).getByText("Samuel Adeyemi")).toBeTruthy();
+    // The stored reference stays reachable as evidence without becoming the
+    // thing an operator has to read.
+    expect(within(config).queryByText(/32e35eba/)).toBeNull();
+    const cell = within(config).getByText("Lerato Mokoena").closest("td");
+    expect(cell?.getAttribute("title")).toBe("32e35eba-a628-4f1c-9b0a-0fd4c1e2d777");
   });
 
   it("renders Phase 9 hardening evidence without claiming production readiness", async () => {

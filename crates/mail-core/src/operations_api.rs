@@ -137,6 +137,11 @@ struct ConfigScopeResponse {
     scope_id: String,
     revision_number: i64,
     published_by: String,
+    /// The publisher's human name for the console read model. Additive per
+    /// `docs/27`: `published_by` stays the stored actor reference, because a
+    /// configuration history has to keep naming the identity, not a label that
+    /// can change.
+    published_by_name: String,
     published_at: DateTime<Utc>,
 }
 
@@ -849,14 +854,28 @@ async fn get_runtime(
         Ok(rows) => rows,
         Err(_) => return unavailable(),
     };
+    // Configuration history stores an actor id. The console has to say who
+    // published, so the same read model the policy and model surfaces use
+    // resolves names here; an identity with no display data degrades to the
+    // stored value rather than blanking the row.
+    let actor_names = match crate::policy_admin::load_actor_display_names(&mut transaction).await {
+        Ok(names) => names,
+        Err(response) => return response,
+    };
     let mut scopes: Vec<ConfigScopeResponse> = scope_rows
         .iter()
-        .map(|row| ConfigScopeResponse {
-            scope: row.get("scope"),
-            scope_id: row.get("scope_id"),
-            revision_number: row.get("revision_number"),
-            published_by: row.get("published_by"),
-            published_at: row.get("published_at"),
+        .map(|row| {
+            let published_by: String = row.get("published_by");
+            let published_by_name =
+                crate::policy_admin::actor_display_name(&actor_names, &published_by);
+            ConfigScopeResponse {
+                scope: row.get("scope"),
+                scope_id: row.get("scope_id"),
+                revision_number: row.get("revision_number"),
+                published_by,
+                published_by_name,
+                published_at: row.get("published_at"),
+            }
         })
         .collect();
     scopes.sort_by_key(|entry| std::cmp::Reverse(entry.revision_number));
