@@ -192,9 +192,9 @@ export function Settings() {
             </h2>
             <p className="settings-hint">
               <Hint label={HINTS.platformReadout}>
-                <span className="hint-term">These facts come from the running platform</span>
-              </Hint>
-              , not from this browser. Nothing on this page changes them; each is set when the
+                <span className="hint-term">Read from the running platform</span>
+              </Hint>{" "}
+              rather than from this browser. Nothing here is editable: each value is set when the
               installation is built.
             </p>
 
