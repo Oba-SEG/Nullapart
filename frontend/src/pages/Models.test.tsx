@@ -47,16 +47,20 @@ const baseModel = {
   artifact_sha256: "a".repeat(64),
   deployment_regions: ["local"],
   approved_by: null,
+  approved_by_name: null,
   approved_at: null,
   approval_note: null,
   activated_by: null,
+  activated_by_name: null,
   activated_at: null,
   deactivated_by: null,
+  deactivated_by_name: null,
   deactivated_at: null,
   deactivation_reason: null,
   rollback_model_id: null,
   rollback_model_version: null,
   registered_by: "actor-1",
+  registered_by_name: "Lerato Mokoena",
   registered_at: "2026-10-01T00:00:00Z",
   updated_at: "2026-10-01T00:00:00Z",
 };
@@ -69,9 +73,11 @@ const activeModel = {
   model_version: "0",
   approval_state: "approved" as const,
   approved_by: "actor-1",
+  approved_by_name: "Naledi Dlamini",
   approved_at: "2026-10-01T01:00:00Z",
   activated_at: "2026-10-01T02:00:00Z",
   activated_by: "actor-1",
+  activated_by_name: "Naledi Dlamini",
   rollback_model_id: null,
   rollback_model_version: null,
 };
@@ -80,7 +86,19 @@ const approvedCandidateWithTarget = {
   ...baseModel,
   approval_state: "approved" as const,
   approved_by: "actor-1",
+  approved_by_name: "Naledi Dlamini",
   approved_at: "2026-10-01T01:00:00Z",
+};
+
+/** The model a rollback took out of service: it was approved, activated, then
+ * deactivated by a named administrator. */
+const retiredModel = {
+  ...activeModel,
+  model_version: "9",
+  deactivated_at: "2026-10-05T08:00:00Z",
+  deactivated_by: "actor-1",
+  deactivated_by_name: "Priya Naidoo",
+  deactivation_reason: "Superseded by the rollback to version 0",
 };
 
 const activeModelWithRollbackTarget = {
@@ -197,6 +215,44 @@ describe("Models", () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/admin/models"))).toBe(
       true,
     );
+  });
+
+  it("names the administrator behind every recorded decision on a model", async () => {
+    stubFetch({ session: managerSession, models: [retiredModel] });
+    renderAt("/models");
+
+    const card = (await screen.findByRole("heading", { name: "multilabel-v1 9" })).closest(
+      "article",
+    ) as HTMLElement;
+    const fact = (term: string) =>
+      Array.from(card.querySelectorAll("dt")).find((entry) => entry.textContent === term)
+        ?.nextElementSibling?.textContent;
+
+    expect(fact("Registered")).toMatch(/· Lerato Mokoena$/);
+    expect(fact("Approved")).toMatch(/· Naledi Dlamini$/);
+    expect(fact("Activated")).toMatch(/· Naledi Dlamini$/);
+    expect(fact("Deactivated")).toMatch(/· Priya Naidoo$/);
+    // The identity id stays on the wire for audit records; it is not a name an
+    // operator can read, so it never reaches the card.
+    expect(card.textContent).not.toMatch(/actor-1/);
+  });
+
+  it("marks a decision that never happened as absent instead of naming someone", async () => {
+    stubFetch({ session: managerSession, models: [pendingModel] });
+    renderAt("/models");
+
+    const card = (await screen.findByRole("heading", { name: "multilabel-v1 1" })).closest(
+      "article",
+    ) as HTMLElement;
+    const fact = (term: string) =>
+      Array.from(card.querySelectorAll("dt")).find((entry) => entry.textContent === term)
+        ?.nextElementSibling?.textContent;
+
+    expect(fact("Approved")).toBe("—");
+    expect(fact("Activated")).toBe("—");
+    expect(
+      Array.from(card.querySelectorAll("dt")).some((entry) => entry.textContent === "Deactivated"),
+    ).toBe(false);
   });
 
   it("explains why the controls are absent without the manage permission", async () => {

@@ -149,7 +149,12 @@ export interface FeatureOverride {
   scope: OverrideScope;
   scope_id: string;
   value: string;
+  /** The stored actor reference: an administrator identity id. Kept because
+   * audit records and support tickets name overrides by it. */
   owner: string;
+  /** Whose decision this is, in the words an operator reads. The server falls
+   * back to `owner` when no display name exists, so it is never empty. */
+  owner_display_name: string;
   reason: string;
   revision: number;
   created_at: string;

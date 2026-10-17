@@ -43,7 +43,10 @@ const bulkGuard = {
       scope: "tenant",
       scope_id: "CZA-1",
       value: "typed:rate_limit=10",
-      owner: "admin@example.test",
+      // The stored reference is an administrator identity id, exactly as the
+      // write path records it. The row has to read the resolved name instead.
+      owner: "6f1f6b3e-7d0a-4d5c-9d43-0a1b2c3d4e5f",
+      owner_display_name: "Lerato Mokoena",
       reason: "Campaign weekend lift",
       revision: 3,
       created_at: "2026-01-05T09:00:00Z",
@@ -54,7 +57,8 @@ const bulkGuard = {
       scope: "system",
       scope_id: "*",
       value: "enabled",
-      owner: "platform@example.test",
+      owner: "2a8b1c4d-0e5f-4a6b-8c9d-0e1f2a3b4c5d",
+      owner_display_name: "Platform rota",
       reason: "Initial platform posture",
       revision: 1,
       created_at: "2026-01-04T09:00:00Z",
@@ -102,7 +106,8 @@ function clearedResult() {
       scope: "tenant",
       scope_id: "CZA-1",
       value: "inherit",
-      owner: "admin@example.test",
+      owner: "6f1f6b3e-7d0a-4d5c-9d43-0a1b2c3d4e5f",
+      owner_display_name: "Lerato Mokoena",
       reason: "Campaign finished; lift no longer required",
       revision: 4,
       created_at: "2026-01-06T10:00:00Z",
@@ -120,7 +125,8 @@ function savedResult(value: string) {
       scope: "tenant",
       scope_id: "CZA-1",
       value,
-      owner: "admin@example.test",
+      owner: "6f1f6b3e-7d0a-4d5c-9d43-0a1b2c3d4e5f",
+      owner_display_name: "Lerato Mokoena",
       reason: "Weekend campaign sends faster",
       revision: 5,
       created_at: "2026-01-07T10:00:00Z",
@@ -197,7 +203,11 @@ describe("FeatureOverrides", () => {
     // The typed value shows once as the value in force and once on the
     // override that produced it.
     expect(screen.getAllByText("rate_limit=10")).toHaveLength(2);
-    expect(screen.getByText(/set by admin@example.test/i)).toBeTruthy();
+    expect(screen.getByText(/set by Lerato Mokoena/i)).toBeTruthy();
+    // A bare identity id is not a decision anyone can read, so the row shows the
+    // resolved name instead of the stored reference.
+    expect(screen.queryByText(/6f1f6b3e-7d0a-4d5c-9d43/i)).toBeNull();
+    expect(screen.getByText(/set by Platform rota/i)).toBeTruthy();
   });
 
   it("names enum values in operator words instead of wire values", async () => {

@@ -13,16 +13,23 @@ export interface InlineModel {
   deployment_regions: string[];
   approval_state: "pending" | "approved" | "rejected";
   approved_by: string | null;
+  /** Whose decision this was, in the words an operator reads. Present whenever
+   * the matching `*_by` reference is: the server resolves the stored identity id
+   * and falls back to that id when no display name exists. */
+  approved_by_name: string | null;
   approved_at: string | null;
   approval_note: string | null;
   activated_at: string | null;
   activated_by: string | null;
+  activated_by_name: string | null;
   deactivated_at: string | null;
   deactivated_by: string | null;
+  deactivated_by_name: string | null;
   deactivation_reason: string | null;
   rollback_model_id: string | null;
   rollback_model_version: string | null;
   registered_by: string;
+  registered_by_name: string;
   registered_at: string;
   updated_at: string;
 }

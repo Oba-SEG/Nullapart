@@ -118,7 +118,7 @@ function OverrideRow({ feature, override, canClear, onClear }: OverrideRowProps)
         <code>{describeOverrideValue(override.value)}</code>
       </span>
       <span className="features-meta">
-        set by {override.owner} · {formatDate(override.created_at)} ·{" "}
+        set by {override.owner_display_name} · {formatDate(override.created_at)} ·{" "}
         {override.expires_at ? `expires ${formatDate(override.expires_at)}` : "no expiry"}
       </span>
       {canClear(override.scope) ? (

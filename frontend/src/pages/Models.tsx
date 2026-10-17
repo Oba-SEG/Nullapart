@@ -189,6 +189,18 @@ function formatTimestamp(value: string | null): string {
   return Number.isNaN(parsed.getTime()) ? "—" : parsed.toLocaleString();
 }
 
+/**
+ * When a governance decision happened and whose hand made it. The server
+ * resolves the stored identity id into a name, so a card reads "3 Oct 2026,
+ * 09:12 · Lerato Mokoena" instead of a UUID, and a decision that never happened
+ * reads as absent rather than as an unnamed someone.
+ */
+function decided(at: string | null, byName: string | null): string {
+  if (!at) return "—";
+  const stamp = formatTimestamp(at);
+  return byName ? `${stamp} · ${byName}` : stamp;
+}
+
 function formatShort(value: string | null, length = 12): string {
   if (!value) return "—";
   return value.length > length ? `${value.slice(0, length)}…` : value;
@@ -893,9 +905,17 @@ export function Models() {
                   <dt>Regions</dt>
                   <dd>{model.deployment_regions.join(", ") || "—"}</dd>
                   <dt>Registered</dt>
-                  <dd>{formatTimestamp(model.registered_at)}</dd>
+                  <dd>{decided(model.registered_at, model.registered_by_name)}</dd>
+                  <dt>Approved</dt>
+                  <dd>{decided(model.approved_at, model.approved_by_name)}</dd>
                   <dt>Activated</dt>
-                  <dd>{formatTimestamp(model.activated_at)}</dd>
+                  <dd>{decided(model.activated_at, model.activated_by_name)}</dd>
+                  {model.deactivated_at ? (
+                    <>
+                      <dt>Deactivated</dt>
+                      <dd>{decided(model.deactivated_at, model.deactivated_by_name)}</dd>
+                    </>
+                  ) : null}
                   <dt>Rollback target</dt>
                   <dd>
                     {model.rollback_model_id
