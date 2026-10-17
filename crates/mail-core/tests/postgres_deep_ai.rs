@@ -388,6 +388,103 @@ async fn artifact_grant_rejects_unknown_skill_version() {
 }
 
 #[tokio::test]
+#[ignore = "requires migrated local PostgreSQL through 030_deep_ai.sql"]
+async fn grant_revocation_is_all_or_nothing_and_stays_inside_the_tenant() {
+    let pool = connect().await;
+    ensure_request_role(&pool).await;
+    let fixture = seed(&pool).await;
+    let reason = "the incident closed and no further analysis is needed";
+
+    // A revocation without a reason is not a revocation. The table forbids the
+    // part-filled triple, so no grant can end with no recorded explanation.
+    let mut partial = begin_request(
+        &pool,
+        Some(&fixture.deployment_a),
+        Some(&fixture.customer_a),
+    )
+    .await;
+    expect_rejected(
+        &mut partial,
+        sqlx::query(
+            "UPDATE deep_ai_artifact_access_grants \
+             SET revoked_at = now(), revoked_by = 'tester' \
+             WHERE id = $1",
+        )
+        .bind(fixture.grant_a),
+    )
+    .await;
+    partial
+        .rollback()
+        .await
+        .expect("partial revocation transaction must roll back");
+
+    // The statement the revoke route runs, replayed under a different tenant,
+    // affects nothing: the row-level policy, not the WHERE clause, is what stops
+    // one customer ending another customer's grant.
+    let mut other = begin_request(
+        &pool,
+        Some(&fixture.deployment_b),
+        Some(&fixture.customer_b),
+    )
+    .await;
+    let foreign = sqlx::query(
+        "UPDATE deep_ai_artifact_access_grants \
+         SET revoked_at = now(), revoked_by = $2, revoke_reason = $3 \
+         WHERE id = $1 AND revoked_at IS NULL",
+    )
+    .bind(fixture.grant_a)
+    .bind("attacker")
+    .bind(reason)
+    .execute(&mut *other)
+    .await
+    .expect("statement must run under the request role")
+    .rows_affected();
+    assert_eq!(foreign, 0, "another tenant must not be able to revoke");
+    other
+        .rollback()
+        .await
+        .expect("cross-tenant transaction must roll back");
+
+    // Under the owning scope the same statement stamps the whole triple.
+    let mut owner = begin_request(
+        &pool,
+        Some(&fixture.deployment_a),
+        Some(&fixture.customer_a),
+    )
+    .await;
+    let stamped = sqlx::query(
+        "UPDATE deep_ai_artifact_access_grants \
+         SET revoked_at = now(), revoked_by = $2, revoke_reason = $3 \
+         WHERE id = $1 AND revoked_at IS NULL",
+    )
+    .bind(fixture.grant_a)
+    .bind("tester")
+    .bind(reason)
+    .execute(&mut *owner)
+    .await
+    .expect("revocation must apply under the owning scope")
+    .rows_affected();
+    assert_eq!(stamped, 1, "the owning tenant must be able to revoke");
+    let recorded = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS ( \
+            SELECT 1 FROM deep_ai_artifact_access_grants \
+            WHERE id = $1 AND revoked_at IS NOT NULL AND revoked_by = 'tester' \
+              AND revoke_reason = $2 \
+         )",
+    )
+    .bind(fixture.grant_a)
+    .bind(reason)
+    .fetch_one(&mut *owner)
+    .await
+    .expect("revocation stamp must read back");
+    assert!(recorded, "the stamp must be the whole triple");
+    owner
+        .rollback()
+        .await
+        .expect("owner transaction must roll back");
+}
+
+#[tokio::test]
 #[ignore = "requires migrated local PostgreSQL through 040_deep_ai_result_origin.sql"]
 async fn result_origin_records_only_a_real_source() {
     let pool = connect().await;

@@ -6,7 +6,7 @@
 //! never execute actions.
 
 use axum::{
-    extract::{rejection::JsonRejection, Extension, State},
+    extract::{rejection::JsonRejection, Extension, Path, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -30,6 +30,7 @@ pub const DEEP_AI_MANAGE_PERMISSION: &str = "deep-ai:manage";
 
 const DEEP_AI_PATH: &str = "/api/v1/deep-ai";
 const DEEP_AI_GRANTS_PATH: &str = "/api/v1/deep-ai/artifact-grants";
+const DEEP_AI_GRANT_REVOKE_PATH: &str = "/api/v1/deep-ai/artifact-grants/:grant_id/revoke";
 const DEEP_AI_RESULTS_PATH: &str = "/api/v1/deep-ai/analysis-results";
 const DEEP_AI_ROLLBACK_PATH: &str = "/api/v1/deep-ai/rollback";
 const DEEP_AI_SERVING_MODELS_PATH: &str = "/internal/deep-ai/v1/models";
@@ -37,6 +38,11 @@ const DEEP_AI_SERVING_CHAT_PATH: &str = "/internal/deep-ai/v1/chat/completions";
 const IDEMPOTENCY_HEADER: &str = "x-idempotency-key";
 const AUTHORIZATION_HEADER: &str = "authorization";
 const GRANT_OPERATION: &str = "deep-ai-artifact-grant";
+/// Idempotency operations are scoped to tenant and key, so a revoke
+/// operation also names the grant it targets. Without that, one key replayed
+/// against a second grant would return the first grant's stored response
+/// instead of being rejected as an operation mismatch.
+const REVOKE_OPERATION_PREFIX: &str = "deep-ai-artifact-grant-revoke:";
 const RESULT_OPERATION: &str = "deep-ai-analysis-result";
 const ROLLBACK_OPERATION: &str = "deep-ai-rollback";
 const AUDIT_RESOURCE_GRANT: &str = "deep_ai_artifact_grant";
@@ -188,6 +194,8 @@ struct DeepAiArtifactGrantView {
     created_by: String,
     created_at: DateTime<Utc>,
     revoked_at: Option<DateTime<Utc>>,
+    revoked_by: Option<String>,
+    revoke_reason: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -250,6 +258,27 @@ struct CreateGrantResponse {
     skill_version: String,
     purpose: String,
     created: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct RevokeGrantRequest {
+    reason: String,
+}
+
+#[derive(Debug, Serialize)]
+struct RevokeGrantResponse {
+    id: Uuid,
+    artifact_id: Uuid,
+    revoked_at: DateTime<Utc>,
+    revoked_by: String,
+    /// The reason carried by the revocation that exists on the record. When the
+    /// grant was already revoked this is the original reason rather than the
+    /// one the caller just sent, because that older decision is the fact the
+    /// console needs to see.
+    reason: String,
+    /// False when the grant was already revoked, so a retry reports what
+    /// actually happened instead of implying a second revocation.
+    changed: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -402,6 +431,14 @@ struct GrantRecord {
     revoked_at: Option<DateTime<Utc>>,
 }
 
+struct GrantRevocationRecord {
+    id: Uuid,
+    artifact_id: Uuid,
+    revoked_at: Option<DateTime<Utc>>,
+    revoked_by: Option<String>,
+    revoke_reason: Option<String>,
+}
+
 struct DeepAiAudit<'a> {
     action: &'a str,
     resource_type: &'a str,
@@ -418,6 +455,7 @@ pub fn deep_ai_router(state: DeepAiState) -> Router {
     Router::new()
         .route(DEEP_AI_PATH, get(get_deep_ai))
         .route(DEEP_AI_GRANTS_PATH, post(post_artifact_grant))
+        .route(DEEP_AI_GRANT_REVOKE_PATH, post(post_grant_revocation))
         .route(DEEP_AI_RESULTS_PATH, post(post_analysis_result))
         .route(DEEP_AI_ROLLBACK_PATH, post(post_rollback))
         .with_state(state)
@@ -596,6 +634,176 @@ async fn post_artifact_grant(
         return unavailable();
     }
     (StatusCode::CREATED, Json(ApiEnvelope { data: response })).into_response()
+}
+
+/// Revokes an artifact grant before it expires.
+///
+/// A grant is a bounded authorization to read customer message content, so an
+/// operator who learns that the purpose no longer holds has to be able to end it
+/// now instead of waiting for the remaining TTL to run down. Revocation is
+/// permanent and needs a reason: the row keeps the stamp, and the reason is what
+/// makes a later read of the grant answer the question "why did access end".
+async fn post_grant_revocation(
+    State(state): State<DeepAiState>,
+    headers: HeaderMap,
+    Path(raw_grant_id): Path<String>,
+    context: Option<Extension<TenantContext>>,
+    body: Result<Json<RevokeGrantRequest>, JsonRejection>,
+) -> Response {
+    let Some(Extension(context)) = context else {
+        return api_error(
+            StatusCode::UNAUTHORIZED,
+            "UNAUTHENTICATED",
+            "Authentication is required",
+        );
+    };
+    if !authorized(&state, &context, DEEP_AI_MANAGE_PERMISSION) {
+        return api_error(StatusCode::FORBIDDEN, "FORBIDDEN", "Permission is required");
+    }
+    if !context.has_step_up() {
+        return api_error(
+            StatusCode::FORBIDDEN,
+            "STEP_UP_REQUIRED",
+            "Step-up authentication is required",
+        );
+    }
+    // The grant id arrives in the path, so a value that is not a UUID cannot
+    // name a record at all. Answering 404 here would imply the id might exist
+    // somewhere the caller cannot see.
+    let Ok(grant_id) = Uuid::parse_str(raw_grant_id.trim()) else {
+        return invalid_request();
+    };
+    let Json(request) = match body {
+        Ok(body) => body,
+        Err(_) => return invalid_request(),
+    };
+    let reason = match validate_revocation_reason(request.reason) {
+        Ok(reason) => reason,
+        Err(_) => return invalid_request(),
+    };
+    let idempotency_key = match require_idempotency_key(&headers) {
+        Ok(key) => key,
+        Err(rejection) => return idempotency_rejection_response(rejection),
+    };
+    let operation = format!("{REVOKE_OPERATION_PREFIX}{grant_id}");
+
+    let mut transaction = match state.pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(_) => return unavailable(),
+    };
+    if set_scope(
+        &mut transaction,
+        &state.deployment_id.0,
+        &context.customer_id.0,
+    )
+    .await
+    .is_err()
+    {
+        return unavailable();
+    }
+    match claim(&mut transaction, &idempotency_key, &operation).await {
+        Ok(ClaimOutcome::Fresh) => {},
+        Ok(ClaimOutcome::Replay(value)) => return replay_response(value),
+        Ok(ClaimOutcome::InProgress) => return conflict("A matching request is still in progress"),
+        Ok(ClaimOutcome::OperationMismatch) => {
+            return conflict("Idempotency key operation mismatch")
+        },
+        Err(_) => return unavailable(),
+    }
+
+    // Read under the caller's tenant scope: a grant belonging to another
+    // customer is reported as absent rather than as forbidden, so this route
+    // cannot be used to test whether an id exists elsewhere.
+    let grant = match load_grant_for_revocation(
+        &mut transaction,
+        &state.deployment_id.0,
+        &context.customer_id.0,
+        grant_id,
+    )
+    .await
+    {
+        Ok(Some(grant)) => grant,
+        Ok(None) => {
+            return api_error(
+                StatusCode::NOT_FOUND,
+                "NOT_FOUND",
+                "Artifact grant was not found",
+            )
+        },
+        Err(response) => return response,
+    };
+    let GrantRevocationRecord {
+        id,
+        artifact_id,
+        revoked_at,
+        revoked_by,
+        revoke_reason,
+    } = grant;
+    let response = match (revoked_at, revoked_by, revoke_reason) {
+        (Some(revoked_at), Some(revoked_by), Some(stored_reason)) => RevokeGrantResponse {
+            id,
+            artifact_id,
+            revoked_at,
+            revoked_by,
+            // The revocation on the record is the fact the console needs, so a
+            // repeat attempt echoes the reason already stored rather than the
+            // one it just sent.
+            reason: stored_reason,
+            changed: false,
+        },
+        (None, None, None) => RevokeGrantResponse {
+            id,
+            artifact_id,
+            revoked_at: match revoke_grant(&mut transaction, id, &context.actor.login, &reason)
+                .await
+            {
+                Ok(revoked_at) => revoked_at,
+                Err(response) => return response,
+            },
+            revoked_by: context.actor.login.clone(),
+            reason,
+            changed: true,
+        },
+        // The table forbids a part-filled revocation with a CHECK constraint, so
+        // reaching this arm means the database is not the schema this route was
+        // written against. Failing closed is better than stamping a guess.
+        _ => return unavailable(),
+    };
+    if let Err(response) = write_audit(
+        &mut transaction,
+        &state.deployment_id.0,
+        &context,
+        &headers,
+        DeepAiAudit {
+            action: "deep_ai_artifact_grant_revoked",
+            resource_type: AUDIT_RESOURCE_GRANT,
+            resource_id: Some(id.to_string()),
+            details: json!({
+                "artifact_id": response.artifact_id,
+                "revoked_at": response.revoked_at,
+                "revoked_by": response.revoked_by,
+                "reason": response.reason,
+                "changed": response.changed,
+            }),
+        },
+    )
+    .await
+    {
+        return response;
+    }
+    let Some(envelope) = envelope(&response) else {
+        return unavailable();
+    };
+    if complete(&mut transaction, &idempotency_key, &operation, envelope)
+        .await
+        .is_err()
+    {
+        return unavailable();
+    }
+    if transaction.commit().await.is_err() {
+        return unavailable();
+    }
+    (StatusCode::OK, Json(ApiEnvelope { data: response })).into_response()
 }
 
 async fn post_analysis_result(
@@ -1254,7 +1462,8 @@ async fn load_artifact_grants(
 ) -> Result<Vec<DeepAiArtifactGrantView>, Response> {
     sqlx::query(
         "SELECT id, tenant_message_id, artifact_id, resource_type, purpose, skill_id, skill_version, \
-                artifact_type, expires_at, created_by, created_at, revoked_at \
+                artifact_type, expires_at, created_by, created_at, revoked_at, revoked_by, \
+                revoke_reason \
          FROM deep_ai_artifact_access_grants \
          WHERE deployment_id = $1 AND customer_id = $2 \
          ORDER BY created_at DESC LIMIT 50",
@@ -1278,6 +1487,8 @@ async fn load_artifact_grants(
                 created_by: row.get("created_by"),
                 created_at: row.get("created_at"),
                 revoked_at: row.get("revoked_at"),
+                revoked_by: row.get("revoked_by"),
+                revoke_reason: row.get("revoke_reason"),
             })
             .collect()
     })
@@ -1484,6 +1695,65 @@ async fn insert_artifact_grant(
     )
     .await?;
     Ok(response)
+}
+
+/// Loads a grant for revocation, locking the row until the transaction ends.
+///
+/// The lock is what makes the "read the stamp, then write the stamp" sequence in
+/// [`post_grant_revocation`] safe: two operators submitting at the same moment
+/// cannot both believe they were the first to end the grant.
+async fn load_grant_for_revocation(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    deployment_id: &str,
+    customer_id: &str,
+    grant_id: Uuid,
+) -> Result<Option<GrantRevocationRecord>, Response> {
+    Ok(sqlx::query(
+        "SELECT id, artifact_id, revoked_at, revoked_by, revoke_reason \
+         FROM deep_ai_artifact_access_grants \
+         WHERE deployment_id = $1 AND customer_id = $2 AND id = $3 \
+         FOR UPDATE",
+    )
+    .bind(deployment_id)
+    .bind(customer_id)
+    .bind(grant_id)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(|_| unavailable())?
+    .map(|row| GrantRevocationRecord {
+        id: row.get("id"),
+        artifact_id: row.get("artifact_id"),
+        revoked_at: row.get("revoked_at"),
+        revoked_by: row.get("revoked_by"),
+        revoke_reason: row.get("revoke_reason"),
+    }))
+}
+
+/// Stamps the revocation triple on the grant and returns when access ended.
+///
+/// The `revoked_at IS NULL` guard is kept even though the caller holds the row
+/// lock, so a grant revoked by another committed transaction stays revoked and
+/// this reports a conflict instead of overwriting the earlier decision.
+async fn revoke_grant(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    grant_id: Uuid,
+    revoked_by: &str,
+    reason: &str,
+) -> Result<DateTime<Utc>, Response> {
+    sqlx::query(
+        "UPDATE deep_ai_artifact_access_grants \
+         SET revoked_at = now(), revoked_by = $2, revoke_reason = $3 \
+         WHERE id = $1 AND revoked_at IS NULL \
+         RETURNING revoked_at",
+    )
+    .bind(grant_id)
+    .bind(revoked_by)
+    .bind(reason)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(|_| unavailable())?
+    .map(|row| row.get("revoked_at"))
+    .ok_or_else(|| conflict("The artifact grant was already revoked by another request"))
 }
 
 async fn load_grant_for_result(
@@ -1702,6 +1972,17 @@ fn validate_grant_request(request: CreateGrantRequest) -> Result<ValidatedGrantR
         artifact_type,
         expires_at: Utc::now() + Duration::minutes(request.ttl_minutes),
     })
+}
+
+/// A revocation reason has to survive being read months later by someone who
+/// was not in the conversation, so a one-word answer is rejected. The bounds
+/// match the rollback reason the same console already enforces.
+fn validate_revocation_reason(value: String) -> Result<String, ()> {
+    let reason = value.trim().to_string();
+    if !(12..=500).contains(&reason.len()) {
+        return Err(());
+    }
+    Ok(reason)
 }
 
 fn validate_rollback_request(request: RollbackRequest) -> Result<ValidatedRollbackRequest, ()> {
@@ -2185,8 +2466,10 @@ mod tests {
     #[tokio::test]
     async fn manage_mutations_require_step_up_before_database_access() {
         let app = deep_ai_router(state());
+        let revoke_uri = format!("/api/v1/deep-ai/artifact-grants/{}/revoke", Uuid::nil());
         for uri in [
             "/api/v1/deep-ai/artifact-grants",
+            revoke_uri.as_str(),
             "/api/v1/deep-ai/analysis-results",
             "/api/v1/deep-ai/rollback",
         ] {
@@ -2214,6 +2497,130 @@ mod tests {
                 serde_json::from_slice(&bytes).expect("step-up rejection must be JSON");
             assert_eq!(body["code"], "STEP_UP_REQUIRED", "uri = {uri}");
         }
+    }
+
+    #[tokio::test]
+    async fn grant_revocation_requires_manage_permission() {
+        let app = deep_ai_router(state());
+        let revoke_uri = format!("/api/v1/deep-ai/artifact-grants/{}/revoke", Uuid::nil());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(revoke_uri)
+                    .extension(context(vec![
+                        DEEP_AI_VIEW_PERMISSION.to_string(),
+                        "trace:view".to_string(),
+                    ]))
+                    .header("content-type", "application/json")
+                    .header(IDEMPOTENCY_HEADER, "revoke-attempt-1")
+                    .body(Body::from(revocation_body(
+                        "the incident closed and no further analysis is needed",
+                    )))
+                    .expect("request must build"),
+            )
+            .await
+            .expect("router must answer");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn grant_revocation_rejects_an_identifier_that_is_not_a_grant() {
+        let app = deep_ai_router(state());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/deep-ai/artifact-grants/recent/revoke")
+                    .extension(context(vec![DEEP_AI_MANAGE_PERMISSION.to_string()]))
+                    .header("content-type", "application/json")
+                    .header(IDEMPOTENCY_HEADER, "revoke-attempt-2")
+                    .body(Body::from(revocation_body(
+                        "the analyst no longer needs this artifact in scope",
+                    )))
+                    .expect("request must build"),
+            )
+            .await
+            .expect("router must answer");
+        // A word where a UUID belongs cannot name a record, and the answer is
+        // 400 rather than 404 so the route cannot be probed for ids it does not
+        // recognise. The lazy test pool points at a dead port, so reaching this
+        // status also proves no query ran.
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(body_code(response).await, "INVALID_REQUEST");
+    }
+
+    #[tokio::test]
+    async fn grant_revocation_requires_an_idempotency_key() {
+        let app = deep_ai_router(state());
+        let revoke_uri = format!("/api/v1/deep-ai/artifact-grants/{}/revoke", Uuid::nil());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(revoke_uri)
+                    .extension(context(vec![DEEP_AI_MANAGE_PERMISSION.to_string()]))
+                    .header("content-type", "application/json")
+                    .body(Body::from(revocation_body(
+                        "the analyst no longer needs this artifact in scope",
+                    )))
+                    .expect("request must build"),
+            )
+            .await
+            .expect("router must answer");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(body_code(response).await, "IDEMPOTENCY_REQUIRED");
+    }
+
+    #[tokio::test]
+    async fn grant_revocation_rejects_a_thin_reason() {
+        let app = deep_ai_router(state());
+        let revoke_uri = format!("/api/v1/deep-ai/artifact-grants/{}/revoke", Uuid::nil());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(revoke_uri)
+                    .extension(context(vec![DEEP_AI_MANAGE_PERMISSION.to_string()]))
+                    .header("content-type", "application/json")
+                    .header(IDEMPOTENCY_HEADER, "revoke-attempt-3")
+                    .body(Body::from(revocation_body("done")))
+                    .expect("request must build"),
+            )
+            .await
+            .expect("router must answer");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(body_code(response).await, "INVALID_REQUEST");
+    }
+
+    #[test]
+    fn revocation_reason_requires_a_substantive_sentence() {
+        assert_eq!(
+            validate_revocation_reason(
+                "  the incident closed and no further analysis is needed  ".to_string()
+            )
+            .expect("reason should validate"),
+            "the incident closed and no further analysis is needed"
+        );
+        assert!(validate_revocation_reason("done".to_string()).is_err());
+        assert!(
+            validate_revocation_reason("x".repeat(501)).is_err(),
+            "a reason longer than the stored contract must be rejected"
+        );
+    }
+
+    /// A revoke body carrying `reason`; the console sends JSON and the contract
+    /// rejects anything else, so tests build it in one place.
+    fn revocation_body(reason: &str) -> String {
+        json!({ "reason": reason }).to_string()
+    }
+
+    async fn body_code(response: Response) -> String {
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("body must read");
+        let body: Value = serde_json::from_slice(&bytes).expect("error body must be JSON");
+        body["code"].as_str().unwrap_or_default().to_string()
     }
 
     #[tokio::test]
