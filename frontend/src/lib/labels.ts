@@ -650,6 +650,51 @@ export function roleLevelLabel(value: string): string {
 }
 
 /**
+ * How this installation proves who an administrator is before the console
+ * loads. The console cannot change it, so the words name where the identity
+ * comes from instead of naming a protocol.
+ */
+const IDENTITY_PROVIDER_LABELS = {
+  "proxy-header": "This installation's sign-in boundary",
+  oidc: "External identity provider",
+} as const;
+
+export function identityProviderLabel(value: string): string {
+  return fromLabels(IDENTITY_PROVIDER_LABELS, value);
+}
+
+/**
+ * The state of the deployment record itself. Distinct from a customer
+ * lifecycle: this says whether the installation is in service.
+ */
+const DEPLOYMENT_LIFECYCLE_LABELS = {
+  active: "In service",
+  suspended: "Suspended",
+  decommissioned: "Decommissioned",
+} as const;
+
+export function deploymentLifecycleLabel(value: string): string {
+  return fromLabels(DEPLOYMENT_LIFECYCLE_LABELS, value);
+}
+
+/**
+ * A session window in words. The server publishes seconds because that is what
+ * it enforces; nobody reads a policy as 28800.
+ */
+export function sessionWindowLabel(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return "Not published";
+  }
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  }
+  const hours = minutes / 60;
+  const rounded = Number.isInteger(hours) ? String(hours) : hours.toFixed(1);
+  return `${rounded} hour${hours === 1 ? "" : "s"}`;
+}
+
+/**
  * Tooltips. One rule each, stated as what happens rather than how it is
  * implemented; the primitives/Hint component carries them to assistive tech.
  */
@@ -687,4 +732,14 @@ export const HINTS = {
     "Only a release this deployment approved can be cited. A finding cannot claim a model that does not exist or one that was rejected.",
   grantRevocation:
     "Ends this access now instead of waiting for it to expire. No new finding can cite the grant afterwards, and your name and reason stay on the record. Changing this signs you in again first.",
+  platformReadout:
+    "The running platform reports these facts about itself. They are published to system administrators only and nothing on this page changes them.",
+  identityMode:
+    "How this installation proves who you are before the console loads. Support needs this when a sign-in problem belongs to the provider rather than to your account.",
+  sessionPolicy:
+    "How long this sign-in lasts. The idle window restarts when you use the console; the absolute window does not. Re-authentication is the short window a high-risk change needs.",
+  deploymentRecord:
+    "The installation this console is connected to. Changing it is a deployment task, not a console setting, so it is shown here rather than edited.",
+  configPublisher:
+    "The person who published this configuration version. Hovering the name shows the identifier the audit record uses.",
 } as const;

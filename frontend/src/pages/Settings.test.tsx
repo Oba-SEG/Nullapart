@@ -7,7 +7,7 @@ import {
   Outlet,
   RouterProvider,
 } from "@tanstack/react-router";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Settings } from "./Settings";
@@ -20,7 +20,22 @@ const runtime = {
   scanner: { total: 0, active: 0, draining: 0, offline: 0 },
 };
 
-function stubFetch(permissions: string[]) {
+const platformFacts = {
+  deploymentId: "AFRICA-1",
+  deploymentName: "Johannesburg mail serving",
+  deploymentRegion: "af-south-1",
+  deploymentLifecycle: "active",
+  deploymentCreatedAt: "2026-02-25T06:13:20+00:00",
+  deploymentRecordAvailable: true,
+  identityProvider: "proxy-header",
+  identityIssuer: null,
+  idleTtlSecs: 3600,
+  absoluteTtlSecs: 28800,
+  stepUpTtlSecs: 600,
+};
+
+/** The server decides who sees platform facts, so the stub mirrors that. */
+function stubFetch(permissions: string[], platform: unknown = undefined) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
@@ -39,6 +54,7 @@ function stubFetch(permissions: string[]) {
               customerId: null,
               stepUpActive: false,
               expiresAt: "2026-10-17T18:00:00Z",
+              ...(platform === undefined ? {} : { platform }),
             },
           }),
         };
@@ -101,11 +117,58 @@ describe("Settings", () => {
     expect(screen.getByText("Not verified")).toBeTruthy();
   });
 
-  it("withholds the deployment card when the role cannot see runtime", async () => {
+  it("withholds the runtime card when the role cannot see it", async () => {
     stubFetch(["audit:view"]);
     renderSettings();
 
     expect(await screen.findByText("Not available")).toBeTruthy();
     expect(screen.queryByText("Config version")).toBeNull();
+  });
+
+  it("reads the platform back in words for a system session", async () => {
+    stubFetch(["operations:view"], platformFacts);
+    renderSettings();
+
+    const card = await screen.findByRole("region", { name: "Platform" });
+    expect(within(card).getByText("Johannesburg mail serving")).toBeTruthy();
+    expect(within(card).getByText("In service")).toBeTruthy();
+    expect(within(card).getByText("This installation's sign-in boundary")).toBeTruthy();
+    // Seconds are what the server enforces; nobody reads a policy as 28800.
+    expect(within(card).getByText(/1 hour without activity/)).toBeTruthy();
+    expect(within(card).getByText(/8 hours from sign-in/)).toBeTruthy();
+    expect(within(card).getByText("10 minutes")).toBeTruthy();
+    expect(within(card).queryByText("28800")).toBeNull();
+    expect(within(card).queryByText("3600")).toBeNull();
+    // The reference is evidence, so it stays on the page beside the name.
+    expect(within(card).getByText("AFRICA-1")).toBeTruthy();
+    // Each hint term carries its explanation for a screen reader, not only a
+    // pointer user.
+    expect(within(card).getByText(/How long this sign-in lasts/)).toBeTruthy();
+    expect(within(card).getByText(/How this installation proves who you are/)).toBeTruthy();
+  });
+
+  it("shows no platform readout to a session the server did not publish it for", async () => {
+    stubFetch(["operations:view"], null);
+    renderSettings();
+
+    await screen.findByText("System role only");
+    expect(screen.queryByRole("region", { name: "Platform" })).toBeNull();
+  });
+
+  it("says the deployment record is unreadable rather than inventing a name", async () => {
+    stubFetch(["operations:view"], {
+      ...platformFacts,
+      deploymentName: null,
+      deploymentLifecycle: null,
+      deploymentCreatedAt: null,
+      deploymentRecordAvailable: false,
+    });
+    renderSettings();
+
+    const card = await screen.findByRole("region", { name: "Platform" });
+    expect(within(card).getByText(/could not be read/)).toBeTruthy();
+    expect(within(card).queryByText("Not named in the record")).toBeNull();
+    expect(within(card).queryByText("Provisioned")).toBeNull();
+    expect(within(card).getByText("AFRICA-1")).toBeTruthy();
   });
 });

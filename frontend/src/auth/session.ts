@@ -18,6 +18,27 @@ export interface ImpersonationInfo {
   startedAt: string;
 }
 
+/**
+ * Facts about the installation itself, published by the server to System-tier
+ * sessions only. Every value is read-only: the console renders what the
+ * platform reports and never lets a browser hold or edit configuration.
+ */
+export interface PlatformFacts {
+  deploymentId: string;
+  /** Null when the deployment record could not be read. Never invented. */
+  deploymentName: string | null;
+  deploymentRegion: string;
+  deploymentLifecycle: string | null;
+  deploymentCreatedAt: string | null;
+  deploymentRecordAvailable: boolean;
+  identityProvider: string;
+  /** OIDC issuer only; a client id or secret is never published. */
+  identityIssuer: string | null;
+  idleTtlSecs: number;
+  absoluteTtlSecs: number;
+  stepUpTtlSecs: number;
+}
+
 export interface Session {
   authenticated: boolean;
   userId: string;
@@ -31,6 +52,8 @@ export interface Session {
   csrfToken?: string;
   /** Active customer-entry overlay; the actor's roles/permissions are unchanged. */
   impersonation?: ImpersonationInfo | null;
+  /** Present only for a System-tier actor; the server decides, not the UI. */
+  platform?: PlatformFacts | null;
 }
 
 export function hasPermission(session: Session | null, permission: string): boolean {

@@ -504,6 +504,48 @@ pub struct ControlPlaneTemplate {
     pub config_revision: i64,
 }
 
+/// The `deployments` row behind the running control plane.
+///
+/// Published to System-tier sessions only, so the console can name the
+/// deployment an administrator is operating instead of showing a bare id.
+#[derive(Debug, Clone)]
+pub struct DeploymentFacts {
+    pub display_name: String,
+    pub region: String,
+    pub lifecycle: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Platform facts the console renders on the Platform settings surface.
+///
+/// Every value is server-derived: the deployment record, the configured
+/// identity mode and the session policy that governs the caller's own session.
+/// Nothing here is secret and nothing here is writable, so the browser never
+/// has to guess or hold configuration. Rate-limit budgets are deliberately
+/// absent: an abuse threshold does not belong in a payload a browser can read.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlatformView {
+    deployment_id: String,
+    /// `None` when the `deployments` row could not be read. The console then
+    /// says the record is unavailable rather than inventing a name.
+    deployment_name: Option<String>,
+    deployment_region: String,
+    deployment_lifecycle: Option<String>,
+    deployment_created_at: Option<String>,
+    /// False when the deployment record could not be read.
+    deployment_record_available: bool,
+    /// `proxy-header` for the local reverse-proxy boundary, `oidc` for a
+    /// configured identity provider.
+    identity_provider: &'static str,
+    /// OIDC issuer only; never a client id, secret or redirect target.
+    identity_issuer: Option<String>,
+    idle_ttl_secs: i64,
+    absolute_ttl_secs: i64,
+    step_up_ttl_secs: i64,
+}
+
 /// One admin user with role membership.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -585,6 +627,10 @@ struct SessionView {
     csrf_token: String,
     /// Active acting-as context powering the persistent impersonation banner.
     impersonation: Option<SessionImpersonationView>,
+    /// Platform facts, published only to a System-tier actor. A Support or
+    /// Customer session gets `None`, so platform configuration never widens
+    /// its own audience through this payload.
+    platform: Option<PlatformView>,
 }
 
 #[derive(Debug, Serialize)]
@@ -601,6 +647,7 @@ fn session_view(
     session: &ActiveSession,
     template: &ControlPlaneTemplate,
     step_up_ttl_secs: i64,
+    platform: Option<PlatformView>,
 ) -> SessionView {
     SessionView {
         authenticated: true,
@@ -626,6 +673,7 @@ fn session_view(
                 started_at: impersonation.started_at.to_rfc3339(),
             }
         }),
+        platform,
     }
 }
 
@@ -1026,6 +1074,23 @@ pub trait AdminRbacStore: Send + Sync {
         role_key: &str,
     ) -> Result<Option<String>, AdminRbacError>;
 
+    /// Whether any of these role keys is stored at `system` level for this
+    /// deployment. Resolves through the stored `role_level`, so a custom
+    /// system-level role counts exactly like the builtin System Administrator.
+    async fn has_system_role(
+        &self,
+        deployment_id: &str,
+        role_keys: &[String],
+    ) -> Result<bool, AdminRbacError>;
+
+    /// The `deployments` record for this deployment. `Ok(None)` means the row
+    /// could not be read, which the caller reports as unavailable instead of
+    /// substituting a value.
+    async fn deployment_facts(
+        &self,
+        deployment_id: &str,
+    ) -> Result<Option<DeploymentFacts>, AdminRbacError>;
+
     async fn list_role_definitions(
         &self,
         deployment_id: &str,
@@ -1154,7 +1219,15 @@ pub struct InMemoryAdminRbacStore {
     customers: std::sync::Mutex<Vec<MemoryCustomer>>,
     roles: std::sync::Mutex<Vec<MemoryRole>>,
     flows: std::sync::Mutex<Vec<MemoryFlow>>,
+    deployments: std::sync::Mutex<Vec<MemoryDeployment>>,
     audit: Arc<dyn AuditStore>,
+}
+
+/// A seeded `deployments` row for the in-memory store.
+#[derive(Debug, Clone)]
+struct MemoryDeployment {
+    deployment_id: String,
+    facts: DeploymentFacts,
 }
 
 #[derive(Clone)]
@@ -1175,8 +1248,22 @@ impl InMemoryAdminRbacStore {
             customers: std::sync::Mutex::new(Vec::new()),
             roles: std::sync::Mutex::new(Vec::new()),
             flows: std::sync::Mutex::new(Vec::new()),
+            deployments: std::sync::Mutex::new(Vec::new()),
             audit,
         }
+    }
+
+    /// Seeds the deployment record the platform readout publishes. Tests that
+    /// exercise the System-tier platform block call this; without a seeded row
+    /// the store reports the record as unavailable, which is the honest answer.
+    pub fn seed_deployment(&self, deployment_id: &str, facts: DeploymentFacts) {
+        self.deployments
+            .lock()
+            .expect("deployment rows lock")
+            .push(MemoryDeployment {
+                deployment_id: deployment_id.to_string(),
+                facts,
+            });
     }
 
     /// Seeds a customer entry target (tests and local fixtures).
@@ -2038,6 +2125,30 @@ impl AdminRbacStore for InMemoryAdminRbacStore {
         Ok(self
             .role_definition(deployment_id, role_key)
             .map(|record| record.role_level))
+    }
+
+    async fn has_system_role(
+        &self,
+        deployment_id: &str,
+        role_keys: &[String],
+    ) -> Result<bool, AdminRbacError> {
+        Ok(role_keys.iter().any(|role_key| {
+            self.role_definition(deployment_id, role_key)
+                .is_some_and(|record| record.role_level == "system")
+        }))
+    }
+
+    async fn deployment_facts(
+        &self,
+        deployment_id: &str,
+    ) -> Result<Option<DeploymentFacts>, AdminRbacError> {
+        Ok(self
+            .deployments
+            .lock()
+            .expect("deployment rows lock")
+            .iter()
+            .find(|record| record.deployment_id == deployment_id)
+            .map(|record| record.facts.clone()))
     }
 
     async fn list_role_definitions(
@@ -3425,6 +3536,57 @@ impl AdminRbacStore for PostgresAdminRbacStore {
         Ok(level)
     }
 
+    async fn has_system_role(
+        &self,
+        deployment_id: &str,
+        role_keys: &[String],
+    ) -> Result<bool, AdminRbacError> {
+        if role_keys.is_empty() {
+            return Ok(false);
+        }
+        let mut transaction = self.begin_scoped(deployment_id).await?;
+        let found = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM admin_roles \
+             WHERE deployment_id = $1 AND role_level = 'system' AND role_key = ANY($2))",
+        )
+        .bind(deployment_id)
+        .bind(role_keys.to_vec())
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|_| AdminRbacError::PersistenceFailed)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| AdminRbacError::PersistenceFailed)?;
+        Ok(found)
+    }
+
+    async fn deployment_facts(
+        &self,
+        deployment_id: &str,
+    ) -> Result<Option<DeploymentFacts>, AdminRbacError> {
+        let mut transaction = self.begin_scoped(deployment_id).await?;
+        let row = sqlx::query(
+            "SELECT display_name, region, lifecycle, created_at, updated_at \
+             FROM deployments WHERE id = $1",
+        )
+        .bind(deployment_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| AdminRbacError::PersistenceFailed)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| AdminRbacError::PersistenceFailed)?;
+        Ok(row.map(|row| DeploymentFacts {
+            display_name: row.get("display_name"),
+            region: row.get("region"),
+            lifecycle: row.get("lifecycle"),
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
+        }))
+    }
+
     async fn list_role_definitions(
         &self,
         deployment_id: &str,
@@ -3884,6 +4046,61 @@ impl AdminRbacState {
     /// OIDC settings when the provider mode is `oidc`.
     fn oidc_config(&self) -> Option<&OidcConfig> {
         self.0.identity.oidc.as_ref()
+    }
+
+    /// Platform facts for a System-tier session; `None` for every other actor.
+    ///
+    /// The tier check reads the stored role level, so a custom system-level
+    /// role sees exactly what the builtin System Administrator sees and a
+    /// Support or Customer session sees nothing new. A role level that cannot
+    /// be resolved fails closed to `None`. A deployment row that cannot be read
+    /// degrades to an unavailable record instead of failing the session, and
+    /// the region then comes from the configured template rather than being
+    /// invented.
+    async fn platform_view(&self, session: &ActiveSession) -> Option<PlatformView> {
+        let deployment_id = self.0.deployment_id.0.as_str();
+        let system_tier = match self
+            .0
+            .store
+            .has_system_role(deployment_id, &session.roles)
+            .await
+        {
+            Ok(found) => found,
+            Err(error) => {
+                error!(%error, "failed to resolve role level for the platform readout");
+                return None;
+            },
+        };
+        if !system_tier {
+            return None;
+        }
+        let facts = match self.0.store.deployment_facts(deployment_id).await {
+            Ok(facts) => facts,
+            Err(error) => {
+                error!(%error, "failed to read the deployment record for the platform readout");
+                None
+            },
+        };
+        let config = &self.0.session_config;
+        Some(PlatformView {
+            deployment_id: deployment_id.to_string(),
+            deployment_name: facts.as_ref().map(|facts| facts.display_name.clone()),
+            deployment_region: facts
+                .as_ref()
+                .map(|facts| facts.region.clone())
+                .unwrap_or_else(|| self.0.template.region.0.clone()),
+            deployment_lifecycle: facts.as_ref().map(|facts| facts.lifecycle.clone()),
+            deployment_created_at: facts.as_ref().map(|facts| facts.created_at.to_rfc3339()),
+            deployment_record_available: facts.is_some(),
+            identity_provider: match self.identity_kind() {
+                IdentityProviderKind::Oidc => "oidc",
+                IdentityProviderKind::ProxyHeader => "proxy-header",
+            },
+            identity_issuer: self.oidc_config().map(|config| config.issuer.clone()),
+            idle_ttl_secs: config.idle_ttl_secs,
+            absolute_ttl_secs: config.absolute_ttl_secs,
+            step_up_ttl_secs: config.step_up_ttl_secs,
+        })
     }
 
     fn bearer_valid(&self, candidate: &str) -> bool {
@@ -4683,6 +4900,7 @@ async fn establish_session(
         &session,
         &state.0.template,
         state.0.session_config.step_up_ttl_secs,
+        state.platform_view(&session).await,
     );
     match presentation {
         LoginPresentation::Json => (
@@ -5264,6 +5482,7 @@ async fn get_session(
         &session,
         &state.0.template,
         state.0.session_config.step_up_ttl_secs,
+        state.platform_view(&session).await,
     );
     (StatusCode::OK, Json(ApiEnvelope { data: view })).into_response()
 }
@@ -9403,6 +9622,161 @@ mod tests {
             "north-customer",
             "a customer-bound identity never resolves to the template tenant"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Platform readout: System-tier facts on the session payload
+    // -----------------------------------------------------------------------
+
+    /// Seeds the `deployments` row the platform readout publishes.
+    fn seed_deployment_record(fixture: &Fixture) {
+        fixture.store.seed_deployment(
+            "TEST-DEPLOYMENT",
+            DeploymentFacts {
+                display_name: "Nullapart Local".to_string(),
+                region: "af-south-1".to_string(),
+                lifecycle: "active".to_string(),
+                created_at: DateTime::from_timestamp(1_772_000_000, 0).expect("valid timestamp"),
+                updated_at: DateTime::from_timestamp(1_772_000_000, 0).expect("valid timestamp"),
+            },
+        );
+    }
+
+    async fn session_data(app: &Router, cookie: &str) -> serde_json::Value {
+        let response = app
+            .clone()
+            .oneshot(session_request(Some(cookie)))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::OK);
+        data_of(&read_body(response).await)
+    }
+
+    #[tokio::test]
+    async fn platform_facts_are_published_to_a_system_tier_session() {
+        let fixture = default_fixture();
+        seed_deployment_record(&fixture);
+        let app = app(&fixture);
+        let (cookie, _) = admin_session(&app).await;
+
+        let platform = session_data(&app, &cookie).await["platform"].clone();
+        assert_eq!(platform["deploymentId"], "TEST-DEPLOYMENT");
+        assert_eq!(platform["deploymentName"], "Nullapart Local");
+        assert_eq!(platform["deploymentRegion"], "af-south-1");
+        assert_eq!(platform["deploymentLifecycle"], "active");
+        assert_eq!(
+            platform["deploymentCreatedAt"], "2026-02-25T06:13:20+00:00",
+            "the record's own timestamp is published, not a generated one"
+        );
+        assert_eq!(platform["deploymentRecordAvailable"], true);
+        assert_eq!(platform["identityProvider"], "proxy-header");
+        assert!(platform["identityIssuer"].is_null());
+        assert_eq!(
+            platform["idleTtlSecs"],
+            SessionConfig::default().idle_ttl_secs
+        );
+        assert_eq!(
+            platform["absoluteTtlSecs"],
+            SessionConfig::default().absolute_ttl_secs
+        );
+        assert_eq!(
+            platform["stepUpTtlSecs"],
+            SessionConfig::default().step_up_ttl_secs
+        );
+    }
+
+    #[tokio::test]
+    async fn platform_facts_stay_hidden_from_a_customer_session() {
+        let fixture = default_fixture();
+        seed_deployment_record(&fixture);
+        let app = app(&fixture);
+        let (cookie, _) = customer_admin_session(&fixture, &app, "north@example.test").await;
+
+        let data = session_data(&app, &cookie).await;
+        assert!(
+            data["platform"].is_null(),
+            "a customer-tier session must not receive platform configuration"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_deployment_record_is_reported_not_invented() {
+        let fixture = default_fixture();
+        let app = app(&fixture);
+        let (cookie, _) = admin_session(&app).await;
+
+        let platform = session_data(&app, &cookie).await["platform"].clone();
+        assert_eq!(platform["deploymentRecordAvailable"], false);
+        assert!(platform["deploymentName"].is_null());
+        assert!(platform["deploymentLifecycle"].is_null());
+        assert_eq!(
+            platform["deploymentRegion"], "local",
+            "the region falls back to the configured template, never to a guess"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_platform_readout_names_the_identity_provider_without_a_secret() {
+        let identity = IdentityConfig::from_lookup(|name| match name {
+            "NULLAPART_IDENTITY_PROVIDER" => Some("oidc".to_string()),
+            "NULLAPART_OIDC_ISSUER" => {
+                Some("https://idp.example.test/realms/nullapart".to_string())
+            },
+            "NULLAPART_OIDC_REDIRECT_URI" => {
+                Some(format!("https://console.example.test{OIDC_CALLBACK_PATH}"))
+            },
+            "NULLAPART_OIDC_CLIENT_ID" => Some("test-oidc-client".to_string()),
+            "NULLAPART_OIDC_CLIENT_SECRET" => Some("test-client-secret".to_string()),
+            _ => None,
+        })
+        .expect("oidc identity configuration");
+        let fixture = fixture_with_identity(
+            SessionConfig::default(),
+            HighRiskLimits::permission_change(),
+            HighRiskLimits::impersonation_start(),
+            identity,
+        );
+        seed_deployment_record(&fixture);
+        let session = system_session();
+
+        // OIDC login redirects to the IdP instead of answering JSON, so the
+        // projection is exercised directly here; the HTTP path is covered by
+        // the proxy-mode test above.
+        let view = fixture
+            .state
+            .platform_view(&session)
+            .await
+            .expect("a system-tier actor sees the platform block");
+        let body = serde_json::to_string(&view).expect("platform view serializes");
+        assert!(body.contains(r#""identityProvider":"oidc""#));
+        assert!(body.contains("https://idp.example.test/realms/nullapart"));
+        assert!(
+            !body.contains("test-client-secret") && !body.contains("test-oidc-client"),
+            "the readout publishes the issuer only, never a relying-party credential"
+        );
+    }
+
+    /// A System-tier session for projections that are exercised without a
+    /// login round trip.
+    fn system_session() -> ActiveSession {
+        let now = Utc::now();
+        ActiveSession {
+            session_id: Uuid::new_v4(),
+            deployment_id: "TEST-DEPLOYMENT".to_string(),
+            user_id: Uuid::new_v4(),
+            login: "operator@example.test".to_string(),
+            roles: vec![SYSTEM_ADMIN_ROLE.to_string()],
+            permissions: vec![ADMIN_USERS_MANAGE_PERMISSION.to_string()],
+            customer_id: None,
+            customer_internal_key: None,
+            customer_display_name: None,
+            customer_lifecycle: None,
+            csrf_token: "csrf-token".to_string(),
+            authenticated_at: now,
+            absolute_expires_at: now + Duration::hours(8),
+            step_up_at: Some(now),
+            impersonation: None,
+        }
     }
 
     // -----------------------------------------------------------------------

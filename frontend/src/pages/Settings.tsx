@@ -8,7 +8,13 @@ import { useSyncExternalStore } from "react";
 import { Button } from "../components/primitives/Button";
 import { ControlRail } from "../components/ControlRail";
 import { Hint } from "../components/primitives/Hint";
-import { roleLevelLabel } from "../lib/labels";
+import {
+  HINTS,
+  deploymentLifecycleLabel,
+  identityProviderLabel,
+  roleLevelLabel,
+  sessionWindowLabel,
+} from "../lib/labels";
 import { WorkspaceHeader } from "../components/WorkspaceHeader";
 import { WorkflowGuide } from "../components/WorkflowGuide";
 import "./Settings.css";
@@ -47,12 +53,15 @@ export function Settings() {
   // The rail shows the word the picker uses, never the stored key.
   const themeLabel = options.find((option) => option.value === theme)?.label ?? theme;
 
+  // The server decides who gets platform facts; the console only renders them.
+  const platform = session?.platform ?? null;
+
   return (
     <div className="settings-page">
       <WorkspaceHeader
         eyebrow="Console preferences"
         title="Settings"
-        description="Set how the console looks on this device and check the session you are signed in with. These browser preferences do not change what you can access."
+        description="Set how the console looks on this device, check the session you are signed in with, and read what the running platform reports about itself."
         scope="Local browser preferences"
       />
 
@@ -67,6 +76,12 @@ export function Settings() {
             detail: "Permissions on your current session.",
           },
           {
+            label: "Platform facts",
+            value: platform ? "Published" : "System role only",
+            detail: "The installation, sign-in method and session policy you are using.",
+            tone: platform ? "healthy" : "neutral",
+          },
+          {
             label: "Runtime",
             value: canSeeRuntime ? "Allowed" : "Not available",
             detail: "Runtime detail appears only when your role allows it.",
@@ -77,7 +92,7 @@ export function Settings() {
 
       <WorkflowGuide
         title="Separate console preference from access"
-        description="This page shows which settings live in your browser and which come from your sign-in."
+        description="This page shows which settings live in your browser, which come from your sign-in, and which belong to the installation itself."
         steps={[
           {
             label: "Set appearance",
@@ -86,6 +101,11 @@ export function Settings() {
           {
             label: "Confirm session",
             detail: "Check who you are signed in as and whether you have entered a customer.",
+          },
+          {
+            label: "Read the platform",
+            detail:
+              "Check which installation you are on, how you signed in, and how long it lasts.",
           },
           {
             label: "Inspect runtime",
@@ -165,16 +185,90 @@ export function Settings() {
           )}
         </section>
 
+        {platform ? (
+          <section className="card settings-card" aria-labelledby="settings-platform-heading">
+            <h2 id="settings-platform-heading" className="section-title">
+              Platform
+            </h2>
+            <p className="settings-hint">
+              <Hint label={HINTS.platformReadout}>
+                <span className="hint-term">These facts come from the running platform</span>
+              </Hint>
+              , not from this browser. Nothing on this page changes them; each is set when the
+              installation is built.
+            </p>
+
+            {platform.deploymentRecordAvailable ? (
+              <dl className="settings-facts">
+                <dt>
+                  <Hint label={HINTS.deploymentRecord}>
+                    <span className="hint-term">Installation</span>
+                  </Hint>
+                </dt>
+                <dd>{platform.deploymentName ?? "Not named in the record"}</dd>
+                <dt>Deployment reference</dt>
+                <dd className="settings-mono">{platform.deploymentId}</dd>
+                <dt>Region</dt>
+                <dd>{platform.deploymentRegion}</dd>
+                <dt>Serving status</dt>
+                <dd>
+                  {platform.deploymentLifecycle
+                    ? deploymentLifecycleLabel(platform.deploymentLifecycle)
+                    : "Not recorded"}
+                </dd>
+                <dt>Provisioned</dt>
+                <dd>{new Date(platform.deploymentCreatedAt ?? 0).toLocaleDateString()}</dd>
+              </dl>
+            ) : (
+              <>
+                <p className="settings-hint" role="status">
+                  The deployment record could not be read, so this installation has no name, status
+                  or provisioned date to show. The reference below is what the running service
+                  holds.
+                </p>
+                <dl className="settings-facts">
+                  <dt>Deployment reference</dt>
+                  <dd className="settings-mono">{platform.deploymentId}</dd>
+                  <dt>Region</dt>
+                  <dd>{platform.deploymentRegion}</dd>
+                </dl>
+              </>
+            )}
+
+            <dl className="settings-facts">
+              <dt>
+                <Hint label={HINTS.identityMode}>
+                  <span className="hint-term">Sign-in method</span>
+                </Hint>
+              </dt>
+              <dd>
+                {identityProviderLabel(platform.identityProvider)}
+                {platform.identityIssuer ? (
+                  <span className="settings-secondary"> · {platform.identityIssuer}</span>
+                ) : null}
+              </dd>
+              <dt>
+                <Hint label={HINTS.sessionPolicy}>
+                  <span className="hint-term">Idle window</span>
+                </Hint>
+              </dt>
+              <dd>{sessionWindowLabel(platform.idleTtlSecs)} without activity</dd>
+              <dt>Longest a sign-in lasts</dt>
+              <dd>{sessionWindowLabel(platform.absoluteTtlSecs)} from sign-in</dd>
+              <dt>Re-authentication lasts</dt>
+              <dd>{sessionWindowLabel(platform.stepUpTtlSecs)}</dd>
+            </dl>
+          </section>
+        ) : null}
+
         {canSeeRuntime ? (
-          <section className="card settings-card" aria-labelledby="settings-deployment-heading">
-            <h2 id="settings-deployment-heading" className="section-title">
-              Deployment
+          <section className="card settings-card" aria-labelledby="settings-runtime-heading">
+            <h2 id="settings-runtime-heading" className="section-title">
+              Runtime
             </h2>
             {runtime.data ? (
               <>
                 <dl className="settings-facts">
-                  <dt>Deployment</dt>
-                  <dd>{runtime.data.deployment_id}</dd>
                   <dt>Config version</dt>
                   <dd>{runtime.data.config.db_revision ?? "Unknown"}</dd>
                   <dt>Pending publication</dt>

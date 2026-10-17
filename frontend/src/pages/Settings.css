@@ -108,3 +108,15 @@
   font-weight: var(--font-weight-medium);
   color: var(--color-primary);
 }
+
+/* An identifier stays an identifier: monospace and smaller than the words. */
+.settings-mono {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+
+.settings-secondary {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
+}
