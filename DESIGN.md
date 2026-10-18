@@ -88,6 +88,9 @@ alone: the label always ships with the icon.
   Tables stay tables: one bordered frame, no per-cell treatment.
 - **Inputs**: white fill, 1px `--color-border-strong`, radius 4px, focus =
   accent border + `--focus-ring`.
+- **Links**: colour shift on hover, never an underline. Every link here is a
+  discrete affordance (nav row, table action, labelled button), not a link
+  inside running prose, so the underline read as a selection artefact.
 - **Dialogs**: the only shadowed surface (`--shadow-lg`) over a dimmed
   backdrop.
 - **Nav active state**: `--color-rail-active-bg` fill plus a white semibold

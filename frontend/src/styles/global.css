@@ -64,9 +64,11 @@ a {
   transition: color var(--transition-fast);
 }
 
+/* Hover changes the colour only. Every link in this console is a discrete
+ * affordance (a nav row, a table action, a labelled button), so the underline
+ * read as a text-selection artefact rather than feedback. */
 a:hover {
   color: var(--color-link-hover);
-  text-decoration: underline;
 }
 
 /* Buttons: rectangular, hairline-bounded, colour-shift only on hover. Depth
