@@ -427,6 +427,33 @@ rules instead of elevation, one cool accent, and dense data surfaces.
   two diagrams, plus `DESIGN.md` and `PRODUCT.md`. The board pack still governs
   brand assets and the status icon chips; it no longer governs surface treatment.
 
+## Landed in the eighth pass (density and the last flat-contract leftovers)
+
+Verified live at 1440x900 across 14 routes, then fixed what the screenshots
+exposed:
+
+- **Rail density.** The sidebar footer fell below the fold at 900px. The rail
+  now uses one smaller spacing step, a 152px wordmark, 29px nav rows at the
+  `md` type step, and a tighter boundary card. `Sign out` is visible on every
+  route at 900px.
+- **Settings grid.** Panels no longer stretch to the tallest sibling
+  (`align-items: start`), which removes the dead space under `Appearance`.
+- **Hint affordance.** A 1px dashed border under a hinted label read as a
+  broken rule wherever a whole row label carried a hint (the platform readout
+  hinted five labels in one card). The term now uses a dotted text underline
+  that darkens on hover and focus.
+- **Governance rail squeeze.** Deep AI release cards share a 300px column with
+  a status pill and a rollback button that refused to shrink, so the model name
+  wrapped one character per line. Those cards stack instead.
+- **Last violations.** Removed the 24px/18px panel radii, the `--color-bg-glass`
+  surfaces and the 2px rule drawn above every Deep AI panel; the workflow-guide
+  description column widened from 34ch to 52ch so it stops inflating its strip.
+
+Deferred, not fixed: the Overview control rail restates the metric strip below
+it, and `--color-bg-glass` / `--color-bg-glass-strong` still exist as flat
+aliases of the surface colours. Renaming them is a cross-file sweep that should
+ride along with a component pass, not a styling commit.
+
 ## Deploy incident: never `rsync --delete` to `.4`
 
 A previous sync used `rsync --delete` while deploying frontend changes. It was

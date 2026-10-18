@@ -45,7 +45,7 @@
 @media (min-width: 1200px) {
   .workflow-guide-intro > p:last-child {
     display: block;
-    flex: 0 1 34ch;
+    flex: 0 1 52ch;
     color: var(--color-text-tertiary);
     font-size: 0.74rem;
     line-height: 1.4;
