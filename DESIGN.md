@@ -90,15 +90,20 @@ alone: the label always ships with the icon.
   accent border + `--focus-ring`.
 - **Dialogs**: the only shadowed surface (`--shadow-lg`) over a dimmed
   backdrop.
-- **Nav active state**: `--color-rail-active-bg` fill with white semibold
-  label, plus an aria-current hook. No solid lime pill.
+- **Nav active state**: `--color-rail-active-bg` fill, white semibold label and a
+  2px inset `--color-rail-accent` bar inside the row, plus an aria-current hook.
+  Selection never relies on a border around the pill, and there is no solid lime
+  pill.
 - **Toasts, hints, badges**: hairline-bordered, tint-filled, no glow.
 
 ## Layout
 
-- **App shell: left sidebar**, 240px, dark ink rail holding the horizontal
-  logo artwork, vertical nav, and session/sign-out at the foot. Content
-  column `min(1440px, 100%)`. Collapses to a horizontal nav under 900px.
+- **App shell: left sidebar**, 240px, dark ink rail: the horizontal logo
+  artwork, grouped vertical nav, then one account block at the foot (operator
+  identity and boundary label, the display-mode control and sign out). The rail
+  carries no session card, because the command bar above the content already
+  states scope and authority. Content column `min(1440px, 100%)`. Below 980px
+  the rail becomes a top bar and the account block stays visible.
 - **Login**: light page, a single bordered two-panel stage. The left brief
   panel is the dark ink ground with the wordmark and a plain sentence; the
   right panel is the form. No backdrop imagery, no rings, no glow.
