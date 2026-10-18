@@ -21,40 +21,47 @@ operational decisions with clear evidence and zero ambiguity about system state.
 
 ## Brand Personality
 
-Precise, vigilant, electric. Security-grade seriousness with a high-energy
-signal color; confident and technical, never playful or corporate-soft.
+Precise, procedural, authoritative. Security-grade seriousness carried by
+typographic hierarchy and a single cool accent; confident and technical, never
+playful and never decorative.
+
+## References
+
+Mimecast Admin Console and Proofpoint Enterprise Privacy: light canvas, dense
+hairline-bounded tables, compact controls, one accent colour, status conveyed
+by a fixed semantic scale. Brand assets (logo crops, status icon chips, the
+lime signal hue) carry over from the approved "ACID LIME + MIDNIGHT" board.
 
 ## Anti-references
 
-- The console's former look: light neumorphic gray/blue enterprise UI
-  (soft embossed cards, muted slate text), called out in CODE-STANDARDS as
-  accessibility-breaking neumorphism.
-- Generic light SaaS admin templates: white-on-white cards, pillowy shadows,
-  indigo primary, decorative gradients.
-- Marketing gloss inside the product: hero theatrics, gradient text,
-  decorative glassmorphism on operational data.
+- Skeuomorphic depth of any kind: embossed or clay-like cards, inset wells,
+  glow, decorative gradients, shadow-as-hierarchy.
+- Generic light SaaS admin templates: pillowy shadow cards, indigo primary,
+  gradient heroes, glass panels.
+- Marketing gloss inside the product: hero theatrics, gradient text, oversized
+  display numerals, background imagery behind operational data.
 
 ## Design Principles
 
-1. Signal has meaning: acid lime marks live/active/primary affordances; nothing
-   is lime because it looks nice.
-2. Status is readable at a glance: threat (pink), clean (cyan), review (amber)
-   follow one semantic scale across every table, badge, and icon.
-3. Dark-first, contrast-locked: Midnight canvas with ≥4.5:1 body contrast in
-   both themes; the light theme is a peer theme, not an afterthought.
-4. Density with hierarchy: tables and forms stay information-dense; scale and
-   weight contrast (Inter Light→Extrabold) carry hierarchy, not decoration.
-5. The brand shows up where identity matters (login, header, empty states),
-   the workflow stays quiet everywhere else.
+1. Flat by default: 1px rules and background steps separate surfaces. Only
+   floating dialogs carry a shadow, and elevation never supplies meaning.
+2. Signal has meaning: the accent colour marks focus, links, primary actions
+   and selection; nothing is accented because it looks nice. Lime survives as
+   a brand constant (status icon chips, wordmark ground), not as an action
+   colour.
+3. Status is readable at a glance: threat, clean and review follow one
+   semantic scale across every table, badge and icon, always paired with a
+   label.
+4. Light-first, contrast-locked: ≥4.5:1 body contrast in both themes; dark is
+   a peer theme for low-light sessions, not an afterthought.
+5. Density with hierarchy: tables and forms stay information-dense; size,
+   weight and tabular numerals carry hierarchy, not decoration or display type.
+6. The brand shows up where identity matters (login, rail, empty states), the
+   workflow stays quiet everywhere else.
 
 ## Accessibility & Inclusion
 
-- Target WCAG 2.2 AA: ≥4.5:1 body text, ≥3:1 large text and UI boundaries in
-  both themes.
-- Theme choice is user-controlled (dark default, persisted light toggle).
-- `prefers-reduced-motion` respected for all transitions/animations.
-- Status never relies on color alone: icons/labels accompany semantic colors.
-- Restrained neumorphism per `docs/12-UI-DESIGN-SYSTEM.md`: raised shells and
-  recessed wells use light/dark shadow pairs, but every shell keeps a hairline
-  border, hierarchy never depends on shadow alone (CODE-STANDARDS bans only
-  accessibility-breaking embossing), and both themes hold WCAG AA contrast.
+- WCAG AA in both themes, verified per token pairing rather than assumed.
+- Keyboard navigation, visible focus ring, screen-reader labels, reduced
+  motion, non-colour status signals, and sensible zoom/responsive behaviour.
+- Compact controls keep ≥32px hit heights where practical.
