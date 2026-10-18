@@ -12,10 +12,20 @@
   box-shadow: var(--focus-ring);
 }
 
-/* A hinted term must look hinted, otherwise nobody discovers the explanation. */
+/* A hinted term must look hinted, otherwise nobody discovers the explanation.
+ * Dotted text decoration rather than a border: a whole row label can carry a
+ * hint, and a boxed border under every label in a card reads as broken rules. */
 .hint-term {
-  border-bottom: 1px dashed var(--color-border-strong);
   cursor: help;
+  text-decoration: underline dotted;
+  text-decoration-color: var(--color-border-strong);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.hint:hover .hint-term,
+.hint:focus-visible .hint-term {
+  text-decoration-color: var(--color-text-secondary);
 }
 
 .hint-bubble {
