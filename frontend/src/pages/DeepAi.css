@@ -17,9 +17,9 @@
 
 .deep-ai-state {
   border: 1px solid var(--color-border);
-  border-radius: 24px;
+  border-radius: var(--radius-md);
   padding: 2rem;
-  background: var(--color-bg-glass);
+  background: var(--color-bg-secondary);
   color: var(--color-text-secondary);
 }
 
@@ -30,10 +30,10 @@
 
 .deep-ai-summary {
   align-items: stretch;
-  background: var(--color-bg-glass);
+  background: var(--color-bg-secondary);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-md);
+
   display: flex;
   flex-wrap: wrap;
   gap: 0;
@@ -42,9 +42,8 @@
 .deep-ai-summary-card,
 .deep-ai-panel {
   border: 1px solid var(--color-border);
-  border-radius: 24px;
-  background: var(--color-bg-glass);
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
 }
 
 .deep-ai-summary-card {
@@ -173,7 +172,7 @@
 .deep-ai-dataset,
 .deep-ai-benchmark {
   border: 1px solid var(--color-border);
-  border-radius: 18px;
+  border-radius: var(--radius-md);
   background: var(--color-bg-secondary);
   padding: 0.85rem;
 }
@@ -195,10 +194,6 @@
   box-shadow: none;
 }
 
-.deep-ai-panel {
-  border-top: 2px solid var(--color-text-primary);
-}
-
 .deep-ai-release,
 .deep-ai-grant,
 .deep-ai-result-head,
@@ -207,6 +202,14 @@
   display: flex;
   justify-content: space-between;
   gap: 0.75rem;
+}
+
+/* Release cards sit in the narrow governance rail, where a status pill plus an
+ * action button are wider than the label they would squeeze. Stack the card so
+ * the identity text keeps the full width and the controls drop below it. */
+.deep-ai-release {
+  align-items: stretch;
+  flex-direction: column;
 }
 
 /* The text column has to be allowed to shrink below its longest word, otherwise

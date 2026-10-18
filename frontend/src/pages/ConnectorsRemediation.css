@@ -17,8 +17,8 @@
 .connectors-state {
   padding: 2rem;
   border: 1px solid var(--color-border);
-  border-radius: 18px;
-  background: var(--color-bg-glass);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
 }
 
 .connectors-state.error,
@@ -28,10 +28,10 @@
 
 .connectors-summary {
   align-items: stretch;
-  background: var(--color-bg-glass);
+  background: var(--color-bg-secondary);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-md);
+
   display: flex;
   flex-wrap: wrap;
   gap: 0;
@@ -39,9 +39,8 @@
 
 .connectors-panel {
   border: 1px solid var(--color-border);
-  border-radius: 18px;
-  background: var(--color-bg-glass);
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
 }
 
 .connectors-summary div {
@@ -142,7 +141,7 @@
 
 .capability-list .disabled {
   color: var(--color-text-secondary);
-  background: var(--color-bg-glass);
+  background: var(--color-bg-secondary);
 }
 
 .connectors-form label {
@@ -159,7 +158,7 @@
   border: 1px solid var(--color-border);
   border-radius: 12px;
   padding: 0.7rem 0.8rem;
-  background: var(--color-bg-glass);
+  background: var(--color-bg-secondary);
   color: var(--color-text-primary);
 }
 
@@ -174,7 +173,7 @@
 
 .connectors-editing-note {
   align-items: center;
-  background: var(--color-bg-glass);
+  background: var(--color-bg-secondary);
   border: 1px solid var(--color-border);
   border-radius: 12px;
   color: var(--color-text-primary);
