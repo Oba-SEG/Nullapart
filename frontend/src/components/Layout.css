@@ -23,7 +23,6 @@
 }
 
 .sidebar-brand,
-.sidebar-boundary,
 .sidebar-nav,
 .sidebar-foot {
   position: relative;
@@ -41,39 +40,6 @@
   height: auto;
 }
 
-.sidebar-boundary {
-  display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
-  gap: var(--spacing-2);
-  align-items: center;
-  padding: var(--spacing-2);
-  background: var(--color-rail-hover);
-  border: 1px solid var(--color-rail-border);
-  border-radius: var(--radius-md);
-}
-
-.sidebar-boundary-mark {
-  width: 22px;
-  height: 22px;
-}
-
-.sidebar-boundary span {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.sidebar-boundary strong {
-  color: var(--color-rail-text-strong);
-  font-size: var(--font-size-md);
-  font-weight: var(--font-weight-semibold);
-}
-
-.sidebar-boundary small {
-  color: var(--color-rail-muted);
-  font-size: var(--font-size-sm);
-}
-
 .sidebar-nav {
   display: flex;
   flex: 1;
@@ -82,10 +48,11 @@
 }
 
 .nav-section-label {
-  margin: var(--spacing-3) var(--spacing-2) var(--spacing-1);
+  margin: var(--spacing-4) var(--spacing-2) var(--spacing-1);
   color: var(--color-rail-muted);
   font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: 0.01em;
 }
 
 .nav-section-label:first-child {
@@ -96,16 +63,16 @@
   display: flex;
   align-items: center;
   gap: var(--spacing-3);
-  min-height: 29px;
+  min-height: 30px;
   padding: 0 var(--spacing-2);
   color: var(--color-rail-text);
-  border: 1px solid transparent;
   border-radius: var(--radius-md);
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-medium);
   transition:
     background-color var(--transition-fast),
-    color var(--transition-fast);
+    color var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
 .sidebar-nav .nav-link svg {
@@ -118,9 +85,12 @@
   background: var(--color-rail-hover);
 }
 
+/* Selection has to survive a glance at 240px: fill, weight and an inset bar
+ * inside the row. A border around the pill reads as another hairline grid. */
 .sidebar-nav .nav-link.active {
-  color: var(--color-rail-text-strong);
+  color: var(--color-rail-active-text);
   background: var(--color-rail-active-bg);
+  box-shadow: inset 2px 0 0 var(--color-rail-accent);
   font-weight: var(--font-weight-semibold);
 }
 
@@ -128,6 +98,8 @@
   opacity: 1;
 }
 
+/* One account block, not three stacked widgets: who is signed in, then the two
+ * things you can do about it. */
 .sidebar-foot {
   display: grid;
   gap: var(--spacing-2);
@@ -135,11 +107,28 @@
   border-top: 1px solid var(--color-rail-border);
 }
 
-.sidebar-foot-row {
+.sidebar-account {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: var(--spacing-3);
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: var(--spacing-2);
   align-items: center;
+  padding: 0 var(--spacing-2);
+}
+
+.sidebar-account-mark {
+  width: 18px;
+  height: 18px;
+}
+
+.sidebar-account-id {
+  display: grid;
+  min-width: 0;
+}
+
+.sidebar-foot-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
 }
 
 .sidebar .theme-toggle {
@@ -159,6 +148,15 @@
 
 .sidebar .user-name {
   overflow: hidden;
+  color: var(--color-rail-text-strong);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-account-id small {
+  overflow: hidden;
   color: var(--color-rail-muted);
   font-size: var(--font-size-sm);
   text-overflow: ellipsis;
@@ -168,14 +166,12 @@
 .sidebar .sidebar-logout {
   display: inline-flex;
   align-items: center;
-  gap: var(--spacing-2);
-  justify-content: flex-start;
-  width: 100%;
-  min-height: 32px;
+  gap: var(--spacing-1);
+  min-height: 28px;
   padding: 0 var(--spacing-2);
   color: var(--color-rail-text);
   background: transparent;
-  border: 1px solid transparent;
+  border: 1px solid var(--color-rail-border);
   border-radius: var(--radius-md);
   font: inherit;
   font-size: var(--font-size-md);
@@ -310,9 +306,11 @@
     border-bottom: 1px solid var(--color-rail-border);
   }
 
-  .sidebar-boundary,
+  /* The account block stays reachable: hiding it would leave no way to change
+   * the display mode or end the session on a narrow screen. */
   .sidebar-foot {
-    display: none;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
   }
 
   .sidebar-brand {

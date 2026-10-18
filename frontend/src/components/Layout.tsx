@@ -33,8 +33,8 @@ export function Layout() {
   const navRef = useRef<HTMLElement>(null);
 
   // Keep the active destination visible: the sidebar nav scrolls
-  // horizontally below 900px and vertically on short screens, so without
-  // this the lime "you are here" pill can sit outside the viewport.
+  // horizontally below 980px and vertically on short screens, so without
+  // this the selected row can sit outside the viewport.
   useEffect(() => {
     const nav = navRef.current;
     if (!nav) return;
@@ -90,14 +90,6 @@ export function Layout() {
             className="sidebar-logo"
           />
         </Link>
-
-        <div className="sidebar-boundary" aria-label="Operator session context">
-          <img src={sessionPresentation.asset} alt="" className="sidebar-boundary-mark" />
-          <span>
-            <strong>{systemAdmin ? "System access" : "Operator boundary"}</strong>
-            <small>{sessionPresentation.boundaryLabel}</small>
-          </span>
-        </div>
 
         <nav ref={navRef} className="sidebar-nav" aria-label="Primary">
           <p className="nav-section-label">{systemAdmin ? "System overview" : "Security desk"}</p>
@@ -251,21 +243,32 @@ export function Layout() {
         </nav>
 
         <div className="sidebar-foot">
-          <div className="sidebar-foot-row">
-            <ThemeToggle />
-            <span className="user-name" title={current?.email ?? "Authenticated session"}>
-              {current?.email ?? "Authenticated session"}
+          <div className="sidebar-account">
+            <img
+              src={sessionPresentation.asset}
+              alt=""
+              aria-hidden="true"
+              className="sidebar-account-mark"
+            />
+            <span className="sidebar-account-id">
+              <strong className="user-name" title={current?.email ?? "Authenticated session"}>
+                {current?.email ?? "Loading session…"}
+              </strong>
+              <small>{sessionPresentation.boundaryLabel}</small>
             </span>
           </div>
-          <button
-            type="button"
-            className="nav-link sidebar-logout"
-            onClick={() => void logout()}
-            aria-label="Sign out"
-          >
-            <LogOut size={16} aria-hidden="true" />
-            <span>Sign out</span>
-          </button>
+          <div className="sidebar-foot-actions">
+            <ThemeToggle />
+            <button
+              type="button"
+              className="sidebar-logout"
+              onClick={() => void logout()}
+              title="End this session on this device"
+            >
+              <LogOut size={14} aria-hidden="true" />
+              <span>Sign out</span>
+            </button>
+          </div>
         </div>
       </aside>
 

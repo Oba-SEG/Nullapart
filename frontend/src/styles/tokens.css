@@ -80,8 +80,8 @@
   --color-rail-text-strong: #ffffff;
   --color-rail-muted: #8b98a6;
   --color-rail-hover: #202c38;
-  --color-rail-active-bg: #2b3f52;
   --color-rail-active-text: #ffffff;
+  --color-rail-accent: #6fb6e8;
 
   /* Elevation — hairline boundaries, not embossing.
    * `--shadow-inset*` and the glow/panel tokens are kept as deliberate no-ops:
@@ -218,8 +218,8 @@
   --color-rail-text-strong: #ffffff;
   --color-rail-muted: #7f8d9b;
   --color-rail-hover: #161d25;
-  --color-rail-active-bg: #24333f;
   --color-rail-active-text: #ffffff;
+  --color-rail-accent: #5fa8dc;
 
   /* Elevation */
   --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.4);
