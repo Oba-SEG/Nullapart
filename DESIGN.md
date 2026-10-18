@@ -90,10 +90,9 @@ alone: the label always ships with the icon.
   accent border + `--focus-ring`.
 - **Dialogs**: the only shadowed surface (`--shadow-lg`) over a dimmed
   backdrop.
-- **Nav active state**: `--color-rail-active-bg` fill, white semibold label and a
-  2px inset `--color-rail-accent` bar inside the row, plus an aria-current hook.
-  Selection never relies on a border around the pill, and there is no solid lime
-  pill.
+- **Nav active state**: `--color-rail-active-bg` fill plus a white semibold
+  label and an aria-current hook. Selection never relies on a border around the
+  pill, an edge stripe, or a solid lime fill.
 - **Toasts, hints, badges**: hairline-bordered, tint-filled, no glow.
 
 ## Layout

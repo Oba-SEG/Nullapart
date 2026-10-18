@@ -51,7 +51,7 @@
   margin: var(--spacing-4) var(--spacing-2) var(--spacing-1);
   color: var(--color-rail-muted);
   font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
+  font-weight: var(--font-weight-semibold);
   letter-spacing: 0.01em;
 }
 
@@ -71,8 +71,7 @@
   font-weight: var(--font-weight-medium);
   transition:
     background-color var(--transition-fast),
-    color var(--transition-fast),
-    box-shadow var(--transition-fast);
+    color var(--transition-fast);
 }
 
 .sidebar-nav .nav-link svg {
@@ -85,12 +84,11 @@
   background: var(--color-rail-hover);
 }
 
-/* Selection has to survive a glance at 240px: fill, weight and an inset bar
- * inside the row. A border around the pill reads as another hairline grid. */
+/* Selection is a filled row: the fill is the only reliable cue at 240px, so it
+ * has to be a clear step above hover, not a hairline or a stripe on the edge. */
 .sidebar-nav .nav-link.active {
   color: var(--color-rail-active-text);
   background: var(--color-rail-active-bg);
-  box-shadow: inset 2px 0 0 var(--color-rail-accent);
   font-weight: var(--font-weight-semibold);
 }
 
@@ -109,36 +107,45 @@
 
 .sidebar-account {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
+  grid-template-columns: 22px minmax(0, 1fr);
   gap: var(--spacing-2);
   align-items: center;
   padding: 0 var(--spacing-2);
 }
 
 .sidebar-account-mark {
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
 }
 
 .sidebar-account-id {
   display: grid;
+  gap: 2px;
   min-width: 0;
 }
 
+/* The two controls below the identity are rows, not chips: they take the same
+ * height, radius and hover fill as a nav item so the foot reads as part of the
+ * rail instead of two bordered boxes parked at the bottom. */
 .sidebar-foot-actions {
-  display: flex;
-  align-items: center;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   gap: var(--spacing-2);
+  align-items: center;
 }
 
 .sidebar .theme-toggle {
-  width: 28px;
-  height: 28px;
+  display: grid;
+  width: 30px;
+  height: 30px;
   min-height: 0;
   padding: 0;
   color: var(--color-rail-text);
   background: transparent;
-  border-color: var(--color-rail-border);
+  border: 0;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  place-items: center;
 }
 
 .sidebar .theme-toggle:hover {
@@ -164,17 +171,18 @@
 }
 
 .sidebar .sidebar-logout {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: var(--spacing-1);
-  min-height: 28px;
+  gap: var(--spacing-2);
+  min-height: 30px;
   padding: 0 var(--spacing-2);
   color: var(--color-rail-text);
   background: transparent;
-  border: 1px solid var(--color-rail-border);
+  border: 0;
   border-radius: var(--radius-md);
   font: inherit;
   font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
   cursor: pointer;
 }
 
@@ -311,6 +319,10 @@
   .sidebar-foot {
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
+  }
+
+  .sidebar-foot-actions {
+    grid-template-columns: auto auto;
   }
 
   .sidebar-brand {

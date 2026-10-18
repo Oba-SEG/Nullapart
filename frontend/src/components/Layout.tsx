@@ -265,7 +265,7 @@ export function Layout() {
               onClick={() => void logout()}
               title="End this session on this device"
             >
-              <LogOut size={14} aria-hidden="true" />
+              <LogOut size={16} aria-hidden="true" />
               <span>Sign out</span>
             </button>
           </div>

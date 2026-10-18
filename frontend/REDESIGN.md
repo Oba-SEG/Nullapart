@@ -449,15 +449,24 @@ exposed:
   surfaces and the 2px rule drawn above every Deep AI panel; the workflow-guide
   description column widened from 34ch to 52ch so it stops inflating its strip.
 
-- **Rail rebuilt.** The dark rail was the last surface still reading as an
-  afterthought. It carried a boxed session card that duplicated the scope the
-  command bar already states, a selected row that lost to hover, and a foot of
-  three unrelated widgets. Navigation now starts directly under the wordmark;
-  the selected row is fill + white semibold + a 2px inset `--color-rail-accent`
-  bar; and the operator's identity, boundary label, display-mode control and
-  sign out sit together as one account block. Below 980px that block stays
-  visible instead of being hidden, which removes the previous dead end where a
-  narrow screen offered no way to sign out.
+- **Rail rebuilt, then corrected.** The dark rail was the last surface still
+  reading as an afterthought. It carried a boxed session card that duplicated
+  the scope the command bar already states, and a foot of three unrelated
+  widgets. Navigation now starts directly under the wordmark, and the operator's
+  identity, boundary label, display-mode control and sign out sit together as
+  one account block. Below 980px that block stays visible instead of being
+  hidden, which removes the previous dead end where a narrow screen offered no
+  way to sign out.
+
+  The first attempt at this regressed the rail and the fix had to be walked
+  back: the commit deleted `--color-rail-active-bg` from `tokens.css` while
+  `.nav-link.active` kept referencing it, so the selected row rendered with no
+  fill at all, and it replaced that fill with a 2px inset accent bar, which is
+  the side-stripe pattern this design bans. Selection is now the fill alone
+  (`--color-rail-active-bg` restored in both theme blocks, `--color-rail-accent`
+  deleted) with white semibold type; section labels went back to semibold; and
+  the foot's two controls became borderless 30px rows that match the nav
+  geometry instead of small bordered chips.
 
 Deferred, not fixed: the Overview control rail restates the metric strip below
 it, and `--color-bg-glass` / `--color-bg-glass-strong` still exist as flat
