@@ -211,9 +211,8 @@
   color: var(--color-text-secondary);
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-semibold);
-  letter-spacing: 0.05em;
+
   padding: 0 var(--spacing-2);
-  text-transform: uppercase;
 }
 
 .policy-detail-checkset {

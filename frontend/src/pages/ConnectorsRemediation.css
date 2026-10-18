@@ -70,8 +70,6 @@
 .connectors-summary span {
   color: var(--color-text-secondary);
   font-size: var(--font-size-xs);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 
 .connectors-summary strong {

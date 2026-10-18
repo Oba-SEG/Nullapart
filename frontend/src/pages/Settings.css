@@ -9,6 +9,7 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: var(--spacing-4);
+  align-items: start;
   margin-top: var(--spacing-5);
 }
 
@@ -35,11 +36,11 @@
   display: inline-flex;
   align-items: center;
   gap: var(--spacing-2);
+  min-height: 32px;
   padding: var(--spacing-2) var(--spacing-4);
-  background-color: transparent;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-full);
-  box-shadow: var(--shadow-sm);
+  background-color: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
   color: var(--color-text-secondary);
   font-family: inherit;
   font-size: var(--font-size-sm);
@@ -48,23 +49,20 @@
   transition:
     color var(--transition-fast),
     background-color var(--transition-fast),
-    box-shadow var(--transition-fast);
+    border-color var(--transition-fast);
 }
 
 .settings-segment:hover {
   color: var(--color-text-primary);
-  box-shadow: var(--shadow-md);
-}
-
-.settings-segment:active {
-  box-shadow: var(--shadow-inset);
+  background-color: var(--color-bg-tertiary);
+  border-color: var(--color-border-strong);
 }
 
 .settings-segment.selected {
-  background-color: var(--color-btn-primary-bg);
-  border-color: var(--color-btn-primary-bg);
-  color: var(--color-btn-primary-text);
-  box-shadow: var(--shadow-glow-lime);
+  background-color: var(--color-selected-bg);
+  border-color: var(--color-border-accent);
+  color: var(--color-selected-text);
+  font-weight: var(--font-weight-semibold);
 }
 
 .settings-facts {

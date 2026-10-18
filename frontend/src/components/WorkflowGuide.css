@@ -23,17 +23,15 @@
 
 .workflow-guide-eyebrow {
   margin: 0;
-  color: var(--color-primary);
-  font-size: 0.6rem;
-  font-weight: 800;
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
 }
 
 .workflow-guide h2 {
   margin: 0;
   color: var(--color-text-primary);
-  font-size: 0.82rem;
+  font-size: var(--font-size-base);
   font-weight: var(--font-weight-semibold);
 }
 
@@ -75,21 +73,21 @@
 .workflow-guide-steps li > span {
   color: var(--color-primary);
   font-family: var(--font-family-mono);
-  font-size: 0.66rem;
+  font-size: var(--font-size-xs);
   font-weight: var(--font-weight-bold);
 }
 
 .workflow-guide-steps strong {
   color: var(--color-text-primary);
-  font-size: 0.78rem;
+  font-size: var(--font-size-md);
   font-weight: var(--font-weight-semibold);
 }
 
 .workflow-guide-steps p {
   margin: 0;
   color: var(--color-text-tertiary);
-  font-size: 0.74rem;
-  line-height: 1.4;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
 }
 
 .workflow-guide-actions {

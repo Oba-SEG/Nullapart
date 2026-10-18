@@ -2,7 +2,7 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--spacing-4) var(--spacing-6);
-  align-items: center;
+  align-items: start;
   padding: 0 0 var(--spacing-4);
   border-bottom: 1px solid var(--color-border);
 }
@@ -15,31 +15,20 @@
 .workspace-eyebrow {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  margin-bottom: var(--spacing-1);
-  color: var(--color-primary);
-  font-size: 0.63rem;
-  font-weight: var(--font-weight-bold);
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
-
-.workspace-eyebrow::before {
-  width: 0.4rem;
-  height: 0.4rem;
-  content: "";
-  background: var(--color-primary);
-  border-radius: 50%;
+  gap: var(--spacing-2);
+  margin-bottom: 2px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
 }
 
 .workspace-title {
   margin: 0;
   color: var(--color-text-primary);
-  font-family: var(--font-family-display);
-  font-size: clamp(1.55rem, 2.6vw, 2.15rem);
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  line-height: 1.08;
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: -0.01em;
+  line-height: var(--line-height-tight);
   text-wrap: balance;
 }
 
@@ -47,15 +36,15 @@
   max-width: 72ch;
   margin-top: var(--spacing-1);
   color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-  line-height: 1.5;
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-normal);
   text-wrap: pretty;
 }
 
 .workspace-header-detail {
   margin-top: var(--spacing-2);
   color: var(--color-text-tertiary);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
 }
 
 .workspace-header-detail .dashboard-subtitle {
@@ -72,16 +61,14 @@
 .workspace-scope {
   display: inline-flex;
   align-items: center;
-  gap: 0.45rem;
-  padding: 0.3rem 0.55rem;
-  color: var(--color-chip-accent-text);
-  background: var(--color-chip-accent-bg);
-  border: 1px solid var(--color-chip-accent-border);
+  gap: 0.4rem;
+  padding: 3px var(--spacing-2);
+  color: var(--color-text-secondary);
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
-  font-size: 0.6rem;
-  font-weight: var(--font-weight-bold);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
 }
 
 .workspace-scope svg {

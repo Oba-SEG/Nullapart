@@ -37,7 +37,6 @@
 .message-content-meta dt {
   color: var(--color-text-secondary);
   font-size: var(--font-size-xs);
-  text-transform: uppercase;
 }
 
 .message-content-meta dd {
@@ -147,8 +146,6 @@
 
 .message-content-subheading {
   font-size: var(--font-size-sm);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 
 .message-content-attachment-list {

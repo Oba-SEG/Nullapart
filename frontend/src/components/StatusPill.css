@@ -1,27 +1,29 @@
-/* Status pills — board "UI ELEMENTS" language:
- * circular icon chip + label. Icon chip colors are brand constants
- * valid in both themes; labels use theme tokens. */
+/* Status badges: the board's status artwork plus a text label, carried on a
+ * quiet tinted badge. Tone is never communicated by color alone (docs/12). */
 
 .status-pill {
   display: inline-flex;
   align-items: center;
   gap: var(--spacing-2);
+  padding: 2px var(--spacing-2) 2px 3px;
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-semibold);
-  letter-spacing: 0.03em;
-  line-height: 1;
+  line-height: 1.4;
   white-space: nowrap;
+  background-color: var(--color-surface-subtle);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
 }
 
 .status-pill-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: var(--radius-full);
   flex-shrink: 0;
+  width: 16px;
+  height: 16px;
   overflow: hidden;
+  border-radius: var(--radius-full);
 }
 
 .status-pill-icon img {
@@ -31,52 +33,36 @@
   object-fit: contain;
 }
 
-.status-clean .status-pill-icon {
-  box-shadow: 0 0 10px rgba(168, 255, 0, 0.4);
-}
-
 .status-clean {
-  color: var(--color-text-primary);
-}
-
-.status-threat .status-pill-icon {
-  box-shadow: 0 0 10px rgba(255, 0, 110, 0.38);
+  color: var(--color-success);
+  background-color: var(--color-success-light);
+  border-color: color-mix(in srgb, var(--color-success) 32%, transparent);
 }
 
 .status-threat {
   color: var(--color-error);
-}
-
-.status-review .status-pill-icon {
-  box-shadow: 0 0 8px rgba(255, 176, 32, 0.32);
+  background-color: var(--color-error-light);
+  border-color: color-mix(in srgb, var(--color-error) 32%, transparent);
 }
 
 .status-review {
   color: var(--color-warning);
-}
-
-.status-processing .status-pill-icon {
-  box-shadow: 0 0 8px rgba(0, 245, 212, 0.25);
+  background-color: var(--color-warning-light);
+  border-color: color-mix(in srgb, var(--color-warning) 36%, transparent);
 }
 
 .status-processing {
-  color: var(--color-text-tertiary);
-}
-
-.status-delivered .status-pill-icon {
-  box-shadow: 0 0 8px rgba(0, 245, 212, 0.22);
+  color: var(--color-text-secondary);
 }
 
 .status-delivered {
   color: var(--color-text-secondary);
 }
 
-.status-muted .status-pill-icon {
-  background-color: transparent;
-  border: 1.5px solid var(--color-border);
-  color: var(--color-text-tertiary);
-}
-
 .status-muted {
   color: var(--color-text-secondary);
+}
+
+.status-muted .status-pill-icon {
+  color: var(--color-text-tertiary);
 }

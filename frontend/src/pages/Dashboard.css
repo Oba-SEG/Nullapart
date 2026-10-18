@@ -97,7 +97,7 @@
 .metric-stat.primary {
   background: var(--color-bg-secondary);
   border-color: var(--color-border);
-  box-shadow: inset 4px 0 0 var(--lime);
+  box-shadow: none;
 }
 
 .metric-stat.primary:hover {
@@ -105,24 +105,22 @@
 }
 
 .metric-label {
-  color: var(--color-text-tertiary);
-  font-size: 0.64rem;
-  font-weight: var(--font-weight-bold);
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
 }
 
 .metric-value {
   color: var(--color-text-primary);
-  font-family: var(--font-family-display);
-  font-size: clamp(2.1rem, 3vw, 3.35rem);
-  font-weight: 600;
-  letter-spacing: -0.08em;
-  line-height: 1;
+  font-size: var(--font-size-3xl);
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
 }
 
 .metric-stat.primary .metric-value {
-  font-size: clamp(2.6rem, 4.2vw, 4.3rem);
+  font-size: var(--font-size-4xl);
 }
 
 .metric-value.attention {
@@ -155,11 +153,9 @@
 .eyebrow {
   display: inline-flex;
   margin-bottom: var(--spacing-3);
-  color: var(--color-primary);
-  font-size: 0.66rem;
-  font-weight: var(--font-weight-bold);
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
 }
 
 .command-grid {
@@ -186,7 +182,6 @@
 .command-action:hover {
   color: var(--color-text-primary);
   background: var(--color-bg-tertiary);
-  box-shadow: inset 0 4px 0 var(--lime);
   transform: none;
 }
 
@@ -213,10 +208,9 @@
 
 .command-action-label {
   margin-bottom: var(--spacing-2);
-  font-family: var(--font-family-display);
-  font-size: 1.15rem;
-  font-weight: 600;
-  letter-spacing: -0.03em;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: -0.01em;
 }
 
 .command-action-detail {
@@ -290,11 +284,9 @@
 }
 
 .health-item > span:first-child {
-  color: var(--color-text-tertiary);
-  font-size: 0.68rem;
-  font-weight: var(--font-weight-bold);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
 }
 
 .health-item .status-pill {
@@ -302,9 +294,8 @@
 }
 
 .dashboard-subtitle {
-  font-family: var(--font-family-mono);
-  font-size: 0.7rem;
-  letter-spacing: 0.03em;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-base);
 }
 
 .dashboard-reload {

@@ -1,38 +1,25 @@
 .layout {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
-  grid-template-columns: 264px minmax(0, 1fr);
+  grid-template-columns: 240px minmax(0, 1fr);
   background: var(--color-bg-primary);
 }
 
+/* The rail stays dark in both themes: the approved wordmark is a light
+ * lockup, and a constant rail colour keeps the navigation zone stable while the
+ * content surface switches. */
 .sidebar {
   position: sticky;
   top: 0;
-  height: 100vh;
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-5);
-  padding: 1.4rem 1rem 1rem;
-  color: #f6f6ee;
-  background:
-    linear-gradient(180deg, rgba(4, 5, 4, 0.98), rgba(9, 11, 8, 0.98)), #050505;
-  border-right: 1px solid rgba(168, 255, 0, 0.18);
+  gap: var(--spacing-3);
+  height: 100dvh;
+  padding: var(--spacing-3) var(--spacing-3) var(--spacing-3);
   overflow-y: auto;
-}
-
-.sidebar::after {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  height: 320px;
-  content: "";
-  pointer-events: none;
-  background:
-    linear-gradient(180deg, rgba(5, 5, 5, 0.96), rgba(5, 5, 5, 0.5)),
-    url("/brand/generated/nullapart-wave-command-bg@2x.png") center bottom /
-      560px auto no-repeat;
-  opacity: 0.32;
+  color: var(--color-rail-text);
+  background: var(--color-rail-bg);
+  border-right: 1px solid var(--color-rail-border);
 }
 
 .sidebar-brand,
@@ -40,117 +27,112 @@
 .sidebar-nav,
 .sidebar-foot {
   position: relative;
-  z-index: 1;
 }
 
 .sidebar-brand {
   display: block;
-  padding: 0.35rem 0.55rem 1.35rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 0 var(--spacing-2) var(--spacing-3);
+  border-bottom: 1px solid var(--color-rail-border);
 }
 
 .sidebar-logo {
   display: block;
-  width: 184px;
+  width: 152px;
   height: auto;
 }
 
 .sidebar-boundary {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  gap: var(--spacing-3);
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: var(--spacing-2);
   align-items: center;
-  margin: 0 0.35rem;
-  padding: 0.85rem;
-  background: rgba(255, 255, 255, 0.045);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-left: 3px solid var(--lime);
+  padding: var(--spacing-2);
+  background: var(--color-rail-hover);
+  border: 1px solid var(--color-rail-border);
   border-radius: var(--radius-md);
 }
 
 .sidebar-boundary-mark {
-  width: 32px;
-  height: 32px;
+  width: 22px;
+  height: 22px;
 }
 
 .sidebar-boundary span {
   display: grid;
-  gap: 0.12rem;
+  gap: 2px;
   min-width: 0;
 }
 
 .sidebar-boundary strong {
-  color: #f9fff0;
-  font-size: 0.74rem;
+  color: var(--color-rail-text-strong);
+  font-size: var(--font-size-md);
   font-weight: var(--font-weight-semibold);
 }
 
 .sidebar-boundary small {
-  color: rgba(246, 246, 238, 0.58);
-  font-size: 0.67rem;
+  color: var(--color-rail-muted);
+  font-size: var(--font-size-sm);
 }
 
 .sidebar-nav {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 0.12rem;
+  gap: 1px;
 }
 
 .nav-section-label {
-  margin: 1.1rem 0.55rem 0.35rem;
-  color: rgba(208, 232, 169, 0.54);
-  font-size: 0.6rem;
-  font-weight: var(--font-weight-bold);
-  letter-spacing: 0.15em;
-  text-transform: uppercase;
+  margin: var(--spacing-3) var(--spacing-2) var(--spacing-1);
+  color: var(--color-rail-muted);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
 }
 
 .nav-section-label:first-child {
-  margin-top: 0.15rem;
+  margin-top: var(--spacing-1);
 }
 
 .sidebar-nav .nav-link {
   display: flex;
   align-items: center;
-  gap: 0.72rem;
-  min-height: 37px;
-  padding: 0.55rem 0.65rem;
-  color: rgba(246, 246, 238, 0.7);
+  gap: var(--spacing-3);
+  min-height: 29px;
+  padding: 0 var(--spacing-2);
+  color: var(--color-rail-text);
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  font-size: 0.83rem;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-md);
   font-weight: var(--font-weight-medium);
   transition:
     background-color var(--transition-fast),
-    border-color var(--transition-fast),
     color var(--transition-fast);
 }
 
 .sidebar-nav .nav-link svg {
   flex: 0 0 auto;
-  opacity: 0.78;
+  opacity: 0.72;
 }
 
 .sidebar-nav .nav-link:hover {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.07);
-  border-color: rgba(255, 255, 255, 0.09);
+  color: var(--color-rail-text-strong);
+  background: var(--color-rail-hover);
 }
 
 .sidebar-nav .nav-link.active {
-  color: #10140b;
-  background: var(--lime);
-  border-color: var(--lime);
-  box-shadow: none;
-  font-weight: var(--font-weight-bold);
+  color: var(--color-rail-text-strong);
+  background: var(--color-rail-active-bg);
+  font-weight: var(--font-weight-semibold);
+}
+
+.sidebar-nav .nav-link.active svg {
+  opacity: 1;
 }
 
 .sidebar-foot {
   display: grid;
   gap: var(--spacing-2);
   padding-top: var(--spacing-3);
-  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  border-top: 1px solid var(--color-rail-border);
 }
 
 .sidebar-foot-row {
@@ -161,50 +143,53 @@
 }
 
 .sidebar .theme-toggle {
-  width: 32px;
-  height: 32px;
-  color: rgba(246, 246, 238, 0.8);
+  width: 28px;
+  height: 28px;
+  min-height: 0;
+  padding: 0;
+  color: var(--color-rail-text);
   background: transparent;
-  border-color: rgba(255, 255, 255, 0.24);
-  box-shadow: none;
+  border-color: var(--color-rail-border);
+}
+
+.sidebar .theme-toggle:hover {
+  color: var(--color-rail-text-strong);
+  background: var(--color-rail-hover);
 }
 
 .sidebar .user-name {
   overflow: hidden;
-  color: rgba(246, 246, 238, 0.6);
-  font-size: 0.72rem;
+  color: var(--color-rail-muted);
+  font-size: var(--font-size-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .sidebar .sidebar-logout {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
   justify-content: flex-start;
   width: 100%;
-  min-height: 34px;
-  padding: 0.45rem 0.65rem;
-  color: rgba(246, 246, 238, 0.7);
+  min-height: 32px;
+  padding: 0 var(--spacing-2);
+  color: var(--color-rail-text);
   background: transparent;
-  border: 0;
-  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
   font: inherit;
-  font-size: 0.78rem;
+  font-size: var(--font-size-md);
   cursor: pointer;
 }
 
 .sidebar .sidebar-logout:hover {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.07);
+  color: var(--color-rail-text-strong);
+  background: var(--color-rail-hover);
 }
 
 .content {
   min-width: 0;
-  background:
-    radial-gradient(
-      circle at 91% 4%,
-      rgba(168, 255, 0, 0.09),
-      transparent 25rem
-    ),
-    var(--color-bg-primary);
+  background: var(--color-bg-primary);
 }
 
 .command-context {
@@ -212,8 +197,8 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--spacing-4);
-  min-height: 62px;
-  padding: 0 var(--spacing-8);
+  min-height: 44px;
+  padding: 0 var(--spacing-5);
   background: var(--color-bg-secondary);
   border-bottom: 1px solid var(--color-border);
 }
@@ -224,7 +209,7 @@
   align-items: center;
   gap: var(--spacing-2);
   min-width: 0;
-  font-size: 0.73rem;
+  font-size: var(--font-size-md);
 }
 
 .command-context-product {
@@ -233,25 +218,23 @@
 }
 
 .command-context-product img {
-  width: 22px;
-  height: 22px;
-  border-radius: 5px;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
 }
 
 .command-context-state {
-  padding: 0.21rem 0.48rem;
+  padding: 1px var(--spacing-2);
   color: var(--color-chip-accent-text);
   background: var(--color-chip-accent-bg);
   border: 1px solid var(--color-chip-accent-border);
   border-radius: var(--radius-sm);
-  font-size: 0.6rem;
-  font-weight: var(--font-weight-bold);
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
 }
 
 .command-context-scope {
-  color: var(--color-text-tertiary);
+  color: var(--color-text-secondary);
 }
 
 .command-context-scope svg {
@@ -260,7 +243,7 @@
 
 .command-context-divider {
   width: 1px;
-  height: 18px;
+  height: 16px;
   background: var(--color-border);
 }
 
@@ -272,20 +255,21 @@
 }
 
 .main {
-  width: min(1480px, 100%);
+  width: min(1440px, 100%);
   margin: 0 auto;
-  padding: clamp(1.5rem, 3.3vw, 3.5rem);
+  padding: var(--spacing-5);
 }
 
 .impersonation-banner {
   display: flex;
   gap: var(--spacing-4);
   align-items: center;
-  padding: var(--spacing-3) var(--spacing-6);
+  padding: var(--spacing-2) var(--spacing-5);
   color: var(--color-text-primary);
   background: var(--color-warning-light);
   border-bottom: 1px solid var(--color-warning);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
 }
 
 .impersonation-text,
@@ -309,7 +293,7 @@
   background: var(--color-warning-light);
   border: 1px solid var(--color-warning);
   border-radius: var(--radius-md);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
 }
 
 @media (max-width: 980px) {
@@ -321,23 +305,23 @@
     position: relative;
     height: auto;
     min-height: 0;
-    padding: var(--spacing-4);
+    padding: var(--spacing-3);
     border-right: 0;
-    border-bottom: 1px solid rgba(168, 255, 0, 0.18);
+    border-bottom: 1px solid var(--color-rail-border);
   }
 
-  .sidebar::after,
   .sidebar-boundary,
   .sidebar-foot {
     display: none;
   }
 
   .sidebar-brand {
-    padding: 0 0 var(--spacing-3);
+    padding: 0 0 var(--spacing-2);
+    border-bottom: 0;
   }
 
   .sidebar-logo {
-    width: 150px;
+    width: 140px;
   }
 
   .sidebar-nav {
@@ -345,7 +329,7 @@
     flex-direction: row;
     gap: var(--spacing-2);
     overflow-x: auto;
-    padding-bottom: 0.1rem;
+    padding-bottom: 2px;
   }
 
   .nav-section-label {
@@ -358,7 +342,7 @@
   }
 
   .command-context {
-    padding: 0 var(--spacing-5);
+    padding: 0 var(--spacing-4);
   }
 }
 
@@ -367,7 +351,7 @@
     align-items: flex-start;
     flex-direction: column;
     gap: var(--spacing-2);
-    padding: var(--spacing-3) var(--spacing-4);
+    padding: var(--spacing-3) var(--spacing-3);
   }
 
   .command-context-email,
@@ -376,6 +360,6 @@
   }
 
   .main {
-    padding: var(--spacing-4);
+    padding: var(--spacing-3);
   }
 }

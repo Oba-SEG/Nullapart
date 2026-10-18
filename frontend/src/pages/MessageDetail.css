@@ -66,9 +66,8 @@
 
 .detail-section-title {
   font-size: var(--font-size-sm);
-  letter-spacing: 0.04em;
+
   margin-bottom: var(--spacing-3);
-  text-transform: uppercase;
 }
 
 .detail-facts {
@@ -80,7 +79,6 @@
 .detail-facts dt {
   color: var(--color-text-secondary);
   font-size: var(--font-size-xs);
-  text-transform: uppercase;
 }
 
 .detail-facts dd {
@@ -222,7 +220,6 @@
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-semibold);
   padding: var(--spacing-1) var(--spacing-2);
-  text-transform: uppercase;
 }
 
 .detail-content {

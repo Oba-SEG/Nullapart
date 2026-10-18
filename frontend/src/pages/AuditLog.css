@@ -148,7 +148,6 @@
 .audit-detail dt {
   color: var(--color-text-secondary);
   font-size: var(--font-size-xs);
-  text-transform: uppercase;
 }
 
 .audit-detail dd {
