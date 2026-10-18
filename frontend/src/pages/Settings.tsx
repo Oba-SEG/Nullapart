@@ -47,8 +47,8 @@ export function Settings() {
   });
 
   const options: { value: Theme; label: string; Icon: typeof Sun }[] = [
-    { value: "dark", label: "Midnight", Icon: Moon },
     { value: "light", label: "Light", Icon: Sun },
+    { value: "dark", label: "Dark", Icon: Moon },
   ];
   // The rail shows the word the picker uses, never the stored key.
   const themeLabel = options.find((option) => option.value === theme)?.label ?? theme;
@@ -120,8 +120,8 @@ export function Settings() {
             Appearance
           </h2>
           <p className="settings-hint">
-            Midnight (dark) is the default. Your choice is saved in this browser only and does not
-            change what you can access.
+            Light is the default. Dark is available for long sessions in low light. Your choice is
+            saved in this browser only and does not change what you can access.
           </p>
           <div className="settings-segmented" role="group" aria-label="Theme">
             {options.map(({ value, label, Icon }) => (

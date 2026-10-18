@@ -110,7 +110,7 @@ describe("Settings", () => {
     // says what the role can do; neither repeats a wire token back at the
     // operator.
     expect(await screen.findByText("Allowed")).toBeTruthy();
-    expect((await screen.findAllByText("Midnight")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("Light")).length).toBeGreaterThan(0);
     expect(screen.queryByText(/^dark$/)).toBeNull();
     expect(screen.queryByText(/^permitted$/)).toBeNull();
     expect(screen.getByText("System admin")).toBeTruthy();

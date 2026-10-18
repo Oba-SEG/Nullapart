@@ -1,6 +1,6 @@
 @import "./tokens.css";
 
-/* Reset and base styles */
+/* Base reset */
 *,
 *::before,
 *::after {
@@ -15,116 +15,42 @@ html {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* The console canvas is a flat neutral field. Panels carry their own hairline
+ * boundary, so nothing here needs imagery, gradients or an overlay layer. */
 body {
+  min-height: 100dvh;
   font-family: var(--font-family-sans);
   font-size: var(--font-size-base);
   line-height: var(--line-height-normal);
   color: var(--color-text-primary);
-  background:
-    linear-gradient(rgba(5, 5, 5, 0.5), rgba(5, 5, 5, 0.94)),
-    url("/brand/generated/nullapart-globe-command-bg@2x.png") right bottom /
-      min(82vw, 1320px) auto no-repeat fixed,
-    url("/brand/generated/nullapart-wave-command-bg@2x.png") left top /
-      min(86vw, 1420px) auto no-repeat fixed,
-    radial-gradient(
-      circle at 16% 4%,
-      rgba(168, 255, 0, 0.12),
-      transparent 26rem
-    ),
-    radial-gradient(
-      circle at 88% 12%,
-      rgba(0, 245, 212, 0.08),
-      transparent 30rem
-    ),
-    radial-gradient(
-      circle at 66% 92%,
-      rgba(255, 0, 110, 0.055),
-      transparent 28rem
-    ),
-    radial-gradient(
-      1400px 520px at 50% -16%,
-      rgba(168, 255, 0, 0.06),
-      transparent 72%
-    ),
-    #050505;
-  background-attachment: fixed;
-  min-height: 100vh;
-}
-
-/* Network-node atmosphere layer (brand board). Sits behind all content. */
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  background-image: var(--brand-network);
-  background-size: var(--brand-network-size);
-  opacity: var(--brand-network-opacity);
-  mask-image: linear-gradient(
-    180deg,
-    #000 0,
-    rgba(0, 0, 0, 0.45) 36%,
-    transparent 70%
-  );
-}
-
-body::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  background:
-    linear-gradient(rgba(250, 250, 250, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0, 245, 212, 0.022) 1px, transparent 1px),
-    radial-gradient(
-      circle at 72% 18%,
-      rgba(168, 255, 0, 0.1),
-      transparent 18rem
-    );
-  background-size:
-    56px 56px,
-    56px 56px,
-    auto;
-  mix-blend-mode: screen;
-  opacity: 0.42;
+  background-color: var(--color-bg-primary);
 }
 
 ::selection {
-  background-color: var(--lime);
-  color: var(--midnight);
+  background-color: var(--color-selected-bg);
+  color: var(--color-selected-text);
 }
 
-[data-theme="light"] ::selection {
-  background-color: var(--color-chip-accent-bg);
-  color: var(--color-chip-accent-text);
-}
-
-/* Focus visible for accessibility */
 :focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }
 
-/* Remove default focus for mouse users */
 :focus:not(:focus-visible) {
   outline: none;
 }
 
-/* Keyboard users can bypass the persistent command sidebar. The target is
- * focusable so assistive technology announces the destination after jumping. */
+/* Keyboard users can bypass the persistent navigation rail. */
 .skip-link {
   position: fixed;
-  top: var(--spacing-3);
-  left: var(--spacing-3);
+  top: var(--spacing-2);
+  left: var(--spacing-2);
   z-index: calc(var(--z-toast) + 1);
-  padding: var(--spacing-3) var(--spacing-4);
+  padding: var(--spacing-2) var(--spacing-4);
   color: var(--color-btn-primary-text);
   background: var(--color-btn-primary-bg);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-panel-lime);
-  transform: translateY(-180%);
+  transform: translateY(-200%);
   transition: transform var(--transition-fast);
 }
 
@@ -132,7 +58,6 @@ body::after {
   transform: translateY(0);
 }
 
-/* Links */
 a {
   color: var(--color-link);
   text-decoration: none;
@@ -141,124 +66,112 @@ a {
 
 a:hover {
   color: var(--color-link-hover);
+  text-decoration: underline;
 }
 
-/* Buttons — pill geometry, neumorphic press states (docs/12) */
+/* Buttons: rectangular, hairline-bounded, colour-shift only on hover. Depth
+ * and movement are reserved for surfaces that actually float. */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: var(--spacing-2);
-  padding: var(--spacing-2) var(--spacing-5);
+  min-height: 32px;
+  padding: 0 var(--spacing-3);
   font-family: inherit;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
   font-weight: var(--font-weight-semibold);
   line-height: 1;
   color: var(--color-text-primary);
-  background:
-    linear-gradient(180deg, rgba(250, 250, 250, 0.055), transparent 52%),
-    var(--color-bg-glass);
+  background-color: var(--color-bg-elevated);
   border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-md);
   cursor: pointer;
-  box-shadow: var(--shadow-sm);
   transition:
     background-color var(--transition-fast),
     border-color var(--transition-fast),
-    box-shadow var(--transition-fast),
-    transform var(--transition-fast);
+    color var(--transition-fast);
   user-select: none;
 }
 
 .btn:hover {
-  background:
-    linear-gradient(180deg, rgba(250, 250, 250, 0.075), transparent 54%),
-    var(--color-bg-glass-strong);
+  background-color: var(--color-bg-tertiary);
   border-color: var(--color-border-strong);
-  box-shadow: var(--shadow-md);
-  transform: translateY(-1px);
 }
 
 .btn:active {
-  box-shadow: var(--shadow-inset);
-  transform: translateY(0);
+  background-color: var(--color-surface-subtle);
 }
 
 .btn:disabled {
-  opacity: 0.5;
+  color: var(--color-text-tertiary);
+  background-color: var(--color-bg-tertiary);
+  border-color: var(--color-border);
   cursor: not-allowed;
-  box-shadow: none;
 }
 
 .btn-primary {
   color: var(--color-btn-primary-text);
-  background:
-    radial-gradient(
-      circle at 24% 18%,
-      rgba(250, 250, 250, 0.55),
-      transparent 16%
-    ),
-    linear-gradient(135deg, #d5ff4f, var(--color-btn-primary-bg) 58%, #78c900);
+  background-color: var(--color-btn-primary-bg);
   border-color: var(--color-btn-primary-bg);
-  box-shadow: var(--shadow-sm), var(--shadow-glow-lime);
 }
 
 .btn-primary:hover {
-  box-shadow: var(--shadow-md), var(--shadow-glow-lime);
-}
-
-.btn-primary:active {
-  box-shadow: var(--shadow-inset);
-}
-
-.btn-primary:hover {
+  color: var(--color-btn-primary-text);
   background-color: var(--color-btn-primary-bg-hover);
   border-color: var(--color-btn-primary-bg-hover);
 }
 
-.btn-danger {
+.btn-primary:active {
+  background-color: var(--color-btn-primary-bg-hover);
+}
+
+.btn-primary:disabled {
   color: var(--color-text-inverse);
+  background-color: var(--color-border-strong);
+  border-color: var(--color-border-strong);
+}
+
+.btn-danger {
+  color: #ffffff;
   background-color: var(--color-error);
   border-color: var(--color-error);
 }
 
 .btn-danger:hover {
-  background-color: var(--color-error);
-  border-color: var(--color-border-strong);
+  color: #ffffff;
+  background-color: color-mix(in srgb, var(--color-error) 88%, #000);
+  border-color: color-mix(in srgb, var(--color-error) 88%, #000);
 }
 
-/* Board CTA "Message Clean" — cyan allow pill */
+/* Quiet action used where a row already carries a primary verb. */
 .btn-ghost {
+  color: var(--color-text-secondary);
   background-color: transparent;
   border-color: transparent;
-  box-shadow: none;
-  color: var(--color-text-secondary);
 }
 
 .btn-ghost:hover {
-  background-color: var(--color-bg-elevated);
-  border-color: var(--color-border);
   color: var(--color-text-primary);
-  box-shadow: var(--shadow-sm);
+  background-color: var(--color-surface-subtle);
+  border-color: var(--color-border);
 }
 
 .btn-ghost:active {
-  box-shadow: var(--shadow-inset);
+  background-color: var(--color-bg-tertiary);
 }
 
-.btn-ghost:disabled {
-  box-shadow: none;
-}
-
+/* Deliver / allow action on the message workflow. */
 .btn-clean {
-  color: #050505;
-  background-color: #00f5d4;
-  border-color: #00f5d4;
+  color: #ffffff;
+  background-color: var(--color-success);
+  border-color: var(--color-success);
 }
 
 .btn-clean:hover {
-  background-color: #2df8de;
-  border-color: #2df8de;
+  color: #ffffff;
+  background-color: color-mix(in srgb, var(--color-success) 88%, #000);
+  border-color: color-mix(in srgb, var(--color-success) 88%, #000);
 }
 
 /* Forms */
@@ -268,22 +181,19 @@ select {
   font-family: inherit;
   font-size: var(--font-size-base);
   color: var(--color-text-primary);
-  background:
-    linear-gradient(180deg, rgba(250, 250, 250, 0.04), transparent),
-    var(--color-bg-command);
-  border: 1px solid var(--color-border);
+  background-color: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
   padding: var(--spacing-2) var(--spacing-3);
-  box-shadow: var(--shadow-inset);
   transition:
     border-color var(--transition-fast),
     box-shadow var(--transition-fast);
 }
 
-input:hover,
-textarea:hover,
-select:hover {
-  border-color: var(--color-border-strong);
+input:hover:not(:disabled),
+textarea:hover:not(:disabled),
+select:hover:not(:disabled) {
+  border-color: var(--color-text-tertiary);
 }
 
 input:focus,
@@ -291,7 +201,7 @@ textarea:focus,
 select:focus {
   outline: none;
   border-color: var(--color-focus);
-  box-shadow: var(--shadow-inset), var(--focus-ring);
+  box-shadow: var(--focus-ring);
 }
 
 input::placeholder,
@@ -299,10 +209,17 @@ textarea::placeholder {
   color: var(--color-text-tertiary);
 }
 
+input:disabled,
+textarea:disabled,
+select:disabled {
+  color: var(--color-text-tertiary);
+  background-color: var(--color-bg-tertiary);
+  border-color: var(--color-border);
+}
+
 /* The Input and Select primitives each own a group. Without this the label sits
    inline beside the control, so a long label squeezes the field and the hint
-   lands under the label instead of under the thing it explains. Stacking is the
-   convention already committed in Models.css. */
+   lands under the label instead of under the thing it explains. */
 .input-group,
 .select-group {
   display: flex;
@@ -313,9 +230,9 @@ textarea::placeholder {
 
 .input-label,
 .select-label {
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-  font-weight: 600;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
 }
 
 .input-group .input,
@@ -328,19 +245,18 @@ textarea::placeholder {
 .input-hint,
 .select-hint {
   color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
   margin: var(--spacing-1) 0 0;
   max-width: 65ch;
 }
 
-/* Cards — soft-UI panels with hairline borders (docs/12) */
 /* Inline stat list used by the Operations and Scanner stat strips. */
 .stat-row {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: var(--spacing-4);
-  padding: var(--spacing-3) var(--spacing-1);
+  padding: var(--spacing-2) 0;
 }
 
 .stat-row + .stat-row {
@@ -349,71 +265,32 @@ textarea::placeholder {
 
 .stat-row span {
   color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
 }
 
 .stat-row strong {
-  font-size: var(--font-size-lg);
-  font-weight: var(--font-weight-semibold);
   color: var(--color-text-primary);
   font-family: var(--font-family-mono);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
 }
 
 .stat-row.attention strong {
   color: var(--color-warning);
 }
 
+/* Panels: flat white surfaces closed by a hairline. No inner glow, no image
+ * fill, no gradient border, and no shadow (the boundary already separates). */
 .card {
   position: relative;
-  overflow: hidden;
-  background:
-    linear-gradient(180deg, rgba(250, 250, 250, 0.052), transparent 42%),
-    url("/brand/generated/nullapart-wave-command-bg@2x.png") center / cover
-      no-repeat,
-    radial-gradient(
-      circle at top right,
-      rgba(0, 245, 212, 0.055),
-      transparent 18rem
-    ),
-    var(--color-bg-glass);
-  background-blend-mode: normal, soft-light, normal, normal;
-  border: 1px solid rgba(250, 250, 250, 0.11);
-  border-radius: var(--radius-xl);
-  padding: var(--spacing-6);
-  box-shadow: var(--shadow-panel);
-  backdrop-filter: blur(18px) saturate(128%);
+  padding: var(--spacing-5);
+  background-color: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
 }
 
-.card::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  border-radius: inherit;
-  padding: 1px;
-  background: var(--command-panel-border);
-  opacity: 0.42;
-  mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-}
-
-.card > * {
-  position: relative;
-  z-index: 1;
-}
-
-.card-elevated {
-  background-color: var(--color-bg-elevated);
-  box-shadow: var(--shadow-panel-lime);
-}
-
-/* Tables — dense console rows (docs/12 table guidance). */
+/* Tables: the primary work surface, so density and alignment rules here. */
 table {
   width: 100%;
   border-collapse: collapse;
@@ -422,12 +299,19 @@ table {
 
 th,
 td {
-  padding: var(--spacing-3) var(--spacing-4);
+  padding: var(--spacing-2) var(--spacing-3);
   text-align: left;
+  vertical-align: middle;
   border-bottom: 1px solid var(--color-border);
+  font-size: var(--font-size-md);
+}
+
+th {
+  color: var(--color-text-secondary);
+  background-color: var(--color-bg-tertiary);
   font-size: var(--font-size-sm);
-  position: relative;
-  z-index: 1;
+  font-weight: var(--font-weight-semibold);
+  white-space: nowrap;
 }
 
 tbody tr {
@@ -438,66 +322,46 @@ tbody tr:last-child td {
   border-bottom: none;
 }
 
-/* Page/section heading scale: one hierarchy for every route. */
-h1 {
-  font-size: var(--font-size-3xl);
-  font-weight: var(--font-weight-bold);
-  color: var(--color-text-primary);
-  letter-spacing: -0.02em;
-}
-
-h2 {
-  font-size: var(--font-size-lg);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-primary);
-  letter-spacing: -0.01em;
-}
-
-.section-title {
-  font-size: var(--font-size-lg);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-primary);
-  margin-bottom: var(--spacing-4);
-  padding-bottom: var(--spacing-2);
-  border-bottom: 1px solid var(--color-border);
-}
-
-/* Console tick: marks every section title with the primary signal. */
-.section-title::before {
-  content: "";
-  display: inline-block;
-  width: 9px;
-  height: 9px;
-  margin-right: var(--spacing-2);
-  border-radius: 2px;
-  background-color: var(--color-primary);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--color-primary) 55%, transparent);
-  vertical-align: 1px;
-}
-
-th {
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-secondary);
-  background:
-    linear-gradient(180deg, rgba(168, 255, 0, 0.075), transparent),
-    rgba(250, 250, 250, 0.035);
-  letter-spacing: 0.035em;
-  text-transform: uppercase;
-  font-size: var(--font-size-xs);
-}
-
 tbody tr:hover td {
-  background-color: rgba(168, 255, 0, 0.055);
+  background-color: var(--color-bg-tertiary);
 }
 
 tbody tr:focus-within td {
   background-color: var(--color-selected-bg);
 }
 
+/* Heading scale: one quiet hierarchy for every route. */
+h1 {
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: -0.01em;
+  line-height: var(--line-height-tight);
+  color: var(--color-text-primary);
+}
+
+h2 {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+h3 {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.section-title {
+  margin-bottom: var(--spacing-3);
+  padding-bottom: var(--spacing-2);
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .btn,
-  .card,
-  .metric-stat,
   .command-action,
   .sidebar-nav .nav-link,
   .section-link svg,
@@ -506,78 +370,24 @@ tbody tr:focus-within td {
   }
 }
 
-.page-header,
-.dashboard-header,
-.policies-header {
-  position: relative;
-  overflow: hidden;
-  padding: var(--spacing-6);
-  border: 1px solid rgba(250, 250, 250, 0.12);
-  border-radius: calc(var(--radius-2xl) + 0.25rem);
-  background:
-    linear-gradient(90deg, rgba(5, 5, 5, 0.62), rgba(5, 5, 5, 0.24)),
-    url("/brand/generated/nullapart-globe-command-bg@2x.png") right center /
-      cover no-repeat,
-    var(--brand-beam),
-    radial-gradient(
-      circle at 12% 0%,
-      rgba(168, 255, 0, 0.12),
-      transparent 18rem
-    ),
-    radial-gradient(
-      circle at 92% 16%,
-      rgba(0, 245, 212, 0.09),
-      transparent 20rem
-    ),
-    var(--color-bg-glass);
-  background-blend-mode: normal, normal, screen, normal, normal, normal;
-  box-shadow: var(--shadow-panel-lime);
-  min-height: 168px;
-  backdrop-filter: blur(16px) saturate(128%);
-}
-
-.page-header::before,
-.dashboard-header::before,
-.policies-header::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-size: 34px 34px;
-  background-image: var(--brand-grid);
-  mask-image: linear-gradient(
-    105deg,
-    transparent 0%,
-    #000 18%,
-    #000 66%,
-    transparent 100%
-  );
-  opacity: 0.42;
-}
-
-.page-header > *,
-.dashboard-header > *,
-.policies-header > * {
-  position: relative;
-  z-index: 1;
-}
-
-/* Shared layout for every command-strip header (fixes headers on routes
- * that never load Messages.css). */
-.page-header,
-.dashboard-header,
-.policies-header {
+/* Route masthead: title, one line of context, actions on the right. The work
+ * surface starts immediately below the rule. */
+.page-header {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--spacing-4);
+  margin-bottom: var(--spacing-5);
+  padding-bottom: var(--spacing-4);
+  border-bottom: 1px solid var(--color-border);
 }
 
-.page-title,
-.policies-title {
-  letter-spacing: -0.035em;
-  text-shadow: 0 0 22px rgba(168, 255, 0, 0.08);
+.page-title {
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: -0.01em;
+  text-wrap: balance;
 }
 
 /* Shared search field — Messages, Quarantine and AuditLog all use it. */
@@ -590,7 +400,7 @@ tbody tr:focus-within td {
 
 .search-icon {
   position: absolute;
-  left: var(--spacing-3);
+  left: var(--spacing-2);
   color: var(--color-text-tertiary);
   pointer-events: none;
 }
@@ -600,10 +410,9 @@ tbody tr:focus-within td {
 }
 
 .search-icon + .search-input {
-  padding-left: var(--spacing-8);
+  padding-left: var(--spacing-7);
 }
 
-/* Arrow micro-interactions (docs/12). */
 .section-link svg,
 .quarantine-back svg {
   transition: transform var(--transition-fast);
@@ -622,7 +431,7 @@ tbody tr:focus-within td {
   display: inline-block;
   height: 1em;
   min-width: 4ch;
-  background-color: var(--color-bg-tertiary);
+  background-color: var(--color-surface-subtle);
   border-radius: var(--radius-sm);
   animation: skeleton-pulse 1.2s ease-in-out infinite;
 }
@@ -630,7 +439,7 @@ tbody tr:focus-within td {
 @keyframes skeleton-pulse {
   0%,
   100% {
-    opacity: 0.5;
+    opacity: 0.55;
   }
   50% {
     opacity: 1;
@@ -662,54 +471,27 @@ tbody tr:focus-within td {
   white-space: nowrap;
 }
 
-/* Animation */
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-@keyframes slideIn {
-  from {
-    transform: translateY(-10px);
-    opacity: 0;
-  }
-  to {
-    transform: translateY(0);
-    opacity: 1;
-  }
-}
-
-.animate-fade-in {
-  animation: fadeIn var(--transition-base);
-}
-
-.animate-slide-in {
-  animation: slideIn var(--transition-base);
-}
-
-/* Dialog — neumorphic detail surface */
+/* Dialogs and menus are the only surfaces allowed to float, so they carry a
+ * shadow and no border (pairing both is the generic card look). */
 .dialog {
-  padding: 0;
-  margin: auto;
-  max-width: min(560px, calc(100vw - 32px));
+  position: relative;
   width: 100%;
+  max-width: min(560px, calc(100vw - 32px));
+  margin: auto;
+  padding: 0;
   color: var(--color-text-primary);
   background-color: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
+  border: 0;
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-lg);
 }
 
 .dialog::backdrop {
-  background-color: rgba(5, 5, 5, 0.72);
+  background-color: rgba(11, 16, 21, 0.55);
 }
 
 .dialog-content {
-  padding: var(--spacing-6);
+  padding: var(--spacing-5);
 }
 
 .dialog-header {
@@ -721,7 +503,7 @@ tbody tr:focus-within td {
 }
 
 .dialog-title {
-  font-size: var(--font-size-lg);
+  font-size: var(--font-size-xl);
   font-weight: var(--font-weight-semibold);
 }
 
@@ -729,157 +511,30 @@ tbody tr:focus-within td {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   padding: 0;
-  font-size: var(--font-size-xl);
+  font-size: var(--font-size-lg);
   line-height: 1;
   color: var(--color-text-secondary);
-  background-color: var(--color-bg-tertiary);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-full);
-  box-shadow: var(--shadow-sm);
+  background-color: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
   cursor: pointer;
 }
 
 .dialog-close:hover {
-  color: var(--color-link);
-  border-color: var(--color-link);
-  box-shadow: var(--shadow-md);
-}
-
-.dialog-close:active {
-  box-shadow: var(--shadow-inset);
+  color: var(--color-text-primary);
+  background-color: var(--color-surface-subtle);
+  border-color: var(--color-border);
 }
 
 .dialog-body {
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-base);
 }
 
 .dialog-hint {
   margin-bottom: var(--spacing-3);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
   color: var(--color-text-secondary);
-}
-
-/* 2026 console redesign: authority-first, editorial, deliberately flat. */
-body {
-  background: var(--color-bg-primary);
-}
-
-body::before,
-body::after {
-  display: none;
-}
-
-[data-theme="light"] body {
-  background:
-    linear-gradient(90deg, rgba(29, 33, 26, 0.035) 1px, transparent 1px),
-    linear-gradient(rgba(29, 33, 26, 0.035) 1px, transparent 1px),
-    var(--color-bg-primary);
-  background-size: 28px 28px;
-}
-
-h1,
-h2,
-h3 {
-  font-family: var(--font-family-display);
-}
-
-.btn {
-  min-height: 38px;
-  border-radius: var(--radius-sm);
-  box-shadow: none;
-}
-
-.btn:hover {
-  box-shadow: none;
-  transform: translateY(-1px);
-}
-
-.btn-primary {
-  background: var(--color-btn-primary-bg);
-  border-color: var(--color-btn-primary-bg);
-  box-shadow: none;
-}
-
-.btn-ghost {
-  border-color: var(--color-border);
-}
-
-.card {
-  background: var(--color-bg-secondary);
-  background-image: none;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
-  backdrop-filter: none;
-}
-
-.card::before {
-  display: none;
-}
-
-.section-title {
-  padding-bottom: var(--spacing-3);
-  border-bottom-color: var(--color-border);
-  font-family: var(--font-family-display);
-  font-size: var(--font-size-xl);
-}
-
-.section-title::before {
-  width: 0.42rem;
-  height: 0.42rem;
-  border-radius: 50%;
-  box-shadow: none;
-}
-
-input,
-textarea,
-select {
-  background: var(--color-bg-elevated);
-  border-radius: var(--radius-sm);
-  box-shadow: none;
-}
-
-/* Route headers used to recreate the same decorative hero on every page.  The
- * operator console uses the header as a document masthead instead: the work
- * surface starts immediately below a single, deliberate rule. */
-.page-header,
-.dashboard-header,
-.policies-header {
-  min-height: 0;
-  padding: 0 0 var(--spacing-5);
-  background: transparent;
-  border: 0;
-  border-bottom: 2px solid var(--color-text-primary);
-  border-radius: 0;
-  box-shadow: none;
-  backdrop-filter: none;
-}
-
-.page-header::before,
-.dashboard-header::before,
-.policies-header::before {
-  display: none;
-}
-
-.page-title,
-.policies-title {
-  font-family: var(--font-family-display);
-  font-size: clamp(2.25rem, 4vw, 3.7rem);
-  font-weight: 600;
-  letter-spacing: -0.045em;
-  text-shadow: none;
-}
-
-/* Dense system controls should read as a ledger, not a collection of floating
- * glass cards.  Page-level styles can add emphasis where a decision needs it. */
-.card-elevated {
-  background: var(--color-bg-secondary);
-  box-shadow: var(--shadow-sm);
-}
-
-[data-theme="light"] .card {
-  box-shadow: none;
 }

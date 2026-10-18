@@ -3,9 +3,9 @@ import { useSyncExternalStore } from "react";
 import { readStoredTheme, setTheme, subscribeTheme, type Theme } from "../lib/theme";
 
 /**
- * Header control that flips the console between the Midnight (default)
- * and light themes. The choice persists per browser profile; it is a
- * display preference only and never affects server-side access.
+ * Header control that flips the console between the light (default) and dark
+ * themes. The choice persists per browser profile; it is a display preference
+ * only and never affects server-side access.
  */
 export function ThemeToggle() {
   const theme = useSyncExternalStore(subscribeTheme, readStoredTheme, readStoredTheme);

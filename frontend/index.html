@@ -21,16 +21,24 @@
     />
     <link rel="icon" href="/brand/app/favicon.ico" sizes="any" />
     <link rel="manifest" href="/site.webmanifest" />
-    <meta name="theme-color" content="#050505" />
+    <meta name="theme-color" content="#eef1f5" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Nullapart - Secure Email Gateway</title>
     <meta
       name="description"
       content="Security-first bidirectional Secure Email Gateway"
     />
+    <!--
+      `frame-ancestors`, `base-uri` and `form-action` are enforced only by the
+      response header (frontend/nginx.conf, docker/nginx.conf); a <meta> CSP
+      cannot carry them, the browser ignores them there. `vite dev` serves no
+      CSP header because React Fast Refresh needs an inline script preamble that
+      `script-src 'self'` would block, so this meta is the floor for every other
+      origin that serves the bundle. Never relax it relative to the header.
+    -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'"
     />
   </head>
   <body>

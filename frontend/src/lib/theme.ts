@@ -6,9 +6,9 @@ const listeners = new Set<() => void>();
 
 export function readStoredTheme(): Theme {
   try {
-    return window.localStorage.getItem(STORAGE_KEY) === "light" ? "light" : "dark";
+    return window.localStorage.getItem(STORAGE_KEY) === "dark" ? "dark" : "light";
   } catch {
-    return "dark";
+    return "light";
   }
 }
 
