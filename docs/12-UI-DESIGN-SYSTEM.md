@@ -2,9 +2,12 @@
 
 ## Design direction
 
-Nullapart uses a carefully controlled **neumorphic / soft-interface** visual language.
+Nullapart uses a **flat, dense enterprise-security** visual language in the
+register of the Mimecast and Proofpoint admin consoles: hairline-bounded
+panels on a light canvas, one restrained cool accent, no skeuomorphic depth.
 
-Neumorphism is the shell and interaction language, not an excuse to reduce readability.
+Depth, glow, gradient and inset "pressed" styling are prohibited. Hierarchy
+comes from typography, spacing, rules and a single tinted selection state.
 
 Nullapart remains an operational security console and must support dense tables, long timelines, clear severity states and accessible controls.
 
@@ -12,10 +15,10 @@ Nullapart remains an operational security console and must support dense tables,
 
 1. Security information is understandable at a glance.
 2. Layout hierarchy is stronger than decoration.
-3. Neumorphic depth is restrained and consistent.
+3. Surfaces are flat: separation uses 1px rules and background steps, never shadows.
 4. Text and state contrast meet accessibility requirements.
 5. Keyboard/focus behaviour is first-class.
-6. Important actions are never communicated by shadow alone.
+6. Important actions are never communicated by styling alone.
 7. Every feature ships with its UI and tests.
 8. No raw JSON in the UI.
 9. Untrusted email content never inherits the trusted control-plane DOM/origin implicitly.
@@ -55,20 +58,21 @@ All administrative accounts require MFA.
 
 ## Surfaces
 
-Use a small number of elevation levels:
+Use a small number of flat surface levels:
 
-- base canvas;
-- raised panel/card;
-- pressed/inset control;
-- modal/floating critical surface.
+- canvas (`--color-bg-primary`);
+- panel/card (`--color-bg-secondary` with a 1px `--color-border` rule);
+- sub-tone for table headers, wells and read-only blocks (`--color-bg-tertiary`);
+- selection tint (`--color-selected-*`) rather than elevation;
+- modal/floating surface, which is the only place a shadow is permitted.
 
-Avoid deep nested cards.
+Avoid deep nested cards. No inset, raised or glowing control states.
 
 ## Operational tables
 
 Tables remain tables.
 
-Use neumorphic framing around the table/page, not individual clay-like cells.
+Use a single hairline-bounded panel around the table/page, never clay-like cells.
 
 Required behaviours:
 
@@ -255,7 +259,7 @@ Provide role-appropriate filters for:
 
 ### Detail view
 
-Selecting an event opens a neumorphic detail drawer/page showing:
+Selecting an event opens a flat detail drawer/page showing:
 
 - actor and role;
 - impersonation chain;

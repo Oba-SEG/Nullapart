@@ -274,7 +274,7 @@ Avoid:
 - repeated magic color/spacing/elevation values;
 - unscoped global CSS;
 - `!important` as a routine conflict-resolution mechanism;
-- accessibility-breaking neumorphic effects;
+- accessibility-breaking decorative depth effects (glow, inset wells, gradient surfaces);
 - inline styles for static styling that belongs in the design system.
 
 Inline styles are acceptable for genuinely calculated runtime values where a CSS variable/class is not the clearer solution.
@@ -443,17 +443,17 @@ CI may verify regeneration produces no unexpected diff.
 
 Phase 0 should implement equivalent checks to:
 
-| Area | Format | Lint / static checks |
-|---|---|---|
-| Rust | `cargo fmt --check` | Clippy + compiler |
-| TypeScript/React | Prettier | ESLint + `tsc --noEmit` |
-| CSS | Prettier | Stylelint where configured |
-| Python/ML | Ruff format | Ruff + project type checker |
-| Shell | shfmt | ShellCheck |
-| Dockerfile | formatter if selected | Hadolint/equivalent |
-| Markdown/YAML/JSON | Prettier/approved formatter | schema/link/markdown checks |
-| SQL | approved deterministic formatter | SQL/schema/migration checks |
-| IaC | native formatter | validate + security scan |
+| Area               | Format                           | Lint / static checks        |
+| ------------------ | -------------------------------- | --------------------------- |
+| Rust               | `cargo fmt --check`              | Clippy + compiler           |
+| TypeScript/React   | Prettier                         | ESLint + `tsc --noEmit`     |
+| CSS                | Prettier                         | Stylelint where configured  |
+| Python/ML          | Ruff format                      | Ruff + project type checker |
+| Shell              | shfmt                            | ShellCheck                  |
+| Dockerfile         | formatter if selected            | Hadolint/equivalent         |
+| Markdown/YAML/JSON | Prettier/approved formatter      | schema/link/markdown checks |
+| SQL                | approved deterministic formatter | SQL/schema/migration checks |
+| IaC                | native formatter                 | validate + security scan    |
 
 CI is the final authority: a PR with formatting/lint failures does not merge.
 

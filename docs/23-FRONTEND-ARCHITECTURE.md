@@ -37,7 +37,7 @@ The Phase 0 baseline is:
 - React Hook Form;
 - Zod;
 - Radix Primitives;
-- CSS custom properties + CSS Modules for the Nullapart neumorphic design system;
+- CSS custom properties + per-component CSS files for the Nullapart flat enterprise design system;
 - Lucide React or equivalent reviewed icon package;
 - date-fns or equivalent focused date/time utilities;
 - Sentry-compatible browser SDK configured to regional SegLumberjack;
@@ -109,7 +109,7 @@ A new frontend dependency requires justification for:
 - accessibility impact;
 - overlap with existing package.
 
-Avoid dependency-heavy component suites that fight the custom neumorphic design system.
+Avoid dependency-heavy component suites that fight the custom flat design system.
 
 ## Radix role
 
@@ -278,16 +278,17 @@ Component wrappers around Radix/HTML primitives must preserve:
 - reduced motion;
 - screen-reader status.
 
-Neumorphism never overrides accessibility.
+Visual styling never overrides accessibility.
 
 ## Brand, visual system and email stationery
 
 **Last verified:** 2026-10-14.
 
-The design system is an accessible **midnight neumorphic command console**:
-soft raised/inset surfaces, explicit borders, visible focus, dense operational
-tables and a restrained acid-lime/cyan signal palette. The aesthetic is not a
-marketing dashboard and visual elevation never supplies meaning on its own.
+The design system is an accessible **flat enterprise security console** in the
+register of the Mimecast and Proofpoint admin UIs: a light canvas, hairline
+rules, one restrained cool accent, dense operational tables and a fixed
+severity scale. Depth, glow and inset "pressed" surfaces are prohibited;
+elevation appears only on floating dialogs and never supplies meaning alone.
 
 The definitive implementation inventory and asset rules are maintained in
 [`docs/engineering/BRAND-UI-ASSET-SYSTEM.md`](engineering/BRAND-UI-ASSET-SYSTEM.md).

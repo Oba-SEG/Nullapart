@@ -263,7 +263,7 @@ If an administrative capability needs UI, implement/test UI with backend.
 
 No raw JSON UI.
 
-Use Nullapart neumorphism while preserving dense accessible operational tables/timelines.
+Use the Nullapart flat enterprise design system while preserving dense accessible operational tables/timelines.
 
 ## Observability
 
@@ -302,19 +302,19 @@ Material changes include as applicable:
 
 # Phase sequence
 
-| Phase | Name | Primary outcome |
-|---|---|---|
-| -1 | Security Program Gate | Governance/security/reliability/developer rules accepted before code |
-| 0 | Contracts and Foundations | Contracts, tenant context, CI/repo controls, UI/testing/instrumentation foundations |
-| 1 | SMTP and Mail Foundation | Safe bidirectional mail without advanced scanner/AI depth |
-| 2 | Scanner Fabric and Quarantine | Parallel bounded analysis + quarantine/hold |
-| 3 | Control Plane and Administration | Identity/RBAC/tenants/policies/trace/audit/operations UI |
-| 4 | Inline ML | Low-latency ML evidence integrated safely into policy |
-| 5 | DMARC / BIMI / Domain Security | Reporting/telemetry/domain-security monitoring |
-| 6 | Outbound Intelligence | Bulk/behaviour/compromised-sender controls |
-| 7 | Regional Deep AI | Controlled regional deep analysis outside normal hot path |
-| 8 | Connectors and Remediation | Directory/mailbox integration + retro-remediation |
-| 9 | Operational Automation and Production Hardening | Tier-3 SLOs, resilience, automation, production evidence |
+| Phase | Name                                            | Primary outcome                                                                     |
+| ----- | ----------------------------------------------- | ----------------------------------------------------------------------------------- |
+| -1    | Security Program Gate                           | Governance/security/reliability/developer rules accepted before code                |
+| 0     | Contracts and Foundations                       | Contracts, tenant context, CI/repo controls, UI/testing/instrumentation foundations |
+| 1     | SMTP and Mail Foundation                        | Safe bidirectional mail without advanced scanner/AI depth                           |
+| 2     | Scanner Fabric and Quarantine                   | Parallel bounded analysis + quarantine/hold                                         |
+| 3     | Control Plane and Administration                | Identity/RBAC/tenants/policies/trace/audit/operations UI                            |
+| 4     | Inline ML                                       | Low-latency ML evidence integrated safely into policy                               |
+| 5     | DMARC / BIMI / Domain Security                  | Reporting/telemetry/domain-security monitoring                                      |
+| 6     | Outbound Intelligence                           | Bulk/behaviour/compromised-sender controls                                          |
+| 7     | Regional Deep AI                                | Controlled regional deep analysis outside normal hot path                           |
+| 8     | Connectors and Remediation                      | Directory/mailbox integration + retro-remediation                                   |
+| 9     | Operational Automation and Production Hardening | Tier-3 SLOs, resilience, automation, production evidence                            |
 
 Detailed phase specs live in `docs/phases/`.
 

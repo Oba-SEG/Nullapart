@@ -192,7 +192,7 @@ See `docs/security/22-RATE-LIMITING-ABUSE-PROTECTION.md` and `docs/security/24-B
 
 ## UI standard
 
-Use established neumorphic design system.
+Use the established flat enterprise design system.
 
 Do not sacrifice:
 

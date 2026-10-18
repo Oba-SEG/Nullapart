@@ -11,8 +11,10 @@ Every screen answers "what can I do about this", not only "what is the state".
 Every list row carries its legal actions, every panel links to its next step,
 and every high-risk action flows through the existing step-up + audit
 machinery. No raw API forms: forms become named tasks with server-authorized
-outcomes. The visual system is unchanged: `tokens.css` (Acid Lime + Midnight),
-restrained neumorphism, status scale, WCAG AA in both themes.
+outcomes. The visual system is the flat enterprise-admin palette in
+`tokens.css` (light canvas, hairline rules, one cool accent, fixed status
+scale, WCAG AA in both themes) per `DESIGN.md` and
+`docs/12-UI-DESIGN-SYSTEM.md`.
 
 ## Landed in this pass
 
@@ -125,8 +127,9 @@ Domain security, Connectors, Audit log, Settings. Messages, Quarantine and
 Domain security came back clean. The other four carried real defects.
 
 - **Settings stopped quoting its own keys.** The theme signal showed `dark` and
-  the runtime signal `permitted` / `restricted`; both now read "Midnight" and
-  "Allowed" / "Not available". The role chip showed `system_admin` and now goes
+  the runtime signal `permitted` / `restricted`; both now read "Light" (or
+  "Dark") and "Allowed" / "Not available". The role chip showed `system_admin`
+  and now goes
   through `roleLevelLabel`. "Re-authentication: Active" became "Verified" /
   "Not verified", which is what the state actually means next to its tooltip.
 - **Audit log filters are labelled.** The three controls carried `sr-only`
@@ -378,6 +381,61 @@ artifacts the compose file mounts read-only from
 `ml/inline/checkpoints/multilabel-v1/{model,onnx}` are not present on the host,
 which leaves inline ML gated off (fail-closed, not silently CLEAN) until the
 model is re-exported with `ml/inline/export_onnx.py`.
+
+## Landed in the seventh pass (flat enterprise register)
+
+The neumorphic language is gone. The console now reads in the register of the
+Mimecast admin console and Proofpoint Enterprise Privacy: a light canvas, hairline
+rules instead of elevation, one cool accent, and dense data surfaces.
+
+- **Tokens rewritten.** Light is the default theme (`color-scheme: light`) with
+  dark as a peer theme for low-light sessions. Canvas `#eef1f5`, panels white,
+  ink `#1b2733`, single accent `#1a6ba1`. Radii dropped to 3-10px, the type
+  scale to 11-30px, and `--shadow-inset`, `--shadow-panel` and the glow tokens
+  are deliberate `none` no-ops so page CSS cannot reintroduce wells or halos.
+  `--color-border-lime` became `--color-border-accent`; `--spacing-7` and
+  `--color-surface-subtle`, both previously referenced but never defined, now
+  exist.
+- **Depth removed everywhere.** Deleted the gradient/`rgba(250,250,250,...)`
+  sheens, `inset` shadows, lime glows, `backdrop-filter` glass and the globe
+  hero artwork from Operations, Login, Models, Quarantine, Policies, Dashboard,
+  Settings, StatusPill, ControlRail, Layout and Toasts. Interaction feedback is
+  a colour or border shift only; no `translateY` lift.
+- **Typography flattened.** Display/serif titles and `clamp(...rem)` hero
+  numerals are replaced by Inter at the type scale with `tabular-nums` on data;
+  uppercase tracked eyebrows are sentence-case labels. Uppercase survives only
+  in short status badges.
+- **Login and rail keep a dark ink ground** (`--color-rail-*`) because the
+  approved wordmark artwork is white; the content canvas next to it is light.
+- **Side-stripe accents removed.** The 3px lime rail boundary, the lime inset
+  metric stripe, the lime toast/alert edges and the glowing section markers are
+  gone; selection uses a tint plus a 1px border.
+- **Inter is self-hosted** via `@fontsource/inter` (400/500/600/700, latin +
+  latin-ext), which keeps CSP at `font-src 'self'`.
+- **CSP delivery fixed.** `frame-ancestors`, `base-uri` and `form-action` moved
+  to the nginx response header (`frontend/nginx.conf`, `docker/nginx.conf`);
+  the `<meta>` policy now carries only the directives a `<meta>` can enforce,
+  which removes the browser's "ignored via meta" console error. Verified live on
+  `192.168.8.4:53080` with `curl -I`.
+- `index.html` theme-color and `site.webmanifest` now say `#eef1f5`, not
+  `#050505`.
+- **Docs reconciled** (AGENTS.md treats doc/code disagreement as a defect):
+  `docs/12-UI-DESIGN-SYSTEM.md`, `docs/23-FRONTEND-ARCHITECTURE.md`,
+  `docs/00-ARCHITECTURE.md`, `docs/16-BUILD-ROADMAP.md`,
+  `docs/phases/PHASE-3-CONTROL-PLANE.md`,
+  `docs/engineering/BRAND-UI-ASSET-SYSTEM.md`, `docs/engineering/CODE-STANDARDS.md`,
+  two diagrams, plus `DESIGN.md` and `PRODUCT.md`. The board pack still governs
+  brand assets and the status icon chips; it no longer governs surface treatment.
+
+## Deploy incident: never `rsync --delete` to `.4`
+
+A previous sync used `rsync --delete` while deploying frontend changes. It was
+wrong: the task was UI-only, the flag was unnecessary, and `ml/inline/checkpoints/multilabel-v1/{model,onnx}`
+is remote-only data that the local tree does not contain. Those ONNX artifacts
+were removed, so mailcore now logs `inline ml registry gate failed; runtime is
+unavailable` and stays fail-closed until they are re-exported with
+`ml/inline/export_onnx.py`. The deploy recipe is now rsync without `--delete`,
+and any future destructive sync needs explicit approval first.
 
 ## Functional map for the remaining surfaces
 

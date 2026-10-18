@@ -7,7 +7,7 @@
 ## Purpose
 
 This document ties the implemented frontend visual language to the Phase 0
-and Phase 3 requirements: a tokenised, accessible, neumorphic administrative
+and Phase 3 requirements: a tokenised, accessible, flat administrative
 console. It is not a replacement for security, RBAC, server-side
 authorization or the phase plans.
 

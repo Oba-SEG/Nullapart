@@ -133,7 +133,7 @@ See [AWS SMTP Deployment Commissioning](21-AWS-SMTP-COMMISSIONING.md).
 
 ## Frontend architecture
 
-The administration UI baseline is React + TypeScript + Vite with typed TanStack routing/server-state/table primitives, React Hook Form + Zod, Radix accessibility primitives, custom Nullapart neumorphic styling, and a same-origin Control Backend/BFF session architecture.
+The administration UI baseline is React + TypeScript + Vite with typed TanStack routing/server-state/table primitives, React Hook Form + Zod, Radix accessibility primitives, custom Nullapart flat enterprise styling, and a same-origin Control Backend/BFF session architecture.
 
 Authentication/refresh tokens are not persisted in browser Local Storage/Session Storage.
 

@@ -1,128 +1,129 @@
 # DESIGN.md — Nullapart Console
 
-Design source of truth for the Nullapart admin console. Derived from the
-**approved "ACID LIME + MIDNIGHT v1.0" brand board** (source of truth:
-`approved-reference-board.png` in the reference pack; extracted assets in
-`nullapart_assets/`). Register: product.
+Design source of truth for the Nullapart admin console. Register: product.
 
-When documentation and the board disagree, the board wins.
+The visual direction was deliberately re-anchored on 2026-10-17 to the
+**flat enterprise security-console register (Mimecast admin console /
+Proofpoint Enterprise Privacy)**. This supersedes the depth language of the
+earlier "ACID LIME + MIDNIGHT v1.0" board: the board remains the source for
+brand _assets_ (logo crops, favicons, status icon chips) and for the `--lime`
+signal hue, but no longer prescribes surface treatment. `docs/12-UI-DESIGN-SYSTEM.md`
+and this file are the implementation authority; where the board picture and
+this file disagree, this file wins.
 
 ## Visual Theme
 
-Dark-first operational console on the Midnight canvas, using the
-**restrained neumorphic / soft-interface language mandated by
-`docs/12-UI-DESIGN-SYSTEM.md`**: surfaces are raised clay shells (deep
-shade bottom-right + paper tint top-left), wells/inputs are recessed, and
-interactive controls press into an inset state. Hairline borders remain on
-every shell so boundaries never depend on shadow alone, hierarchy stays
-stronger than decoration, and important actions are never signalled by
-shadow alone. Acid lime is the only primary action color; pink/amber/cyan
-carry the security status scale. On Midnight the tint/shade pair is
-`rgba(250,250,250,0.07–0.09)` / `rgba(0,0,0,0.65–0.75)`; the light theme
-uses classic paper neumorphism (white / `rgba(5,5,5,0.13–0.17)`). Lime
-pills may add the soft `--shadow-glow-lime` outer glow (board glow
-language).
+Light-first operational console on a cool neutral canvas. Every surface is
+flat: separation comes from 1px hairline rules and background steps, never
+from raised shells, inset wells, glows or gradients. One restrained cool
+accent (`--color-primary`) carries focus, links, primary actions and
+selection; the status scale is fixed and never recolored by theme. Hierarchy
+comes from typography, spacing and rules.
 
 Themes:
 
-- **Dark (default)** — the board's own theme; used unless the operator
-  picks light.
-- **Light (toggle, persisted in `localStorage["nullapart-theme"]`)** — a
-  console convenience not present on the board: same token names with
-  AA-contrast recalibrated values. Lime fills keep dark text; lime-as-text
-  darkens to a lime ink. The sidebar stays Midnight in both themes so the
-  real logo artwork always reads on its intended background.
+- **Light (default)** — `#eef1f5` canvas, white panels, ink
+  `#1b2733` text, accent `#1a6ba1`.
+- **Dark (opt-in, persisted in `localStorage["nullapart-theme"]`)** — the
+  same token names with AA-recalibrated values for long low-light sessions.
+
+The navigation rail and the login brief panel stay on a dark ink ground in
+both themes so the white wordmark artwork always reads on its intended
+background.
 
 ## Color Palette
 
-### Core (board labels, exact)
+### Semantic roles (tokens in `frontend/src/styles/tokens.css`)
 
-| Token | Hex | Role (board label) |
-| --- | --- | --- |
-| `--lime` | `#A8FF00` | Primary — Signal, detect |
-| `--midnight` | `#050505` | Background — Midnight |
-| `--pink` | `#FF006E` | Accent — Threat, block |
-| `--cyan` | `#00F5D4` | Accent — Clean, allow |
-| `--panel` | `#000D0D` | Surface — Panels, UI |
-| `--paper` | `#FAFAFA` | Text — Primary copy |
+| Token                                      | Light value           | Role                                              |
+| ------------------------------------------ | --------------------- | ------------------------------------------------- |
+| `--color-bg-primary`                       | `#eef1f5`             | App canvas                                        |
+| `--color-bg-secondary`                     | `#ffffff`             | Panels, cards, inputs                             |
+| `--color-bg-tertiary`                      | `#f6f8fa`             | Table headers, sub-tone blocks                    |
+| `--color-text-primary`                     | `#1b2733`             | Body and labels (≥4.5:1 on every surface)         |
+| `--color-border` / `--color-border-strong` | `#d6dde5` / `#aab6c3` | Hairlines, control outlines                       |
+| `--color-primary`                          | `#1a6ba1`             | Focus, links, primary action                      |
+| `--color-selected-bg` / `-text`            | `#e3eef7` / `#145682` | Selection tint                                    |
+| `--color-rail-*`                           | `#16202a` ground      | Navigation rail, login brief                      |
+| `--lime`                                   | `#A8FF00`             | Brand signal constant only, never an action color |
 
-There is **no blue** in the board palette; selection and management-level
-affordances use lime tints or neutral surfaces instead.
+Status and severity are fixed roles: `--color-success` `#1c7a4b`,
+`--color-warning` `#8a5a00`, `--color-error` `#b0144a`, plus
+`--color-severity-{critical,high,medium,low,info}`. Badges are a tinted
+background, a 1px `color-mix` border and the tone-colored label; glow is not
+a status affordance anywhere in the console.
 
-### Semantic status scale (board "UI ELEMENTS", sampled from board pixels)
+### Status icons
 
-| State | Icon chip | Label |
-| --- | --- | --- |
-| Clean | lime `#A8FF00` circle, black check | primary text |
-| Threat | pink `#FF006E` circle, white `(!)` | pink |
-| Review | amber `#FFB020` circle, black triangle-! | amber |
-| Processing | transparent, gray outline circle + clock | tertiary |
-| Delivered | transparent, gray outline square + mail | secondary |
-| Muted | transparent, hairline outline circle + dash | secondary |
+| State                          | Chip                                     |
+| ------------------------------ | ---------------------------------------- |
+| Clean                          | lime `#A8FF00` circle, black check       |
+| Threat                         | pink `#FF006E` circle, white `(!)`       |
+| Review                         | amber `#FFB020` circle, black triangle-! |
+| Processing / Delivered / Muted | hairline outline chips                   |
 
-Rendered by `frontend/src/components/StatusPill.tsx` (icon chips are brand
-constants valid in both themes). Severity mapping: critical/high → threat,
-medium → review, low/info → muted. Never color alone: the label always
-ships with the icon.
+Rendered by `frontend/src/components/StatusPill.tsx`; the icon chips are
+board-derived brand constants valid in both themes. Severity mapping:
+critical/high → threat, medium → review, low/info → muted. Never color
+alone: the label always ships with the icon.
 
 ## Typography
 
 - Family: **Inter** (bundled via `@fontsource/inter`, CSP `font-src 'self'`),
-  Regular/Medium/Semibold/Bold/Extrabold. Mono: existing system stack.
-- Wordmark and tagline are **not** typeset in the app: they come from the
-  board's logo artwork (`brand/horizontal-logo.png`, `brand/primary-logo.png`).
-- No all-caps body copy; uppercase reserved for short labels/badges.
+  400/500/600/700. Mono: system stack for IDs, digests and timestamps.
+  Display and body use the same family; hierarchy comes from size and weight.
+- Scale: 11 / 12 / 13 / 14 / 15 / 17 / 20 / 24 / 30px. Page titles are 20px
+  semibold with `-0.02em` tracking, not display type.
+- Numerals in data surfaces use `font-variant-numeric: tabular-nums`.
+- No all-caps body copy. Section labels are sentence case; uppercase survives
+  only in short status badges.
 
 ## Components
 
-- **Buttons**: full pill with neumorphic press states — raised
-  (`--shadow-sm`) at rest, deeper (`--shadow-md`) on hover, recessed
-  (`--shadow-inset`) on press, flat when disabled; primary lime also
-  carries `--shadow-glow-lime`. Primary = lime fill + `#050505` text;
-  Secondary = hairline outline; Danger = pink fill (near-black text — the
-  board shows white-on-pink, but white on `#FF006E` is 3.8:1 and fails
-  WCAG AA, so we keep the board hue with dark text at 5.3:1);
-  Clean/allow = cyan fill + `#050505` text (board "Message Clean").
-- **Panels/cards**: `--panel #000D0D` fill, hairline border, radius 12px,
-  raised `--shadow-sm` (`card-elevated` uses `--shadow-md`). Page/state
-  banners and the isolated message viewer get the same shell treatment.
-  Tables stay tables: framing around the table/page, no per-cell clay
-  (`docs/12:71`).
-- **Status pills**: board status elements (icon chip + label), see above.
-- **Tables**: tertiary header row, hairline separators, lime-tint selection.
-- **Inputs**: elevated fill, hairline border, recessed `--shadow-inset`
-  well; focus = inset + lime focus ring. Dialogs are neumorphic detail
-  surfaces (`--shadow-lg` + dimmed backdrop).
-- **Nav active state**: solid lime pill with dark text (board nav language).
+- **Buttons**: 32px compact, radius 4px, 1px outline, hover/active change
+  fill or border only. Primary = accent fill + white text; Danger =
+  `--color-error` fill; Clean/allow = `--color-success` fill. Disabled is
+  flat and hairline-outlined.
+- **Panels/cards**: white fill, 1px `--color-border`, radius 6px, no shadow.
+  Tables stay tables: one bordered frame, no per-cell treatment.
+- **Inputs**: white fill, 1px `--color-border-strong`, radius 4px, focus =
+  accent border + `--focus-ring`.
+- **Dialogs**: the only shadowed surface (`--shadow-lg`) over a dimmed
+  backdrop.
+- **Nav active state**: `--color-rail-active-bg` fill with white semibold
+  label, plus an aria-current hook. No solid lime pill.
+- **Toasts, hints, badges**: hairline-bordered, tint-filled, no glow.
 
 ## Layout
 
-- **App shell: left sidebar** (operator console convention; the board's own
-  nav example is the marketing top bar, not the console). Sidebar is fixed
-  248px, always Midnight, holds the horizontal logo artwork, vertical nav
-  with lucide icons and lime active pills, and theme/session/sign-out at
-  the foot. Content column max ~1400px. Collapses to a horizontal nav bar
-  under 900px.
-- **Login**: full-bleed Midnight with the board's globe artwork as a low
-  opacity backdrop, centered card carrying the primary vertical logo, one
-  lime pill CTA.
-- Dashboard: metric tiles → activity/health panels; health states use
-  status pills.
+- **App shell: left sidebar**, 240px, dark ink rail holding the horizontal
+  logo artwork, vertical nav, and session/sign-out at the foot. Content
+  column `min(1440px, 100%)`. Collapses to a horizontal nav under 900px.
+- **Login**: light page, a single bordered two-panel stage. The left brief
+  panel is the dark ink ground with the wordmark and a plain sentence; the
+  right panel is the form. No backdrop imagery, no rings, no glow.
+- Dashboard: metric ledger → command grid → activity/health panels, all
+  divided by hairlines rather than cards within cards.
 - Spacing: 4px token scale; rhythm 8/16/24/32/48.
 
 ## Motion
 
-- Transitions 150–300ms; `prefers-reduced-motion` → instant.
-- No decorative loops; processing may use a slow spinner only.
+- Transitions 120–240ms on colour and border only; `prefers-reduced-motion`
+  → instant.
+- No transform-based hover lift, no decorative loops; processing may use a
+  slow spinner only.
 
 ## Assets (approved board pack, `frontend/public/brand/`)
 
 - `horizontal-logo.png` — sidebar lockup (mark + wordmark + tagline)
 - `primary-logo.png` — login lockup (vertical)
 - `logo-mark.png` — icon-only mark
-- `globe-background.png` — login backdrop (board hero artwork)
 - `favicon_16x16.png` / `favicon_32x32.png` / `favicon_512x512.png` —
   real favicons from the pack (`index.html`)
+- `status/*.png` — status icon chips listed above
+- The globe hero artwork is retired from the UI (it is depth decoration, not
+  an information surface). It remains in the pack; `scripts/verify-brand-assets.mjs`
+  still checks it exists.
 - No stock photography; email content renders via the isolated renderer.
 - These PNGs are exact crops of the approved board (no vectors exist in the
   pack); redraw/replacements are not permitted.
