@@ -443,13 +443,52 @@ export function familyDisplayName(familyKey: string, catalogName: string, tenant
 }
 
 /**
+ * What a family governs, for the seat reading the list. The catalog descriptions
+ * are written for the platform's own runbook, and two of them describe the
+ * machinery rather than the mail: a customer whose family is named "Automatic
+ * threat review" above the line must not read "machine-learning classification"
+ * in it. Every other catalog description already says what the family does and
+ * passes through untouched.
+ */
+const TENANT_FAMILY_DESCRIPTIONS: Record<string, string> = {
+  connectors_remediation: "How connected mailboxes are checked and repaired",
+  ml_threat_classification: "Automatic threat review evidence",
+};
+
+export function familyDescription(
+  familyKey: string,
+  catalogDescription: string,
+  tenant: boolean,
+): string {
+  if (!tenant) return catalogDescription;
+  return TENANT_FAMILY_DESCRIPTIONS[familyKey] ?? catalogDescription;
+}
+
+/**
+ * A stored reference a customer can use. A primary key is not one: it names a
+ * row in the platform's database rather than anything in their mail, and every
+ * row that carries one already says what happened beside it.
+ */
+const OPAQUE_IDENTIFIER =
+  /^(?:\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?|urn:uuid:[0-9a-f-]{36}|[0-9a-f]{24,})$/i;
+
+/**
+ * The references that name the customer's own mail, so the key is theirs even
+ * when it is shaped like a primary one. A quarantine case is read and routed by
+ * its message id, and a transaction id is that same message seen from the trace
+ * page; both are what a customer quotes in a support ticket. Every other type is
+ * a row in the platform's database.
+ */
+const CUSTOMER_MAIL_HANDLES: string[] = ["transaction", "quarantine", "quarantine_case", "message"];
+
+/**
  * A history row's reference in a customer seat's own words. The ledger stores a
  * machine reference for the thing a write touched: a family key, a composite
  * `address:source-kind:source-id`, the platform's own readout name. A customer
  * needs to know which policy or which sender changed, not how the row is keyed.
- * Anything already usable as a reference (a message id, the customer's own id)
- * passes through untouched, and a reference that names platform machinery
- * instead of their own thing becomes nothing rather than a leak.
+ * A reference they can act on (a sender address, their own customer id) passes
+ * through untouched, and one that names platform machinery or a database row
+ * becomes nothing rather than a leak.
  */
 export function tenantResourceReference(
   resourceType: string,
@@ -464,10 +503,29 @@ export function tenantResourceReference(
     case "audit":
       // The ledger checkpoint is the installation's own seal. A tenant row about
       // it says which record was read, and they have the row either way.
-      return resourceId === "checkpoint-status" ? null : resourceId;
+      return resourceId === "checkpoint-status"
+        ? null
+        : referenceForTenant(resourceType, resourceId);
+    case "session":
+      // A session row is the platform's own bookkeeping: the login event says
+      // who and when, the primary key says nothing a customer can act on.
+      return null;
     default:
-      return resourceId;
+      return referenceForTenant(resourceType, resourceId);
   }
+}
+
+/**
+ * A stored reference a customer can actually use. An opaque primary key is not
+ * one: it names a row in the platform's database rather than anything in their
+ * mail, so the row keeps its outcome and loses the key. A composite key is read
+ * segment by segment, because `domain-uuid:source` is still keyed by a database
+ * row even though neither half matches the shape on its own.
+ */
+function referenceForTenant(resourceType: string, resourceId: string): string | null {
+  if (CUSTOMER_MAIL_HANDLES.includes(resourceType)) return resourceId;
+  const opaque = resourceId.split(":").some((segment) => OPAQUE_IDENTIFIER.test(segment.trim()));
+  return opaque ? null : resourceId;
 }
 
 /**

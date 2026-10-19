@@ -132,6 +132,14 @@ const PLATFORM_LANGUAGE: Array<{ term: string; pattern: RegExp }> = [
   // `textContent` welds adjacent elements together, so a key rendered straight
   // after a heading has no boundary to match.
   { term: "machine key", pattern: /[a-z][a-z0-9]*(?:_[a-z0-9]+)+/ },
+  // A primary key. The ledger's `resource_id` column holds one for rows about
+  // the platform's own records (a session, another audit event), and a tenant
+  // console that prints it is showing them a database row.
+  {
+    term: "opaque row key",
+    pattern:
+      /\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?|urn:uuid:[0-9a-f-]{36}|\b[0-9a-f]{24,}\b/i,
+  },
 ];
 
 /** The tenant's own organisation record, with no domains or groups set yet.
@@ -231,7 +239,10 @@ const policyFamilies = [
     revision_count: 1,
     active_revision: {
       revision_number: 3,
-      published_by: "tenant-admin@example.test",
+      // What the column stores is the publisher's row key; what a customer read
+      // is handed is the name the server resolved for that seat.
+      published_by: "8f14e45f-ea41-4334-b632-f1bc9c9c9e21",
+      published_by_name: "Tenant Admin",
       published_at: "2026-09-30T08:00:00Z",
       scope_level: "customer",
     },
@@ -254,7 +265,10 @@ const policyFamilies = [
     revision_count: 2,
     active_revision: {
       revision_number: 7,
-      published_by: "ob1",
+      // A provider operator published this revision. The customer read names the
+      // side they can ask, not an operator the console has no reason to show.
+      published_by: "32e35eba-a628-484f-858e-03e4cce584f7",
+      published_by_name: "Your provider",
       published_at: "2026-10-01T08:00:00Z",
       scope_level: "system",
     },
@@ -314,6 +328,22 @@ const tenantTrace = {
     { stage: "delivered", at: "2026-01-06T09:50:02Z" },
   ],
 };
+
+/**
+ * Identifiers a tenant console is entitled to print, because they name the
+ * customer's own mail rather than a row in the platform's database: a
+ * transaction id is what the trace search box takes back, and a message id is
+ * what opens a quarantine case. Both are what an operator quotes in a support
+ * ticket. They are the only opaque-shaped values the scan lets through.
+ */
+const CUSTOMER_MAIL_HANDLES = [
+  tenantTrace.transaction_id,
+  ...tenantTrace.instances.map((instance) => instance.tenant_message_id),
+];
+
+function withoutCustomerHandles(text: string): string {
+  return CUSTOMER_MAIL_HANDLES.reduce((seen, handle) => seen.split(handle).join(" "), text);
+}
 
 const PAYLOADS: Array<[string, unknown]> = [
   ["/auth/session", tenantSession],
@@ -381,7 +411,9 @@ const PAYLOADS: Array<[string, unknown]> = [
           customer_id: "CZA-1",
           action: "session_login",
           resource_type: "session",
-          resource_id: "session-tenant",
+          // What the column actually holds: the primary key of the platform's
+          // own session row. The tenant reads the login, not the key.
+          resource_id: "86538d62-3b7d-4003-a7e6-740341e252f1",
           result: "success",
           reason: null,
           source_ip: "192.168.8.232",
@@ -416,6 +448,24 @@ const PAYLOADS: Array<[string, unknown]> = [
           // names it must not print the reference to the tenant.
           resource_type: "audit",
           resource_id: "checkpoint-status",
+          result: "success",
+          reason: null,
+          source_ip: "192.168.8.232",
+          trace_id: null,
+        },
+        {
+          id: "event-audit-read",
+          created_at: "2026-01-06T09:54:00Z",
+          actor_login: "tenant-admin@example.test",
+          actor_roles: ["customer_admin"],
+          impersonated_subject: null,
+          impersonated_customer: null,
+          customer_id: "CZA-1",
+          action: "audit_access_detail",
+          // Reading one event records the key of the event read. The tenant has
+          // that row in their own list; the primary key says nothing more.
+          resource_type: "audit",
+          resource_id: "17b90409-291d-4333-962f-4b199e3a437f",
           result: "success",
           reason: null,
           source_ip: "192.168.8.232",
@@ -794,7 +844,7 @@ describe("tenant console boundary", () => {
       // tier-aware render rather than on the pending one.
       await screen.findByText("Your customer · CZA-1");
 
-      const text = document.body.textContent ?? "";
+      const text = withoutCustomerHandles(document.body.textContent ?? "");
       const leaks: string[] = [];
       for (const { term, pattern } of PLATFORM_LANGUAGE) {
         const hit = text.match(pattern);
@@ -908,5 +958,41 @@ describe("tenant console boundary", () => {
     expect(text).toContain("Your organisation");
     expect(text).not.toMatch(/[a-z][a-z0-9]*(?:_[a-z0-9]+)+/);
     expect(text).not.toMatch(/\{|"/);
+  });
+
+  /**
+   * A revision history has to say who published the revision. The stored
+   * reference is a row key in the platform's user table, so the customer read
+   * takes the name the server resolved for their seat: their own administrator,
+   * or the side of the house they can actually ask.
+   */
+  it("names a revision's publisher instead of its user row key", async () => {
+    stubTenantFetch();
+    renderSurface(surfaceNamed("Policies"));
+    await screen.findByText("Your customer · CZA-1");
+
+    expect(await screen.findByText(/#3 · by Tenant Admin/)).toBeInTheDocument();
+    expect(screen.getByText(/#7 · by Your provider/)).toBeInTheDocument();
+    expect(document.body.textContent ?? "").not.toMatch(
+      /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
+    );
+  });
+
+  /**
+   * Rows about the platform's own records key the record they touched. The
+   * tenant's log says a login happened and which policy was read; the primary
+   * key underneath it is theirs to act on nowhere.
+   */
+  it("withholds a database row key from a tenant's evidence reference", async () => {
+    stubTenantFetch();
+    renderSurface(surfaceNamed("Audit log"));
+    await screen.findByText("Your customer · CZA-1");
+
+    await screen.findByText("Session login");
+    const text = document.body.textContent ?? "";
+    expect(text).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+    // Anti-vacuous: the rows are rendered, they simply carry no reference. A
+    // sender the customer approved keeps its address.
+    expect(text).toContain("news@acmefreight.example");
   });
 });

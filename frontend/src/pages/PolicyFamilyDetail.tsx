@@ -65,6 +65,7 @@ import {
   POLICY_DISPOSITION_LABELS,
   SCANNER_LABELS,
   TENANT_LEVEL_LABELS,
+  familyDescription,
   familyDisplayName,
   reasonCodeLabel,
   summarizeRuleCondition,
@@ -609,7 +610,9 @@ export function PolicyFamilyDetail() {
                 </Hint>
               ) : null}
             </div>
-            <p className="policy-detail-hint">{family.description}</p>
+            <p className="policy-detail-hint">
+              {familyDescription(family.family_key, family.description, tenantTier)}
+            </p>
             {tenantTier ? null : (
               <p className="policy-detail-key">
                 <Hint label={HINTS.internalIdentifier}>
@@ -707,7 +710,7 @@ export function PolicyFamilyDetail() {
                   <tr key={revision.revision_number}>
                     <td>#{revision.revision_number}</td>
                     <td>{OVERRIDE_SCOPE_LABELS[revision.scope_level]}</td>
-                    <td>{revision.published_by}</td>
+                    <td>{revision.published_by_name}</td>
                     <td>{new Date(revision.published_at).toLocaleString()}</td>
                     <td>
                       {revision.revision_number === activeRevisionNumber ? (

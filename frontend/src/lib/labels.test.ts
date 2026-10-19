@@ -44,8 +44,47 @@ describe("tenantResourceReference", () => {
     expect(tenantResourceReference("audit", "checkpoint-status")).toBeNull();
   });
 
+  it("withholds a database row key, whichever table it came from", () => {
+    // `resource_id` holds the primary key of the row a write touched. A login
+    // row, an audit row and an artifact row are all the platform's own records,
+    // and the key says nothing the customer can act on.
+    expect(tenantResourceReference("session", "86538d62-3b7d-4003-a7e6-740341e252f1")).toBeNull();
+    expect(tenantResourceReference("audit", "17b90409-291d-4333-962f-4b199e3a437f")).toBeNull();
+    expect(tenantResourceReference("artifact", "b061642519d7468e989fdb08751473d8")).toBeNull();
+    expect(
+      tenantResourceReference(
+        "connector_remediation_action",
+        "5c8a1e2f-9b3d-4a16-8e77-0d2f4c6a9b11",
+      ),
+    ).toBeNull();
+  });
+
+  it("withholds a composite keyed by a database row", () => {
+    // A domain-source row is keyed `domain-id:source`; neither half matches the
+    // shape alone, so the segment check is what keeps the id off the screen.
+    expect(
+      tenantResourceReference(
+        "domain_source",
+        "6f1c2d33-4b55-4a6f-9c8a-1d2e3f4a5b6c:dmarc_aggregate",
+      ),
+    ).toBeNull();
+  });
+
+  it("keeps a reference that names the customer's own mail", () => {
+    // A quarantine case is routed by its message id and a transaction id is that
+    // same message on the trace page. UUID shape notwithstanding, they are the
+    // customer's identifiers to quote.
+    expect(tenantResourceReference("quarantine_case", "7d2c4e6a-1111-2222-3333-444455556666")).toBe(
+      "7d2c4e6a-1111-2222-3333-444455556666",
+    );
+    expect(tenantResourceReference("transaction", "2a7b1c9d-0e12-4a3b-9f88-77c6b5a49321")).toBe(
+      "2a7b1c9d-0e12-4a3b-9f88-77c6b5a49321",
+    );
+  });
+
   it("passes a reference the customer quotes back untouched", () => {
     expect(tenantResourceReference("customer", "CZA-1")).toBe("CZA-1");
+    expect(tenantResourceReference("message", "msg-2026-01-06-001")).toBe("msg-2026-01-06-001");
     expect(tenantResourceReference("session", null)).toBeNull();
   });
 });

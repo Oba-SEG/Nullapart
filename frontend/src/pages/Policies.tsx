@@ -19,6 +19,7 @@ import {
   HINTS,
   MANAGEMENT_LEVEL_LABELS,
   TENANT_LEVEL_LABELS,
+  familyDescription,
   familyDisplayName,
   tenantLevelBucket,
   type TenantLevelBucket,
@@ -68,7 +69,9 @@ function errorMessage(error: unknown): string {
 
 function activeRevisionLabel(active: RevisionSummary): string {
   const publishedAt = new Date(active.published_at);
-  return `#${active.revision_number} · by ${active.published_by} · ${publishedAt.toLocaleString()}`;
+  // The server resolves the publisher's name for the seat reading the list: a
+  // customer sees their own administrator and "Your provider" for anyone else.
+  return `#${active.revision_number} · by ${active.published_by_name} · ${publishedAt.toLocaleString()}`;
 }
 
 export function Policies() {
@@ -342,7 +345,9 @@ export function Policies() {
                         )}
                       </div>
                     </td>
-                    <td className="policies-description">{family.description}</td>
+                    <td className="policies-description">
+                      {familyDescription(family.family_key, family.description, tenantTier)}
+                    </td>
                     <td>
                       {tenantTier ? (
                         editable ? (

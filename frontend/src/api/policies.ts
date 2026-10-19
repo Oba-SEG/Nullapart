@@ -97,6 +97,9 @@ export const OVERRIDE_VALUE_PREFIX = "typed:";
 export interface RevisionSummary {
   revision_number: number;
   published_by: string;
+  /** The publisher's name for the seat reading the history. A customer read
+   * resolves a publisher outside their own organisation to the provider. */
+  published_by_name: string;
   published_at: string;
   scope_level: RevisionScope;
 }
