@@ -934,7 +934,59 @@ status and duration; `GET /mail-trace/transaction/{id}` keeps the
 empties their values; and `GET /notifications/settings` delivery rows carry
 internal failure prose. Each is a projection fix, not a wording fix.
 
-## Deploy incident: never `rsync --delete` to `.4`
+## Landed in the sixteenth pass (the field name is the leak)
+
+The four routes the fifteenth pass named are still open, but two of them turned
+out to be worse than "publishes a machine value". The value was never the whole
+problem: the _key_ was.
+
+- **An empty value under a platform's name still names the platform.**
+  `crates/mail-core/src/trace.rs` used to answer a customer trace with
+  `postfix_queue_ids: []` and `postfix_queue_id: null`. Both keys are now omitted
+  (`skip_serializing_if` on the `Option` and on the `Vec`), because the word
+  `postfix` in the response is a fact about the running platform whether or not a
+  value rides next to it. `frontend/src/api/trace.ts` marks both optional and
+  `MessageDetail.tsx:177` tests for a string rather than for non-null, so the
+  queue column disappears instead of rendering dashes. Committed as `97a2a7c`.
+- **The outbound console stopped handing the customer the platform's content
+  hash.** `load_campaigns` now takes the caller's placement and withholds
+  `fingerprint` and `algorithm`; `load_security_events` withholds
+  `campaign_fingerprint` alongside the runbook it already hid. What a customer
+  keeps is the volume, the disposition and the dates, which is everything the
+  console can act on. `postgres_outbound_intelligence.rs` proves both sides: the
+  customer answer has the keys _absent_, the `system_admin` answer still carries
+  `fp-<customer>` and `nullapart_v1`, and the withheld row keeps its
+  `reason_code`.
+- **A tenant row gets a name it owns.** `OutboundIntelligence.tsx` renders the
+  section as _Similar-message groups_ with a _Group_ column reading "Similar
+  messages · First seen 6 Jan 2026", keyed by position, and leaves the platform
+  console its fingerprints and matcher versions. The branch is on `tenant`, not on
+  whether the payload carried a hash: the guard's fixture still answers with
+  `rspamd_fuzzy` on purpose, and a projection regression must not become a
+  rendered engine name.
+- **Two blind spots in the guard, found by making it look harder.** The sweep
+  waited only for the session chip, so a page whose tables had not painted yet
+  scanned green; `Surface.ready` now waits for one data-derived label, and the
+  outbound fixture carries a real campaign row. And the opaque-key pattern anchored
+  its bare-hash branch with `\b`, which cannot match welded `textContent`:
+  `…takenLast seena3f19c0d…Campaign rule Rspamd…` slipped through both the hash
+  and the engine name. The anchor is gone, `rspamd`/`milter`/`dovecot`/`amavis`
+  joined the engine-name term, and the term samples now include a welded hash so a
+  future anchor regression fails the completeness test. Both leaks reproduced in
+  red before the page changed.
+
+**Gates**: `cargo test -p nullapart-mail-core --lib` 641 passed (1 ignored),
+`cargo fmt --all`, `cargo clippy -p nullapart-mail-core --all-targets -- -D
+warnings` clean, `cargo test --test postgres_outbound_intelligence --no-run`
+links. `pnpm check-all` green (307 tests, 34 files).
+
+**What this does not prove.** The two new PostgreSQL assertions live in
+`#[ignore]`d DB tests and compile-verify only here: the local tunnel to the test
+database has been broken since the RBAC pass, so the projection was checked by
+reading the serializer attributes and by the frontend guard, not by a live row.
+The live wire sweep on `.4` and migration `044` are still outstanding (task 81).
+`scanner_type` on the trace wire, the quarantine checks' capability keys and the
+notification delivery failure prose are unchanged.
 
 A previous sync used `rsync --delete` while deploying frontend changes. It was
 wrong: the task was UI-only, the flag was unnecessary, and `ml/inline/checkpoints/multilabel-v1/{model,onnx}`

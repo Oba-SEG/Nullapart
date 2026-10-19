@@ -79,8 +79,10 @@ interface SenderBehaviour {
 }
 
 interface Campaign {
-  fingerprint: string;
-  algorithm: string;
+  /** Content hash the platform groups by. The customer answer omits the key. */
+  fingerprint?: string;
+  /** Which matcher produced the group. The customer answer omits the key. */
+  algorithm?: string;
   message_count: number;
   recipient_count: number;
   disposition: string;
@@ -96,7 +98,8 @@ interface SecurityEvent {
   reason_code: string;
   sender_address: string | null;
   source_id: string | null;
-  campaign_fingerprint: string | null;
+  /** The platform's content hash. The customer answer omits the key. */
+  campaign_fingerprint?: string | null;
   status: string;
   message_count: number;
   first_seen_at: string;
@@ -883,7 +886,9 @@ export function OutboundIntelligence() {
 
       <div className="outbound-two-column">
         <section className="card outbound-campaigns" aria-labelledby="campaigns-heading">
-          <h2 id="campaigns-heading">Campaign fingerprints</h2>
+          <h2 id="campaigns-heading">
+            {tenant ? "Similar-message groups" : "Campaign fingerprints"}
+          </h2>
           {data.campaigns.length === 0 ? (
             <p className="outbound-muted">No campaigns have been recorded yet.</p>
           ) : (
@@ -891,18 +896,35 @@ export function OutboundIntelligence() {
               <table>
                 <thead>
                   <tr>
-                    <th>Fingerprint</th>
+                    <th>{tenant ? "Group" : "Fingerprint"}</th>
                     <th>Volume</th>
                     <th>Action taken</th>
                     <th>Last seen</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {data.campaigns.map((campaign) => (
-                    <tr key={`${campaign.algorithm}-${campaign.fingerprint}`}>
+                  {data.campaigns.map((campaign, index) => (
+                    <tr
+                      key={
+                        tenant ? `group-${index}` : `${campaign.algorithm}-${campaign.fingerprint}`
+                      }
+                    >
                       <td>
-                        <strong>{campaign.fingerprint}</strong>
-                        <span>{fingerprintVersionLabel(campaign.algorithm)}</span>
+                        {tenant ? (
+                          <>
+                            <strong>Similar messages</strong>
+                            <span>First seen {formatDate(campaign.first_seen_at)}</span>
+                          </>
+                        ) : (
+                          <>
+                            <strong>{campaign.fingerprint}</strong>
+                            <span>
+                              {campaign.algorithm
+                                ? fingerprintVersionLabel(campaign.algorithm)
+                                : null}
+                            </span>
+                          </>
+                        )}
                       </td>
                       <td>
                         {campaign.message_count} messages

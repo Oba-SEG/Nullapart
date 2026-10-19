@@ -12,7 +12,7 @@ use axum::{
 use chrono::Utc;
 use nullapart_mail_contracts::transaction::{CustomerId, DeploymentId};
 use nullapart_mail_contracts::ActorId;
-use nullapart_mail_core::admin_rbac::CUSTOMER_ADMIN_ROLE;
+use nullapart_mail_core::admin_rbac::{CUSTOMER_ADMIN_ROLE, SYSTEM_ADMIN_ROLE};
 use nullapart_mail_core::outbound_intelligence::{
     evaluate_outbound_intelligence, OutboundBehaviorMetrics, OutboundBehaviorMetricsLookup,
     OutboundDecisionOutcome, OutboundIntelligenceInput, OutboundPolicyThresholds,
@@ -714,13 +714,17 @@ async fn approved_sender_domain_must_be_verified_for_the_approving_tenant() {
 }
 
 fn approval_context(deployment: &str, customer: &str) -> TenantContext {
+    console_context(deployment, customer, &[CUSTOMER_ADMIN_ROLE])
+}
+
+fn console_context(deployment: &str, customer: &str, roles: &[&str]) -> TenantContext {
     TenantContext {
         deployment_id: DeploymentId::new(deployment),
         region: RegionId::new("za"),
         actor: ContextActor {
             actor_id: ActorId::new(),
             login: "tenant-operator@example.test".to_string(),
-            roles: vec![CUSTOMER_ADMIN_ROLE.to_string()],
+            roles: roles.iter().map(|role| (*role).to_string()).collect(),
             authentication_assurance: AuthenticationAssurance::StepUp,
         },
         impersonation: None,
@@ -762,4 +766,113 @@ fn approval_request(key: &str, sender_address: &str, sending_domain: &str) -> Re
             .to_string(),
         ))
         .expect("the approval request must build")
+}
+
+async fn read_console(
+    pool: &PgPool,
+    deployment: &str,
+    context: TenantContext,
+) -> serde_json::Value {
+    let app = outbound_intelligence_router(OutboundIntelligenceApiState::new(
+        pool.clone(),
+        DeploymentId::new(deployment),
+    ))
+    .layer(Extension(context));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/v1/outbound-intelligence")
+                .body(Body::empty())
+                .expect("the console read must build"),
+        )
+        .await
+        .expect("the console read must answer");
+
+    assert_eq!(response.status(), StatusCode::OK, "console read failed");
+    serde_json::from_slice(
+        &to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("the console body must read"),
+    )
+    .expect("the console read must be JSON")
+}
+
+/// The campaign hash, the matcher that produced it and the same hash repeated on
+/// a security event are how the platform recognises content it has already
+/// grouped. A customer cannot quote or act on any of them, so the customer
+/// console must not even show that the slots exist: the keys are absent, not
+/// null. The volume, the disposition and the dates stay, because that is what the
+/// customer reads and decides on.
+#[tokio::test]
+#[ignore = "requires migrated local PostgreSQL through 028_outbound_intelligence.sql"]
+async fn outbound_campaign_identifiers_are_absent_from_a_customer_read() {
+    let pool = connect().await;
+    ensure_request_role(&pool).await;
+    let fixture = seed(&pool).await;
+
+    let customer = read_console(
+        &pool,
+        &fixture.deployment_a,
+        console_context(
+            &fixture.deployment_a,
+            &fixture.customer_a,
+            &[CUSTOMER_ADMIN_ROLE],
+        ),
+    )
+    .await;
+    let data = &customer["data"];
+
+    assert!(
+        data["deployment_id"].is_null(),
+        "a customer read does not name the installation: {data}"
+    );
+
+    let campaign = &data["campaigns"][0];
+    assert!(
+        campaign.get("fingerprint").is_none(),
+        "the content hash must be an absent key: {campaign}"
+    );
+    assert!(
+        campaign.get("algorithm").is_none(),
+        "the matcher name must be an absent key: {campaign}"
+    );
+    assert_eq!(campaign["message_count"], 7);
+    assert_eq!(campaign["recipient_count"], 14);
+    assert!(
+        !campaign["disposition"].as_str().unwrap().is_empty(),
+        "the customer keeps the decision: {campaign}"
+    );
+
+    let event = &data["security_events"][0];
+    assert!(
+        event.get("campaign_fingerprint").is_none(),
+        "the event must not repeat the content hash: {event}"
+    );
+    assert!(
+        event.get("remediation_runbook").is_none(),
+        "the provider runbook stays withheld: {event}"
+    );
+    assert_eq!(event["reason_code"], "OUTBOUND_UNAUTHORIZED_BULK");
+
+    let platform = read_console(
+        &pool,
+        &fixture.deployment_a,
+        console_context(
+            &fixture.deployment_a,
+            &fixture.customer_a,
+            &[SYSTEM_ADMIN_ROLE],
+        ),
+    )
+    .await;
+    let data = &platform["data"];
+
+    assert_eq!(data["deployment_id"], fixture.deployment_a);
+    assert_eq!(
+        data["campaigns"][0]["fingerprint"],
+        format!("fp-{}", fixture.customer_a)
+    );
+    assert_eq!(data["campaigns"][0]["algorithm"], "nullapart_v1");
+    assert_eq!(data["security_events"][0]["campaign_fingerprint"], "fp-a");
 }

@@ -141,8 +141,15 @@ struct SenderBehaviourView {
 
 #[derive(Debug, Serialize)]
 struct CampaignView {
-    fingerprint: String,
-    algorithm: String,
+    /// Content-derived group hash. Absent for a customer placement: it is how the
+    /// platform recognises a body it has already grouped, and a customer never
+    /// quotes it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fingerprint: Option<String>,
+    /// Which matcher produced the group. Absent for a customer placement, because
+    /// the stored value names the platform's own software.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    algorithm: Option<String>,
     message_count: i32,
     recipient_count: i32,
     disposition: String,
@@ -159,6 +166,9 @@ struct SecurityEventView {
     reason_code: String,
     sender_address: Option<String>,
     source_id: Option<String>,
+    /// Content-derived group hash the event was matched into. Absent for a
+    /// customer placement for the same reason a campaign's own fingerprint is.
+    #[serde(skip_serializing_if = "Option::is_none")]
     campaign_fingerprint: Option<String>,
     status: String,
     message_count: i32,
@@ -284,6 +294,8 @@ async fn get_outbound_intelligence(
         return unavailable();
     }
 
+    let platform = platform_placement(&context);
+
     let summary = match load_summary(
         &mut transaction,
         &state.0.deployment_id.0,
@@ -318,6 +330,7 @@ async fn get_outbound_intelligence(
         &mut transaction,
         &state.0.deployment_id.0,
         &context.customer_id.0,
+        platform,
     )
     .await
     {
@@ -328,7 +341,7 @@ async fn get_outbound_intelligence(
         &mut transaction,
         &state.0.deployment_id.0,
         &context.customer_id.0,
-        platform_placement(&context),
+        platform,
     )
     .await
     {
@@ -354,8 +367,7 @@ async fn get_outbound_intelligence(
         StatusCode::OK,
         Json(ApiEnvelope {
             data: OutboundIntelligenceResponse {
-                deployment_id: platform_placement(&context)
-                    .then(|| state.0.deployment_id.0.clone()),
+                deployment_id: platform.then(|| state.0.deployment_id.0.clone()),
                 generated_at: Utc::now(),
                 summary,
                 approved_senders,
@@ -702,10 +714,16 @@ async fn load_sender_behaviour(
     .map_err(|_| unavailable())
 }
 
+/// Campaign groups for one customer. `platform` is the caller's placement: the
+/// fingerprint is the hash the platform uses to recognise content it has already
+/// grouped, and the algorithm is the name of the matcher that produced it. A
+/// customer acts on the volume and the decision, so that is what the customer
+/// read carries.
 async fn load_campaigns(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     deployment_id: &str,
     customer_id: &str,
+    platform: bool,
 ) -> Result<Vec<CampaignView>, Response> {
     sqlx::query(
         "SELECT fingerprint, algorithm, message_count, recipient_count, disposition, \
@@ -722,8 +740,8 @@ async fn load_campaigns(
     .map(|rows| {
         rows.into_iter()
             .map(|row| CampaignView {
-                fingerprint: row.get("fingerprint"),
-                algorithm: row.get("algorithm"),
+                fingerprint: platform.then(|| row.get("fingerprint")).flatten(),
+                algorithm: platform.then(|| row.get("algorithm")).flatten(),
                 message_count: row.get("message_count"),
                 recipient_count: row.get("recipient_count"),
                 disposition: row.get("disposition"),
@@ -737,9 +755,10 @@ async fn load_campaigns(
 
 /// Security events for one customer. `platform` is the caller's placement: the
 /// runbook pointer and the remediation prose are written for the provider's
-/// on-call team, so they are withheld from a customer read. What a customer
-/// keeps is the decision, its severity, the count and the budget it breached,
-/// which is everything the console can act on.
+/// on-call team, and the campaign fingerprint is the platform's own content
+/// hash, so all three are withheld from a customer read. What a customer keeps
+/// is the decision, its severity, the count and the budget it breached, which is
+/// everything the console can act on.
 async fn load_security_events(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     deployment_id: &str,
@@ -772,7 +791,9 @@ async fn load_security_events(
                 reason_code: row.get("reason_code"),
                 sender_address: row.get("sender_address"),
                 source_id: row.get("source_id"),
-                campaign_fingerprint: row.get("campaign_fingerprint"),
+                campaign_fingerprint: platform
+                    .then(|| row.get("campaign_fingerprint"))
+                    .flatten(),
                 status: row.get("status"),
                 message_count: row.get("message_count"),
                 first_seen_at: row.get("first_seen_at"),

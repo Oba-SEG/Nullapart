@@ -106,7 +106,8 @@ const PLATFORM_LANGUAGE: Array<{ term: string; pattern: RegExp }> = [
   { term: "model word", pattern: /\bmodels?\b/i },
   {
     term: "engine or artifact name",
-    pattern: /\b(?:qwen|llama|mistral|bert|yolo|onnx|safetensors|pytorch|torch|transformers)\b/i,
+    pattern:
+      /\b(?:qwen|llama|mistral|bert|yolo|onnx|safetensors|pytorch|torch|transformers|rspamd|milter|dovecot|amavis)\b/i,
   },
   {
     term: "inference machinery",
@@ -152,11 +153,14 @@ const PLATFORM_LANGUAGE: Array<{ term: string; pattern: RegExp }> = [
   { term: "machine key", pattern: /[a-z][a-z0-9]*(?:_[a-z0-9]+)+/ },
   // A primary key. The ledger's `resource_id` column holds one for rows about
   // the platform's own records (a session, another audit event), and a tenant
-  // console that prints it is showing them a database row.
+  // console that prints it is showing them a database row. The bare-hash branch
+  // has no trailing anchor for the same reason the machine key above has none:
+  // `textContent` welds `<strong>a3f19c…</strong><span>Campaign…</span>` together,
+  // so a hash printed straight before a word has no boundary to end on.
   {
     term: "opaque row key",
     pattern:
-      /\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?|urn:uuid:[0-9a-f-]{36}|\b[0-9a-f]{24,}\b/i,
+      /\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?|urn:uuid:[0-9a-f-]{36}|[0-9a-f]{24,}/i,
   },
   // A value that never arrived. A console that prints the word is rendering a
   // field the service did not publish, which is what happened when the UI was
@@ -742,7 +746,20 @@ const PAYLOADS: Array<[string, unknown]> = [
         },
       ],
       sender_behaviour: [],
-      campaigns: [],
+      campaigns: [
+        {
+          // The platform's own answer: a content hash plus the matcher that
+          // grouped it. Both name machinery, and the customer projection leaves
+          // both keys off the wire entirely.
+          fingerprint: "a3f19c0d2b7e48c1f6d0a5b2c9e4f1a3",
+          algorithm: "rspamd_fuzzy",
+          message_count: 12,
+          recipient_count: 340,
+          disposition: "throttled",
+          first_seen_at: "2026-01-06T08:50:00Z",
+          last_seen_at: "2026-01-06T09:30:00Z",
+        },
+      ],
       security_events: [
         {
           id: "9c2c4e6a-1111-2222-3333-444455556666",
@@ -752,7 +769,7 @@ const PAYLOADS: Array<[string, unknown]> = [
           reason_code: "bulk_rate_exceeded",
           sender_address: "news@acmefreight.example",
           source_id: "Office VPN",
-          campaign_fingerprint: null,
+          campaign_fingerprint: "a3f19c0d2b7e48c1f6d0a5b2c9e4f1a3",
           status: "open",
           message_count: 12,
           first_seen_at: "2026-01-06T09:00:00Z",
@@ -845,11 +862,14 @@ const TERM_SAMPLES: Array<[string, string]> = [
   ["permission key", "This needs quarantine:release."],
   ["surrogate row key", "Filed under internal key 118."],
   ["machine key", "Family ml_threat_classification."],
-  ["opaque row key", "Record 9c4279a2-0d8e-455a-94c4-7c496786df12 was updated."],
+  [
+    "opaque row key",
+    "seen a3f19c0d2b7e48c1f6d0a5b2c9e4f1a3Campaign rule 9c4279a2-0d8e-455a-94c4-7c496786df12.",
+  ],
   ["missing value", "Published by undefined on Tuesday."],
   ["crashed render", "Something went wrong while this screen was drawn."],
   ["model word", "The model flagged the link."],
-  ["engine or artifact name", "Weighted by qwen and served from an ONNX file."],
+  ["engine or artifact name", "Weighted by qwen, matched by Rspamd, served from an ONNX file."],
   ["inference machinery", "A classifier scored the body text."],
   ["parameter count", "The 27B weights were loaded at boot."],
 ];
@@ -901,6 +921,13 @@ interface Surface {
   /** URL the guard renders at. */
   entry: string;
   component: FC;
+  /**
+   * A label that only exists once this surface's own read has painted. The scan
+   * below takes `document.body.textContent`, and the session chip settles before
+   * a page's tables do, so without this a surface could scan green purely because
+   * its rows had not rendered yet.
+   */
+  ready?: string;
 }
 
 const SURFACES: Surface[] = [
@@ -916,6 +943,7 @@ const SURFACES: Surface[] = [
     path: "/outbound-intelligence",
     entry: "/outbound-intelligence",
     component: OutboundIntelligence,
+    ready: "news@acmefreight.example",
   },
   { name: "Quarantine", path: "/quarantine", entry: "/quarantine", component: Quarantine },
   {
@@ -1048,6 +1076,11 @@ describe("tenant console boundary", () => {
       // customer" once the session has resolved, so the scan below runs on the
       // tier-aware render rather than on the pending one.
       await screen.findByText("Your customer · CZA-1");
+      if (surface.ready !== undefined) {
+        // The session chip settles first. Wait for something only the surface's
+        // own read paints, or the scan runs against a loading state.
+        await screen.findAllByText(surface.ready);
+      }
 
       const text = withoutCustomerHandles(document.body.textContent ?? "");
       const leaks: string[] = [];

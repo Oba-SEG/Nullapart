@@ -18,11 +18,21 @@ const managerSession = {
   userId: "actor-1",
   email: "admin@example.test",
   roles: ["system_admin"],
+  tier: "system",
   permissions: ["outbound-intelligence:view", "outbound-intelligence:manage"],
   customerId: "CZA-1",
   expiresAt: "2099-01-01T00:00:00Z",
   csrfToken: "csrf-token",
   impersonation: null,
+};
+
+/** A tenant seat. It holds the same two outbound permissions as the manager. */
+const tenantSession = {
+  ...managerSession,
+  userId: "actor-2",
+  email: "tenant-admin@example.test",
+  roles: ["customer_admin"],
+  tier: "customer",
 };
 
 const baseSnapshot = {
@@ -128,12 +138,12 @@ function ok(body: unknown, status = 200) {
   };
 }
 
-function stubFetch() {
+function stubFetch(session: object = managerSession) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? "GET";
     if (url.includes("/auth/session")) {
-      return ok({ data: managerSession });
+      return ok({ data: session });
     }
     if (method === "POST" && url.endsWith("/outbound-intelligence/approved-senders")) {
       return ok({
@@ -203,6 +213,23 @@ describe("OutboundIntelligence", () => {
     expect(screen.getAllByText("bulk@example.test").length).toBeGreaterThan(0);
     expect(screen.getByText("campaign-abc")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Save approval" })).toBeTruthy();
+  });
+
+  /**
+   * The campaign hash and the matcher that produced it belong to the platform.
+   * A tenant row is named by what the group is and when it first appeared, and
+   * the page has to hold that line even when an answer still carries the keys.
+   */
+  it("names a tenant's campaign groups without the platform's hash or matcher", async () => {
+    stubFetch(tenantSession);
+    renderAt("/outbound-intelligence");
+
+    await screen.findByRole("heading", { name: "Outbound intelligence" });
+    expect(await screen.findByRole("heading", { name: "Similar-message groups" })).toBeTruthy();
+    expect(screen.getByText("Similar messages")).toBeTruthy();
+    expect(screen.queryByText("campaign-abc")).toBeNull();
+    expect(screen.queryByText(/Campaign rule/)).toBeNull();
+    expect(screen.queryByText("Campaign fingerprints")).toBeNull();
   });
 
   it("posts approved sender changes with an idempotency key", async () => {
