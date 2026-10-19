@@ -1,0 +1,160 @@
+.notification-settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+
+.notification-settings-head {
+  align-items: flex-start;
+  display: flex;
+  gap: var(--spacing-4);
+  justify-content: space-between;
+}
+
+.notification-settings-head p {
+  color: var(--color-text-secondary);
+  margin-top: var(--spacing-2);
+}
+
+.notification-effective {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-3) var(--spacing-4);
+}
+
+.notification-settings-form {
+  display: grid;
+  gap: var(--spacing-4);
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+}
+
+.notification-field-wide {
+  grid-column: 1 / -1;
+}
+
+.notification-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.notification-field label {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.notification-field select,
+.notification-field textarea {
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  font: inherit;
+  padding: var(--spacing-2) var(--spacing-3);
+  width: 100%;
+}
+
+.notification-field textarea {
+  min-height: 5rem;
+  resize: vertical;
+}
+
+.notification-field small {
+  color: var(--color-text-secondary);
+}
+
+.notification-field-error {
+  color: var(--color-error);
+  font-size: var(--font-size-sm);
+}
+
+.notification-switch {
+  align-items: center;
+  display: flex;
+  gap: var(--spacing-2);
+}
+
+.notification-save {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-3);
+}
+
+.notification-save-note {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.notification-saved {
+  color: var(--color-success);
+  font-size: var(--font-size-sm);
+}
+
+.notification-error {
+  color: var(--color-error);
+  font-size: var(--font-size-sm);
+}
+
+.notification-locked,
+.notification-state {
+  color: var(--color-text-secondary);
+}
+
+.notification-state.error,
+.notification-locked {
+  background: color-mix(in srgb, var(--color-error) 7%, transparent);
+  border: 1px solid
+    color-mix(in srgb, var(--color-error) 22%, var(--color-border));
+  border-radius: var(--radius-md);
+  color: var(--color-error);
+  padding: var(--spacing-3) var(--spacing-4);
+}
+
+.notification-deliveries {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+
+.notification-deliveries h3 {
+  font-size: var(--font-size-base);
+}
+
+.notification-delivery-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.notification-delivery {
+  align-items: flex-start;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  display: flex;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3);
+}
+
+.notification-delivery-copy {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+.notification-delivery-copy span,
+.notification-delivery-copy small {
+  color: var(--color-text-secondary);
+}
+
+.notification-delivery-ref {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 48rem) {
+  .notification-settings-head {
+    flex-direction: column;
+  }
+}

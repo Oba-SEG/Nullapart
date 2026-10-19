@@ -3,9 +3,12 @@ import { AlertTriangle, CheckCircle2, ExternalLink, RefreshCw, ShieldCheck } fro
 import { useState } from "react";
 
 import { api, type ApiError } from "../api/client";
+import { acknowledgeNotification } from "../api/notifications";
 import { hasPermission, loadSession } from "../auth/session";
 import { StatusPill } from "../components/StatusPill";
 import { ControlRail } from "../components/ControlRail";
+import { NotificationSettings } from "../components/NotificationSettings";
+import { StepUpPrompt } from "../components/StepUpPrompt";
 import { Hint } from "../components/primitives/Hint";
 import { WorkspaceHeader } from "../components/WorkspaceHeader";
 import { WorkflowGuide } from "../components/WorkflowGuide";
@@ -19,6 +22,7 @@ import {
   verificationStatusLabel,
 } from "../lib/labels";
 import type { StatusTone } from "../lib/status";
+import { severityLabel } from "../lib/status";
 import "./DomainSecurity.css";
 
 interface DomainSecuritySummary {
@@ -111,12 +115,24 @@ interface DomainSecurityNotification {
   created_at: string;
 }
 
+interface AcknowledgedNotification {
+  id: string;
+  domain_id: string | null;
+  notification_type: string;
+  severity: "info" | "warning" | "critical";
+  title: string;
+  detail: string;
+  acknowledged_by: string | null;
+  acknowledged_at: string | null;
+}
+
 interface DomainSecurityResponse {
   deployment_id: string;
   generated_at: string;
   summary: DomainSecuritySummary;
   domains: DomainSecurityDomain[];
   notifications: DomainSecurityNotification[];
+  recent_acknowledgments: AcknowledgedNotification[];
 }
 
 interface SourceClassificationRequest {
@@ -233,6 +249,21 @@ export function DomainSecurity() {
     },
   });
 
+  const acknowledge = useMutation({
+    mutationFn: (notificationId: string) => acknowledgeNotification(notificationId, randomUuid()),
+    onSuccess: async (result) => {
+      setNotice(
+        result.changed
+          ? `“${result.title}” acknowledged${
+              result.acknowledged_by ? ` by ${result.acknowledged_by}` : ""
+            }.`
+          : `“${result.title}” was already acknowledged. Nothing new was recorded.`,
+      );
+      await queryClient.invalidateQueries({ queryKey: ["domain-security"] });
+    },
+  });
+  const acknowledgeError = acknowledge.isError ? errorMessage(acknowledge.error) : null;
+
   if (security.isPending) {
     return (
       <div className="domain-security-state" role="status">
@@ -252,6 +283,11 @@ export function DomainSecurity() {
   const data = security.data;
   const aligned = percent(data.summary.dmarc_aligned_messages_30d, data.summary.messages_30d);
   const classifyError = classifySource.isError ? errorMessage(classifySource.error) : null;
+  // The delivery ledger names notices by id only, so the findings this page
+  // already renders supply the words beside it.
+  const notificationTitles: Record<string, string> = Object.fromEntries(
+    [...data.notifications, ...data.recent_acknowledgments].map((item) => [item.id, item.title]),
+  );
 
   function sourceDraftKey(domainId: string, sourceKey: string): string {
     return `${domainId}:${sourceKey}`;
@@ -388,26 +424,75 @@ export function DomainSecurity() {
         />
       </section>
 
-      {data.notifications.length > 0 ? (
+      {data.notifications.length > 0 || data.recent_acknowledgments.length > 0 ? (
         <section className="card domain-security-alerts" aria-labelledby="domain-alerts-heading">
-          <h2 id="domain-alerts-heading">Open domain alerts</h2>
-          <div className="domain-security-alert-list">
-            {data.notifications.map((notification) => (
-              <article
-                className={`domain-security-alert ${notification.severity}`}
-                key={notification.id}
-              >
-                <AlertTriangle size={16} aria-hidden="true" />
-                <div>
-                  <strong>{notification.title}</strong>
-                  <p>{notification.detail}</p>
-                  <small>{formatDate(notification.created_at)}</small>
-                </div>
-              </article>
-            ))}
-          </div>
+          <h2 id="domain-alerts-heading">Findings</h2>
+          {data.notifications.length === 0 ? (
+            <p className="domain-security-good">
+              <CheckCircle2 size={15} aria-hidden="true" />
+              No open findings.
+            </p>
+          ) : (
+            <div className="domain-security-alert-list">
+              {data.notifications.map((notification) => (
+                <article
+                  className={`domain-security-alert ${notification.severity}`}
+                  key={notification.id}
+                >
+                  <AlertTriangle size={16} aria-hidden="true" />
+                  <div className="domain-security-alert-body">
+                    <strong>{notification.title}</strong>
+                    <p>{notification.detail}</p>
+                    <small>
+                      {severityLabel(notification.severity)} · opened{" "}
+                      {formatDate(notification.created_at)}
+                    </small>
+                  </div>
+                  {canManage ? (
+                    <div className="domain-security-alert-action">
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        disabled={acknowledge.isPending}
+                        onClick={() => acknowledge.mutate(notification.id)}
+                      >
+                        Acknowledge
+                      </button>
+                      <Hint label="Acknowledging records who closed the finding and when. It does not change the domain or the mail flow.">
+                        <span className="domain-security-alert-note">Audited</span>
+                      </Hint>
+                    </div>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          )}
+          {acknowledgeError ? (
+            <p className="domain-security-alert-error" role="alert">
+              {acknowledgeError}
+            </p>
+          ) : null}
+          <StepUpPrompt error={acknowledge.error} />
+          {data.recent_acknowledgments.length > 0 ? (
+            <section aria-label="Recently acknowledged findings">
+              <h3>Recently acknowledged</h3>
+              <ul className="domain-security-acknowledged">
+                {data.recent_acknowledgments.map((item) => (
+                  <li key={item.id}>
+                    <strong>{item.title}</strong>
+                    <span>
+                      {item.acknowledged_by ?? "a previous operator"} ·{" "}
+                      {formatDate(item.acknowledged_at)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
         </section>
       ) : null}
+
+      <NotificationSettings titlesById={notificationTitles} />
 
       {data.domains.length === 0 ? (
         <section className="card domain-security-empty">

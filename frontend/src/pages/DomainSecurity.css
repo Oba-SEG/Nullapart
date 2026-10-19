@@ -92,6 +92,61 @@
   );
 }
 
+.domain-security-alerts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+
+.domain-security-alerts h3 {
+  font-size: var(--font-size-base);
+}
+
+.domain-security-alert-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.domain-security-alert-action {
+  align-items: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.domain-security-alert-note {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.domain-security-alert-error {
+  color: var(--color-error);
+}
+
+.domain-security-acknowledged {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.domain-security-acknowledged li {
+  align-items: baseline;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3);
+}
+
+.domain-security-acknowledged span {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
 .domain-security-empty {
   align-items: center;
   display: flex;
