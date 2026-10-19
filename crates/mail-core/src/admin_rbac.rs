@@ -474,6 +474,20 @@ fn rank_for_level(role_level: &str) -> u8 {
 /// arm, which cannot be read at compile time.
 const SYSTEM_RANK: u8 = 3;
 
+/// The bottom rung of the ladder that still means something to a customer.
+/// Kept in step with [`rank_for_level`]'s `"customer"` arm.
+const CUSTOMER_RANK: u8 = 1;
+
+/// Whether this builtin role belongs to a customer's own ladder, so its key may
+/// be named inside a customer console. A custom role resolves to `false` here:
+/// only the reader's own role list can say what a custom key is, so callers use
+/// that as the second authority rather than guessing a level.
+pub fn is_customer_ladder_role(role_key: &str) -> bool {
+    BUILTIN_ROLES
+        .iter()
+        .any(|role| role.key == role_key && rank_for_level(role.role_level) == CUSTOMER_RANK)
+}
+
 /// Whether every listed permission is in the server-side catalog. Used by
 /// role-definition validation to reject payloads referencing unknown keys.
 fn permissions_in_catalog(permissions: &[String]) -> bool {

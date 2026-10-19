@@ -389,6 +389,11 @@ pub struct AuditEventListItem {
     pub created_at: DateTime<Utc>,
     pub actor_login: String,
     pub actor_roles: Vec<String>,
+    /// Set when an actor's role was left off `actor_roles` because the reader
+    /// cannot resolve it: a rung above a customer's own ladder names the
+    /// platform's placement, not anything inside the customer's record.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actor_roles_outside_view: Option<bool>,
     pub impersonated_subject: Option<String>,
     pub impersonated_customer: Option<String>,
     pub customer_id: Option<String>,
@@ -487,12 +492,18 @@ impl AuditEventRecord {
             })
     }
 
-    fn list_item(&self, platform: bool) -> AuditEventListItem {
+    fn list_item(&self, platform: bool, reader_roles: &[String]) -> AuditEventListItem {
+        let (actor_roles, roles_withheld) = if platform {
+            (self.actor_roles.clone(), false)
+        } else {
+            split_actor_roles(&self.actor_roles, reader_roles)
+        };
         AuditEventListItem {
             id: self.id,
             created_at: self.created_at,
             actor_login: self.actor_login.clone(),
-            actor_roles: self.actor_roles.clone(),
+            actor_roles,
+            actor_roles_outside_view: roles_withheld.then_some(true),
             impersonated_subject: self.impersonated_subject.clone(),
             impersonated_customer: self.impersonated_customer.clone(),
             customer_id: self.customer_id.clone(),
@@ -506,9 +517,9 @@ impl AuditEventRecord {
         }
     }
 
-    fn detail(&self, platform: bool) -> AuditEventDetail {
+    fn detail(&self, platform: bool, reader_roles: &[String]) -> AuditEventDetail {
         AuditEventDetail {
-            item: self.list_item(platform),
+            item: self.list_item(platform, reader_roles),
             session_id: platform.then(|| self.session_id.clone()).flatten(),
             details: if platform {
                 detail_fields(&self.details)
@@ -517,6 +528,28 @@ impl AuditEventRecord {
             },
         }
     }
+}
+
+/// What an actor role the reader cannot resolve reads as on a surface with no
+/// flag to carry it, such as the export: the gap, never the key.
+pub const ACTOR_ROLES_OUTSIDE_VIEW_LABEL: &str = "A role outside your view";
+
+/// Splits an actor's roles into what a customer reader may see named and what
+/// must stay off the answer. A builtin at the customer's own level is part of
+/// that ladder, and so is any role the reader holds themselves; anything else
+/// is a rung above them, and its key describes the platform's placement rather
+/// than the customer's record.
+fn split_actor_roles(roles: &[String], reader_roles: &[String]) -> (Vec<String>, bool) {
+    let mut visible = Vec::with_capacity(roles.len());
+    let mut withheld = false;
+    for role in roles {
+        if crate::admin_rbac::is_customer_ladder_role(role) || reader_roles.contains(role) {
+            visible.push(role.clone());
+        } else {
+            withheld = true;
+        }
+    }
+    (visible, withheld)
 }
 
 /// Flattens audit details into sorted redacted key/value pairs. Nested values
@@ -814,7 +847,7 @@ impl AuditStore for InMemoryAuditStore {
         Ok(AuditEventPage {
             events: selected
                 .iter()
-                .map(|record| record.list_item(access.platform_placement))
+                .map(|record| record.list_item(access.platform_placement, &access.actor_roles))
                 .collect(),
             next_cursor,
         })
@@ -838,7 +871,9 @@ impl AuditStore for InMemoryAuditStore {
                     "success",
                     serde_json::json!({ "scope": access.scope.as_guc() }),
                 );
-                Ok(Some(record.detail(access.platform_placement)))
+                Ok(Some(
+                    record.detail(access.platform_placement, &access.actor_roles),
+                ))
             },
             None => {
                 self.push_access(
@@ -1317,7 +1352,7 @@ impl AuditStore for PostgresAuditStore {
         Ok(AuditEventPage {
             events: selected
                 .iter()
-                .map(|record| record.list_item(access.platform_placement))
+                .map(|record| record.list_item(access.platform_placement, &access.actor_roles))
                 .collect(),
             next_cursor,
         })
@@ -1359,7 +1394,9 @@ impl AuditStore for PostgresAuditStore {
                     .commit()
                     .await
                     .map_err(|_| AdminAuditError::PersistenceFailed)?;
-                Ok(Some(record.detail(access.platform_placement)))
+                Ok(Some(
+                    record.detail(access.platform_placement, &access.actor_roles),
+                ))
             },
             None => {
                 Self::record_access(
@@ -1824,7 +1861,7 @@ async fn export_events(
     match state.0.store.export(&access, &filters).await {
         Ok(records) => {
             let truncated = records.len() as i64 == MAX_EXPORT_ROWS;
-            let csv = render_csv(&records, access.platform_placement);
+            let csv = render_csv(&records, access.platform_placement, &access.actor_roles);
             let mut response = (
                 StatusCode::OK,
                 [
@@ -1918,11 +1955,20 @@ fn api_error(status: StatusCode, code: &'static str, message: &'static str) -> R
 /// `details` column is deliberately never exported. The trace column stays
 /// empty for a customer export, because the correlation id names the platform's
 /// logs rather than the customer's record.
-pub fn render_csv(records: &[AuditEventRecord], platform: bool) -> String {
+pub fn render_csv(records: &[AuditEventRecord], platform: bool, reader_roles: &[String]) -> String {
     let mut output = String::from(CSV_HEADER);
     output.push('\n');
     for record in records {
-        let roles = record.actor_roles.join(";");
+        let roles = if platform {
+            record.actor_roles.join(";")
+        } else {
+            let (visible, withheld) = split_actor_roles(&record.actor_roles, reader_roles);
+            let mut cells = visible;
+            if withheld {
+                cells.push(ACTOR_ROLES_OUTSIDE_VIEW_LABEL.to_string());
+            }
+            cells.join(";")
+        };
         let row = [
             record.created_at.to_rfc3339(),
             record.actor_login.clone(),
@@ -2181,7 +2227,7 @@ mod tests {
         // object the platform ran or which identity source proved the actor. A
         // credential still arrives redacted rather than absent, so the seat can
         // see that something sensitive was recorded without recording it.
-        let customer = seeded.detail(false);
+        let customer = seeded.detail(false, &[]);
         let fields: Vec<(&str, &str)> = customer
             .details
             .iter()
@@ -2194,7 +2240,7 @@ mod tests {
 
         // The platform seat still reads the fields a runbook quotes, structure
         // included, because it is the seat that runs the system they name.
-        let platform = seeded.detail(true);
+        let platform = seeded.detail(true, &[]);
         let platform_keys: Vec<&str> = platform
             .details
             .iter()
@@ -2237,21 +2283,31 @@ mod tests {
             false,
         ));
         assert!(!customer.platform_placement);
-        assert_eq!(seeded.list_item(customer.platform_placement).trace_id, None);
-        assert_eq!(seeded.detail(customer.platform_placement).session_id, None);
+        assert_eq!(
+            seeded
+                .list_item(customer.platform_placement, &customer.actor_roles)
+                .trace_id,
+            None
+        );
+        assert_eq!(
+            seeded
+                .detail(customer.platform_placement, &customer.actor_roles)
+                .session_id,
+            None
+        );
 
         let platform = access_for(&context(&["system_admin"], &[AUDIT_VIEW_PERMISSION], false));
         assert!(platform.platform_placement);
         assert_eq!(
             seeded
-                .list_item(platform.platform_placement)
+                .list_item(platform.platform_placement, &platform.actor_roles)
                 .trace_id
                 .as_deref(),
             Some("trace")
         );
         assert_eq!(
             seeded
-                .detail(platform.platform_placement)
+                .detail(platform.platform_placement, &platform.actor_roles)
                 .session_id
                 .as_deref(),
             Some("session")
@@ -2271,16 +2327,60 @@ mod tests {
         let impersonated = access_for(&entering);
         assert!(!impersonated.platform_placement);
         assert_eq!(
-            seeded.list_item(impersonated.platform_placement).trace_id,
+            seeded
+                .list_item(impersonated.platform_placement, &impersonated.actor_roles)
+                .trace_id,
             None
         );
 
         // The same rule holds for a CSV export: the header stays, the column is
         // empty because the correlation id means nothing outside the platform.
-        let customer_csv = render_csv(std::slice::from_ref(&seeded), false);
+        let customer_csv = render_csv(
+            std::slice::from_ref(&seeded),
+            false,
+            &impersonated.actor_roles,
+        );
         assert!(!customer_csv.contains("\"trace\""), "{customer_csv}");
-        let platform_csv = render_csv(std::slice::from_ref(&seeded), true);
+        let platform_csv = render_csv(std::slice::from_ref(&seeded), true, &platform.actor_roles);
         assert!(platform_csv.contains("\"trace\""), "{platform_csv}");
+    }
+
+    /// An actor role above a customer's own ladder names the platform's
+    /// placement rather than anything inside the customer's record, so a tenant's
+    /// audit read carries the fact that something was left off and never the key.
+    #[test]
+    fn an_actor_role_above_the_reader_is_left_off_the_answer() {
+        let mut seeded = record(Some("customer-a"), "release", "ob1");
+        seeded.actor_roles = vec!["customer_admin".to_string(), "support_agent".to_string()];
+        let reader = vec!["customer_admin".to_string()];
+
+        let item = seeded.list_item(false, &reader);
+        assert_eq!(item.actor_roles, reader);
+        assert_eq!(item.actor_roles_outside_view, Some(true));
+
+        // A platform seat reads the rung it has to act on, and the withheld key
+        // is an absent field there rather than a null one.
+        let platform = seeded.list_item(true, &["system_admin".to_string()]);
+        assert_eq!(
+            platform.actor_roles,
+            vec!["customer_admin".to_string(), "support_agent".to_string()]
+        );
+        let answer = serde_json::to_value(platform).expect("a platform answer serialises");
+        assert!(answer.get("actor_roles_outside_view").is_none());
+
+        // A custom role the reader holds is part of their own ladder even
+        // though no builtin table can resolve its level.
+        let mut peer = record(Some("customer-a"), "release", "peer@example.test");
+        peer.actor_roles = vec!["triage".to_string()];
+        let item = peer.list_item(false, &["triage".to_string()]);
+        assert_eq!(item.actor_roles, vec!["triage".to_string()]);
+        assert_eq!(item.actor_roles_outside_view, None);
+
+        // The export has no flag column, so the gap travels as the word.
+        let csv = render_csv(std::slice::from_ref(&seeded), false, &reader);
+        assert!(!csv.contains("support_agent"), "{csv}");
+        assert!(csv.contains(ACTOR_ROLES_OUTSIDE_VIEW_LABEL), "{csv}");
+        assert!(csv.contains("customer_admin"), "{csv}");
     }
 
     #[test]
@@ -2781,7 +2881,7 @@ mod tests {
             trace_id: "trace".to_string(),
             details: serde_json::Value::Null,
         };
-        let csv = render_csv(&[record], true);
+        let csv = render_csv(&[record], true, &[]);
         assert!(csv.contains("\"actor\"\"@example.test\""));
         assert!(csv.contains("\"'=cmd()\""));
         assert!(csv.contains("\"line break\""));
