@@ -232,7 +232,11 @@ export function Quarantine() {
         </label>
         <label>
           <span className="sr-only">Filter by severity</span>
-          <select value={severity} onChange={(event) => setSeverity(event.target.value)}>
+          <select
+            aria-label="Filter by severity"
+            value={severity}
+            onChange={(event) => setSeverity(event.target.value)}
+          >
             <option value="all">All severities</option>
             <option value="critical">Critical</option>
             <option value="high">High</option>

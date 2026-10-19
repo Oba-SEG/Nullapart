@@ -85,6 +85,7 @@ describe("Quarantine", () => {
     expect(screen.getByText("Category: Malware")).toBeTruthy();
     expect(screen.getByText("Finding: Static malware rule matched")).toBeTruthy();
     expect(screen.getByText(/never shown here/i)).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "Filter by severity" })).toHaveValue("all");
     expect(screen.getByRole("link", { name: /tenant-message-1/ })).toHaveProperty(
       "href",
       expect.stringContaining("/quarantine/tenant-message-1"),
