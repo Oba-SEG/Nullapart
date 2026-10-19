@@ -3,7 +3,9 @@
 //! The projection is intentionally content-free: operators see sender/source
 //! behaviour, aggregate campaign fingerprints, event state and approval
 //! budgets. It never exposes message bodies, raw MIME, full recipient lists or
-//! content samples.
+//! content samples. The provider's own remediation prose and runbook path are
+//! platform text, so they are carried only for a platform placement; a customer
+//! read gets the decision and what it cost them.
 
 use std::sync::Arc;
 
@@ -26,6 +28,7 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::admin_audit::{source_ip_from, AuditEventRecord, PostgresAuditStore};
+use crate::admin_rbac::{SUPPORT_ROLE, SYSTEM_ADMIN_ROLE};
 use crate::idempotency::{claim, complete, ClaimOutcome};
 
 pub const OUTBOUND_INTELLIGENCE_VIEW_PERMISSION: &str = "outbound-intelligence:view";
@@ -322,6 +325,7 @@ async fn get_outbound_intelligence(
         &mut transaction,
         &state.0.deployment_id.0,
         &context.customer_id.0,
+        platform_placement(&context),
     )
     .await
     {
@@ -727,10 +731,16 @@ async fn load_campaigns(
     .map_err(|_| unavailable())
 }
 
+/// Security events for one customer. `platform` is the caller's placement: the
+/// runbook pointer and the remediation prose are written for the provider's
+/// on-call team, so they are withheld from a customer read. What a customer
+/// keeps is the decision, its severity, the count and the budget it breached,
+/// which is everything the console can act on.
 async fn load_security_events(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     deployment_id: &str,
     customer_id: &str,
+    platform: bool,
 ) -> Result<Vec<SecurityEventView>, Response> {
     sqlx::query(
         "SELECT id, event_type, severity, outcome, reason_code, sender_address, source_id, \
@@ -764,8 +774,10 @@ async fn load_security_events(
                 first_seen_at: row.get("first_seen_at"),
                 last_seen_at: row.get("last_seen_at"),
                 cooldown_until: row.get("cooldown_until"),
-                remediation_runbook: row.get("remediation_runbook"),
-                remediation_summary: row.get("remediation_summary"),
+                remediation_runbook: platform.then(|| row.get("remediation_runbook")).flatten(),
+                remediation_summary: platform
+                    .then(|| row.get("remediation_summary"))
+                    .flatten(),
                 credential_rotation_recommended: row.get("credential_rotation_recommended"),
             })
             .collect()
@@ -874,6 +886,19 @@ fn has_permission(context: &TenantContext, permission: &str) -> bool {
         .permissions
         .iter()
         .any(|granted| granted == permission)
+}
+
+/// Whether this read comes from a platform seat rather than a customer console.
+/// Permission decides what a caller may read; placement decides whose words the
+/// answer is written in. An operator sitting in a customer's console through
+/// impersonation is answered as that customer.
+fn platform_placement(context: &TenantContext) -> bool {
+    context.impersonation.is_none()
+        && context
+            .actor
+            .roles
+            .iter()
+            .any(|role| role == SYSTEM_ADMIN_ROLE || role == SUPPORT_ROLE)
 }
 
 async fn set_scope(
@@ -1046,7 +1071,7 @@ fn api_error(status: StatusCode, code: &'static str, message: &'static str) -> R
 mod tests {
     use axum::{body::Body, http::Request, Extension};
     use nullapart_mail_contracts::ActorId;
-    use nullapart_policy::{AuthenticationAssurance, ContextActor, RegionId};
+    use nullapart_policy::{AuthenticationAssurance, ContextActor, ImpersonationContext, RegionId};
     use sqlx::postgres::PgPoolOptions;
     use tower::ServiceExt;
 
@@ -1110,6 +1135,36 @@ mod tests {
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn provider_remediation_text_follows_the_seat_not_the_permission() {
+        let view = vec![OUTBOUND_INTELLIGENCE_VIEW_PERMISSION.to_string()];
+        // Holds the read permission, and is still a customer console.
+        assert!(!platform_placement(&context(view.clone())));
+
+        let mut system = context(view.clone());
+        system.actor.roles = vec![SYSTEM_ADMIN_ROLE.to_string()];
+        assert!(platform_placement(&system));
+
+        let mut support = context(view.clone());
+        support.actor.roles = vec![SUPPORT_ROLE.to_string()];
+        assert!(platform_placement(&support));
+
+        // An operator who entered a customer's console is answered as that customer.
+        let mut impersonated = context(view);
+        impersonated.actor.roles = vec![SYSTEM_ADMIN_ROLE.to_string()];
+        let subject = impersonated.actor.clone();
+        let customer = impersonated.customer_id.clone();
+        impersonated.impersonation = Some(ImpersonationContext {
+            real_actor: subject,
+            impersonated_subject: None,
+            impersonated_customer: customer,
+            started_at: Utc::now(),
+            reason: "support session".to_string(),
+            session_id: "outbound-intelligence-test".to_string(),
+        });
+        assert!(!platform_placement(&impersonated));
     }
 
     #[tokio::test]
