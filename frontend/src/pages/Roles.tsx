@@ -3,6 +3,7 @@ import { ShieldPlus } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 
 import { api, type ApiError } from "../api/client";
+import { capabilityLock, type WriteCapability } from "../api/capabilities";
 import {
   listPermissionCatalog,
   listRoles,
@@ -10,7 +11,7 @@ import {
   type RoleDefinition,
   type RoleLevel,
 } from "../api/roles";
-import { hasPermission, loadSession } from "../auth/session";
+import { hasPermission, isTenantTier, loadSession, type Session } from "../auth/session";
 import { ControlRail } from "../components/ControlRail";
 import { StepUpPrompt } from "../components/StepUpPrompt";
 import { WorkflowGuide } from "../components/WorkflowGuide";
@@ -29,6 +30,36 @@ const ROLE_LEVELS: RoleLevel[] = ["system", "support", "customer"];
 
 /** Mirrors the server-side role-key rule; the server stays authoritative. */
 const ROLE_KEY_PATTERN = /^[a-z][a-z0-9_]{2,63}$/;
+
+/** The builtin role the role-definition routes reserve their writes to. */
+const SYSTEM_ADMIN_ROLE = "system_admin";
+
+/**
+ * A role can grant `admin:users:manage` and still be refused: the routes behind
+ * these buttons keep definition changes to the platform's built-in System
+ * Administrator. Stating the reservation is what makes the lock actionable.
+ */
+const ROLE_DEFINITION_REFUSAL =
+  "Creating or editing a role is limited to the platform's built-in System Administrator role, and your session does not hold it. A role can grant admin:users:manage and still be refused.";
+
+/**
+ * The gate the server publishes on the session decides. A session that carries
+ * no capabilities (a console talking to a server that predates the field) falls
+ * back to the same two predicates the route runs, so the console neither offers
+ * a write the API will refuse nor invents a refusal it does not apply.
+ */
+function defineRolesGate(session: Session | null): WriteCapability | undefined {
+  if (session === null) return undefined;
+  const published = session.capabilities?.defineRoles;
+  if (published) return published;
+  if (!hasPermission(session, "admin:users:manage")) {
+    return { allowed: false, blocker: "permission" };
+  }
+  if (!session.roles.includes(SYSTEM_ADMIN_ROLE)) {
+    return { allowed: false, blocker: "role" };
+  }
+  return { allowed: true, blocker: null };
+}
 
 function roleKeyError(value: string): string | undefined {
   const trimmed = value.trim();
@@ -79,9 +110,10 @@ interface RoleDraft {
 /**
  * Role workspace listing platform built-ins and deployment-defined custom
  * roles, with creation, editing and deletion of custom roles. The server
- * enforces who may hold each capability: creation is reserved for system
- * administrators, built-ins are immutable, and role deletion is rejected
- * while users still hold the role.
+ * enforces who may hold each capability: definition changes are reserved for the
+ * built-in System Administrator identity, built-ins are immutable, and role
+ * deletion is rejected while users still hold the role. A customer administrator
+ * sees the same directory as "Your roles" with those changes stated as locked.
  */
 export function Roles() {
   const queryClient = useQueryClient();
@@ -105,7 +137,15 @@ export function Roles() {
   });
 
   const current = session.data ?? null;
-  const canManage = hasPermission(current, "admin:users:manage");
+  const tenant = isTenantTier(current);
+  const defineRoles = defineRolesGate(current);
+  const canManage = defineRoles?.allowed === true;
+  const defineRolesLock = capabilityLock(
+    defineRoles,
+    "Creating or editing a role",
+    "admin:users:manage",
+    ROLE_DEFINITION_REFUSAL,
+  );
   const directory = useMemo(() => roles.data ?? [], [roles.data]);
 
   const filtered = useMemo(() => {
@@ -130,9 +170,15 @@ export function Roles() {
     <div className="roles-page">
       <WorkspaceHeader
         eyebrow="Access"
-        title="Roles"
-        description="Built-in roles come with Nullapart and cannot be changed here. Custom roles are ones you create for this installation from the permissions listed here."
-        scope={canManage ? "Managing roles" : "Viewing roles"}
+        title={tenant ? "Your roles" : "Roles"}
+        description={
+          canManage
+            ? "Built-in roles come with Nullapart and cannot be changed here. Custom roles are ones you create for this installation from the permissions listed here."
+            : tenant
+              ? "The roles your administrators are assigned to, and the permissions each one grants. Role definitions themselves are written by the platform."
+              : "Built-in roles come with Nullapart and cannot be changed here. Custom roles are ones the platform defines for this installation from the permissions listed here."
+        }
+        scope={canManage ? "Managing roles" : tenant ? "Viewing your roles" : "Viewing roles"}
       />
 
       <ControlRail
@@ -150,7 +196,9 @@ export function Roles() {
             label: "Custom",
             value: rolesAvailable ? directory.filter((role) => !role.builtin).length : rolesState,
             detail: rolesAvailable
-              ? "Custom roles you can edit or delete."
+              ? canManage
+                ? "Custom roles you can edit or delete."
+                : "Custom roles written by the platform."
               : "The custom role count is unavailable until the roles load.",
             tone:
               rolesAvailable && directory.some((role) => !role.builtin) ? "attention" : "neutral",
@@ -220,6 +268,10 @@ export function Roles() {
             <ShieldPlus size={16} aria-hidden="true" />
             New role
           </Button>
+        ) : defineRolesLock !== "" ? (
+          <p className="roles-lock" role="status">
+            {defineRolesLock}
+          </p>
         ) : null}
       </div>
 

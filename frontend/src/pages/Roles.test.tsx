@@ -65,6 +65,7 @@ function ok(body: unknown, status = 200) {
 interface StubOptions {
   permissions?: string[];
   deleteError?: { status: number; code: string; message: string };
+  session?: Record<string, unknown>;
 }
 
 function stubFetch(options: StubOptions = {}) {
@@ -72,7 +73,13 @@ function stubFetch(options: StubOptions = {}) {
     const url = String(input);
     const method = (init?.method ?? "GET").toUpperCase();
     if (method === "GET" && url.includes("/auth/session")) {
-      return ok({ data: { ...session, permissions: options.permissions ?? session.permissions } });
+      return ok({
+        data: {
+          ...session,
+          permissions: options.permissions ?? session.permissions,
+          ...options.session,
+        },
+      });
     }
     if (method === "GET" && url.includes("/admin/roles")) {
       return ok({ data: roles });
@@ -212,6 +219,57 @@ describe("Roles", () => {
           String(init?.method ?? "GET").toUpperCase() === "POST",
       ),
     ).toBe(false);
+  });
+
+  it("states the reserved identity instead of offering a refused role write", async () => {
+    stubFetch({
+      session: { capabilities: { defineRoles: { allowed: false, blocker: "role" } } },
+    });
+    renderPage();
+
+    expect(await screen.findByText("Triage agent")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "New role" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+    expect(
+      screen.getByText(/limited to the platform's built-in System Administrator role/),
+    ).toBeTruthy();
+  });
+
+  it("renders the tenant role list as read-only with its own framing", async () => {
+    stubFetch({
+      permissions: ["admin:users:manage"],
+      session: {
+        tier: "customer",
+        roles: ["customer_admin"],
+        customerId: "customer-1",
+        capabilities: { defineRoles: { allowed: false, blocker: "role" } },
+      },
+    });
+    renderPage();
+
+    expect(await screen.findByRole("heading", { name: "Your roles" })).toBeTruthy();
+    expect(screen.queryByRole("columnheader", { name: "Actions" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "New role" })).toBeNull();
+    expect(screen.queryByText("Managed by platform")).toBeNull();
+    expect(
+      screen.getByText(/A role can grant admin:users:manage and still be refused/),
+    ).toBeTruthy();
+    expect(screen.getByText("Custom roles written by the platform.")).toBeTruthy();
+  });
+
+  it("follows the published verdict even for a system session", async () => {
+    stubFetch({
+      session: { capabilities: { defineRoles: { allowed: false, blocker: "permission" } } },
+    });
+    renderPage();
+
+    expect(await screen.findByText("Triage agent")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "New role" })).toBeNull();
+    expect(
+      screen.getByText("Creating or editing a role needs the admin:users:manage permission", {
+        exact: false,
+      }),
+    ).toBeTruthy();
   });
 
   it("surfaces the in-use guidance when the server rejects a delete with ROLE_IN_USE", async () => {

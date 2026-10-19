@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 
 import { api, type ApiError } from "../api/client";
 import { listRoles, rolePermissionsWithin, type RoleDefinition } from "../api/roles";
-import { loadSession } from "../auth/session";
+import { isTenantTier, loadSession, type Session } from "../auth/session";
 import { ControlRail } from "../components/ControlRail";
 import { StepUpPrompt } from "../components/StepUpPrompt";
 import { WorkspaceHeader } from "../components/WorkspaceHeader";
@@ -30,9 +30,10 @@ interface AdminUser {
 
 /**
  * Directory-facing projection of a server role definition
- * (`GET /admin/roles`). `grantable` is a UI affordance only: a custom role
- * whose permissions are not fully held by the viewing session cannot be
- * offered for a new grant, and the server re-checks every attempt.
+ * (`GET /admin/roles`). `grantable` and `revocable` are UI affordances only:
+ * a role above the viewing session's own level cannot be assigned or removed
+ * by them, a custom role whose permissions are not fully held cannot be
+ * assigned, and the server re-checks every attempt.
  */
 interface RoleView {
   key: string;
@@ -41,16 +42,44 @@ interface RoleView {
   description: string;
   builtin: boolean;
   grantable: boolean;
+  grantReason: string | null;
+  revocable: boolean;
+  revokeReason: string | null;
 }
 
-function toRoleView(role: RoleDefinition, sessionPermissions: string[]): RoleView {
+/** Mirrors `rank_for_level` in `crates/mail-core/src/admin_rbac.rs`. */
+const LEVEL_RANK: Record<string, number> = { system: 3, support: 2, customer: 1 };
+
+function rankForLevel(level: string): number {
+  return LEVEL_RANK[level] ?? 0;
+}
+
+/**
+ * The caller's highest role level, as the server resolved it onto the session
+ * tier. A session with no published tier keeps unrestricted role lists rather
+ * than inventing refusals the API may not apply.
+ */
+function callerRank(session: Session | null): number {
+  return typeof session?.tier === "string" ? rankForLevel(session.tier) : Number.POSITIVE_INFINITY;
+}
+
+const ABOVE_LEVEL_GRANT = "Only a session at this role's level can grant it.";
+const ABOVE_LEVEL_REVOKE = "Only a session at this role's level can remove it.";
+const PERMISSIONS_NOT_HELD = "Contains permissions you do not hold.";
+
+function toRoleView(role: RoleDefinition, sessionPermissions: string[], rank: number): RoleView {
+  const aboveOwnLevel = rankForLevel(role.roleLevel) > rank;
+  const withinHeld = role.builtin || rolePermissionsWithin(role, sessionPermissions);
   return {
     key: role.roleKey,
     label: role.displayName,
     level: role.roleLevel,
     description: role.description ?? "Custom role.",
     builtin: role.builtin,
-    grantable: role.builtin || rolePermissionsWithin(role, sessionPermissions),
+    grantable: !aboveOwnLevel && withinHeld,
+    grantReason: aboveOwnLevel ? ABOVE_LEVEL_GRANT : withinHeld ? null : PERMISSIONS_NOT_HELD,
+    revocable: !aboveOwnLevel,
+    revokeReason: aboveOwnLevel ? ABOVE_LEVEL_REVOKE : null,
   };
 }
 
@@ -64,6 +93,9 @@ function unknownRoleView(key: string): RoleView {
       "This role is not in the role list. Its permissions are checked before any change is saved.",
     builtin: false,
     grantable: false,
+    grantReason: "This role is not in the role list, so its permissions cannot be checked.",
+    revocable: true,
+    revokeReason: null,
   };
 }
 
@@ -78,7 +110,10 @@ function errorMessage(error: unknown): string {
  * Administrator directory with working lifecycle operations: create
  * administrators, grant and revoke roles. Listing requires
  * `admin:users:manage` or `admin:impersonate`; every mutation additionally
- * requires `admin:users:manage` and is re-authorized server-side.
+ * requires `admin:users:manage` and is re-authorized server-side. For a
+ * customer-tier session the server scopes the directory to that customer and
+ * requires new accounts to carry its own customer id, so the console states the
+ * organisation instead of offering a customer field that can only be refused.
  */
 export function AdminUsers() {
   const queryClient = useQueryClient();
@@ -103,12 +138,19 @@ export function AdminUsers() {
 
   const current = session.data ?? null;
   const canManage = current?.permissions?.includes("admin:users:manage") ?? false;
+  // A customer-tier actor administers one organisation; a support or system
+  // session's own customerId is the deployment template, not a customer it
+  // creates accounts for, so only the tenant shape locks the scope.
+  const tenant = isTenantTier(current);
+  const tenantCustomerId = tenant ? (current?.customerId ?? null) : null;
   const directory = useMemo(() => users.data ?? [], [users.data]);
 
   const sessionPermissions = useMemo(() => current?.permissions ?? [], [current]);
+  const grantorRank = callerRank(current);
   const roleViews = useMemo(
-    () => (roleDirectory.data ?? []).map((role) => toRoleView(role, sessionPermissions)),
-    [roleDirectory.data, sessionPermissions],
+    () =>
+      (roleDirectory.data ?? []).map((role) => toRoleView(role, sessionPermissions, grantorRank)),
+    [roleDirectory.data, sessionPermissions, grantorRank],
   );
   const rolesByKey = useMemo(() => new Map(roleViews.map((role) => [role.key, role])), [roleViews]);
   const viewFor = useMemo(
@@ -134,13 +176,17 @@ export function AdminUsers() {
     <div className="admin-users-page">
       <WorkspaceHeader
         eyebrow="Identity administration"
-        title="Admin users"
-        description="Create administrators and manage their roles. Each grant and removal is checked against your own role and recorded."
+        title={tenant ? "Your administrators" : "Admin users"}
+        description={
+          tenant
+            ? "Create administrators for your organisation and manage their roles. Accounts created here belong to your organisation, and each grant or removal is checked against your own role and recorded."
+            : "Create administrators and manage their roles. Each grant and removal is checked against your own role and recorded."
+        }
         scope={canManage ? "Managing administrators" : "Viewing administrators"}
       />
 
       <ControlRail
-        title="Directory scope"
+        title={tenant ? "Your organisation" : "Directory scope"}
         summary="Give an administrator the smallest role that lets them do their job, and remove roles they no longer need."
         signals={[
           {
@@ -177,7 +223,9 @@ export function AdminUsers() {
         steps={[
           {
             label: "Locate",
-            detail: "Find the administrator and check which customer they belong to.",
+            detail: tenant
+              ? "Find the administrator and check which roles they already hold."
+              : "Find the administrator and check which customer they belong to.",
           },
           {
             label: "Review",
@@ -208,7 +256,9 @@ export function AdminUsers() {
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search login, name, customer, or role"
+            placeholder={
+              tenant ? "Search login, name, or role" : "Search login, name, customer, or role"
+            }
           />
         </label>
         {canManage ? (
@@ -230,7 +280,7 @@ export function AdminUsers() {
             <tr>
               <th scope="col">Login</th>
               <th scope="col">Name</th>
-              <th scope="col">Customer</th>
+              {tenant ? null : <th scope="col">Customer</th>}
               <th scope="col">Lifecycle</th>
               <th scope="col">Roles</th>
               {canManage ? <th scope="col">Actions</th> : null}
@@ -243,7 +293,7 @@ export function AdminUsers() {
                   <strong>{user.login}</strong>
                 </td>
                 <td>{user.displayName}</td>
-                <td>{user.customerId ?? "Platform"}</td>
+                {tenant ? null : <td>{user.customerId ?? "Platform"}</td>}
                 <td>{lifecycleLabel(user.lifecycle)}</td>
                 <td>
                   <div className="admin-users-role-list">
@@ -264,14 +314,21 @@ export function AdminUsers() {
                 </td>
                 {canManage ? (
                   <td>
-                    <Button
-                      size="sm"
-                      onClick={() => {
-                        setRolesTarget(user);
-                      }}
-                    >
-                      Manage roles
-                    </Button>
+                    {user.id === current?.userId ? (
+                      <p className="admin-users-lock" role="status">
+                        You cannot change your own roles. Another administrator at your level has to
+                        do it.
+                      </p>
+                    ) : (
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          setRolesTarget(user);
+                        }}
+                      >
+                        Manage roles
+                      </Button>
+                    )}
                   </td>
                 ) : null}
               </tr>
@@ -293,6 +350,8 @@ export function AdminUsers() {
         roles={roleViews}
         rolesLoading={roleDirectory.isLoading}
         rolesError={roleDirectory.isError ? roleDirectory.error : null}
+        tenant={tenant}
+        tenantCustomerId={tenantCustomerId}
         onClose={() => {
           setCreateOpen(false);
         }}
@@ -306,10 +365,10 @@ export function AdminUsers() {
       {rolesTarget ? (
         <ManageRolesDialog
           target={rolesTarget}
-          viewerId={current?.userId ?? null}
           roles={roleViews}
           rolesLoading={roleDirectory.isLoading}
           rolesError={roleDirectory.isError ? roleDirectory.error : null}
+          tenant={tenant}
           onClose={() => {
             setRolesTarget(null);
           }}
@@ -349,6 +408,10 @@ interface CreateDialogProps {
   roles: RoleView[];
   rolesLoading: boolean;
   rolesError: unknown;
+  /** True for a customer-tier session, whose accounts are always its own. */
+  tenant: boolean;
+  /** The tenant session's own customer id, which the create route requires. */
+  tenantCustomerId: string | null;
   onClose: () => void;
   onCreated: () => void;
 }
@@ -358,6 +421,8 @@ function CreateAdministratorDialog({
   roles,
   rolesLoading,
   rolesError,
+  tenant,
+  tenantCustomerId,
   onClose,
   onCreated,
 }: CreateDialogProps) {
@@ -366,6 +431,7 @@ function CreateAdministratorDialog({
   const [customerId, setCustomerId] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
 
+  const scopedCustomerId = tenant ? (tenantCustomerId ?? "") : customerId.trim();
   const create = useMutation({
     mutationFn: async () =>
       api.post(
@@ -373,7 +439,7 @@ function CreateAdministratorDialog({
         {
           login: login.trim(),
           displayName: displayName.trim(),
-          customerId: customerId.trim() === "" ? null : customerId.trim(),
+          customerId: scopedCustomerId === "" ? null : scopedCustomerId,
           roles: selected,
         },
         { idempotencyKey: randomUuid() },
@@ -382,7 +448,11 @@ function CreateAdministratorDialog({
   });
 
   const loginValid = login.trim().includes("@");
-  const canSubmit = loginValid && displayName.trim().length > 0 && selected.length > 0;
+  const canSubmit =
+    loginValid &&
+    displayName.trim().length > 0 &&
+    selected.length > 0 &&
+    (!tenant || scopedCustomerId.length > 0);
 
   function close() {
     setLogin("");
@@ -415,21 +485,36 @@ function CreateAdministratorDialog({
           onChange={(event) => setDisplayName(event.target.value)}
           placeholder="Operator"
         />
-        <Input
-          label="Customer account (optional)"
-          value={customerId}
-          onChange={(event) => setCustomerId(event.target.value)}
-          placeholder="Leave blank for a platform account"
-          hint="A customer administrator belongs to one customer only."
-        />
+        {tenant ? (
+          <Input
+            label="Customer account"
+            value={scopedCustomerId.length > 0 ? "Your organisation" : ""}
+            readOnly
+            hint="Accounts you create here belong to your organisation."
+            error={
+              scopedCustomerId.length > 0
+                ? undefined
+                : "This session is not scoped to a customer, so an account cannot be created."
+            }
+          />
+        ) : (
+          <Input
+            label="Customer account (optional)"
+            value={customerId}
+            onChange={(event) => setCustomerId(event.target.value)}
+            placeholder="Leave blank for a platform account"
+            hint="A customer administrator belongs to one customer only."
+          />
+        )}
         <fieldset className="admin-users-role-picker">
           <legend>
-            <Hint label="You can only grant roles whose permissions you already hold. Roles you cannot grant appear dimmed.">
+            <Hint label="You can only grant roles at or below your own level whose permissions you already hold. Roles you cannot grant appear dimmed.">
               <span className="hint-term">Roles</span>
             </Hint>
           </legend>
           <p className="admin-users-form-hint">
-            You can only grant roles whose permissions you already hold. Each grant is recorded.
+            You can only grant roles at or below your own level whose permissions you already hold.
+            Each grant is recorded.
           </p>
           <RolePickerState loading={rolesLoading} error={rolesError} />
           {!rolesLoading && !rolesError
@@ -439,7 +524,7 @@ function CreateAdministratorDialog({
                     type="checkbox"
                     checked={selected.includes(role.key)}
                     disabled={!role.grantable}
-                    title={role.grantable ? undefined : "Contains permissions you do not hold"}
+                    title={role.grantReason ?? undefined}
                     onChange={(event) => {
                       setSelected((current) =>
                         event.target.checked
@@ -480,20 +565,20 @@ function CreateAdministratorDialog({
 
 interface ManageRolesDialogProps {
   target: AdminUser;
-  viewerId: string | null;
   roles: RoleView[];
   rolesLoading: boolean;
   rolesError: unknown;
+  tenant: boolean;
   onClose: () => void;
   onSaved: () => void;
 }
 
 function ManageRolesDialog({
   target,
-  viewerId,
   roles,
   rolesLoading,
   rolesError,
+  tenant,
   onClose,
   onSaved,
 }: ManageRolesDialogProps) {
@@ -538,8 +623,6 @@ function ManageRolesDialog({
     onClose();
   }
 
-  const isSelf = viewerId !== null && viewerId === target.id;
-
   return (
     <Dialog open onClose={close} title="Manage roles">
       <form
@@ -551,14 +634,12 @@ function ManageRolesDialog({
       >
         <p className="admin-users-form-summary">
           <strong>{target.displayName}</strong> ({target.login})
-          {target.customerId ? ` in customer ${target.customerId}` : " on the platform"}
+          {target.customerId
+            ? tenant
+              ? " in your organisation"
+              : ` in customer ${target.customerId}`
+            : " on the platform"}
         </p>
-        {isSelf ? (
-          <p className="admin-users-warning" role="note">
-            You are editing your own roles. If you remove a role you rely on, this session may lose
-            access the next time it is checked.
-          </p>
-        ) : null}
         <fieldset className="admin-users-role-picker">
           <legend>
             <Hint label="These are the roles the administrator holds now. Untick to remove a role, tick to add one.">
@@ -569,16 +650,18 @@ function ManageRolesDialog({
           {!rolesLoading && !rolesError
             ? availableRoles.map((role) => {
                 const checked = draft.includes(role.key);
-                // A role already held stays togglable so revokes remain possible;
-                // the server still authorizes both directions.
-                const blocked = !role.grantable && !checked;
+                // A role already held stays togglable so revokes remain possible
+                // unless its level is above the viewer's own; the server still
+                // authorizes both directions.
+                const blocked = checked ? !role.revocable : !role.grantable;
+                const reason = checked ? role.revokeReason : role.grantReason;
                 return (
                   <label key={role.key} className="admin-users-role-option">
                     <input
                       type="checkbox"
                       checked={checked}
                       disabled={blocked}
-                      title={blocked ? "Contains permissions you do not hold" : undefined}
+                      title={reason ?? undefined}
                       onChange={(event) => {
                         setDraft((current) =>
                           event.target.checked

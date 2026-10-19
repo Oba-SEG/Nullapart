@@ -118,14 +118,11 @@
   gap: var(--spacing-2);
 }
 
-.admin-users-warning {
+.admin-users-lock {
   margin: 0;
-  padding: var(--spacing-2) var(--spacing-3);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
-  background: var(--color-warning-light);
-  color: var(--color-warning);
+  color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
+  max-width: 34ch;
 }
 
 .admin-users-role-picker {
