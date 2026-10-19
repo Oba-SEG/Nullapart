@@ -845,11 +845,55 @@ provider` from `governed_by` instead of naming a tier. Retiring an override says
 **Gates**: `cargo test -p nullapart-mail-core --lib` 638 passed (1 ignored),
 `cargo fmt --check` clean. `pnpm check-all` green (302 tests, 34 files).
 
+## Landed in the fourteenth pass (the directory stopped naming rungs above the reader)
+
+Twelve passes named one leak and left it standing: the administrator directory.
+This pass closes it in the projection, where a word can be removed by a server
+rather than reworded by a browser.
+
+- **One ceiling, reused.** `crates/mail-core/src/admin_rbac.rs` now resolves
+  `VisibleRoles` for the caller and applies it to both reads
+  (`GET /api/v1/admin/users`, `GET /api/v1/admin/users/{id}`) and both mutations
+  (grant, revoke). Its ceiling is the same `grantor_rank` the write paths already
+  enforce, so the answer a customer gets cannot be more generous than the change
+  that customer is allowed to make. A role key whose level is above the reader,
+  or whose level the role directory cannot resolve at all, is left off.
+- **Withheld is a fact, not a blank.** Omitting a key silently would render an
+  account that holds a platform role as an account that holds nothing, which is
+  both wrong and the kind of wrong that gets acted on. The answer therefore
+  carries `roles_outside_reach` (an absent key when nothing was withheld, not
+  `null`) and the console renders it as a gap: `A role you cannot manage` to a
+  tenant, `A role above your level` to a support-tier reader. Neither names the
+  role, its key, or how many were left off.
+- **The mutation answer uses the same projection.** A grant response echoes the
+  roles held after the change, so an unprojected write would hand back the exact
+  key the list read had just withheld. Both success arms now go through
+  `role_mutation_answer`.
+- **Platform answers are unchanged, and said so.** The projection is skipped
+  entirely at or above `SYSTEM_RANK`: no extra store read, no new key, nothing
+  withheld. A test asserts a platform session still gets the plain role list, so
+  this pass cannot quietly narrow the console it is not for. `create_user` is
+  deliberately not projected because its gate already refuses an above-ceiling
+  grant, so there is nothing there for the answer to name.
+- **What the dialog now refuses to imply.** The Manage-roles editor states that
+  the withheld grant stays as it is while the tenant changes the rest, and the
+  "an administrator with no roles" warning suppresses itself when the account
+  does hold something outside the reader's reach.
+
+**Flagged, not fixed.** `admin_roles` is scoped by deployment, not by customer.
+A tenant's role-directory read therefore lists custom customer-level roles owned
+by other customers, and the grant path will bestow one. The rank ceiling applied
+this pass is the same ceiling that gap hides under, so closing it means scoping
+the role store, not rewording a console; it belongs to the placement work, and is
+recorded here rather than absorbed into a wording pass.
+
+**Gates**: `cargo test -p nullapart-mail-core --lib` 640 passed (1 ignored),
+`cargo fmt --all` and `cargo clippy -p nullapart-mail-core --all-targets -- -D
+warnings` clean. `pnpm check-all` green (305 tests, 34 files).
+
 **Still open, stated rather than implied.** The live wire sweep on `.4` has not
 re-run against this build, and migration `044` has not been applied to the
-long-lived Postgres volume there. `GET /api/v1/admin/users` still publishes
-platform role keys and platform logins on an answer a customer session can read;
-that surface has been named in twelve passes and not yet fixed.
+long-lived Postgres volume there.
 
 ## Deploy incident: never `rsync --delete` to `.4`
 

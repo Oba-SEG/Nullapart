@@ -362,4 +362,64 @@ describe("AdminUsers", () => {
     expect(within(builtinOption).getByText("Built-in role.")).toBeTruthy();
     expect(within(customOption).getByText("Custom role.")).toBeTruthy();
   });
+
+  /**
+   * The server answers a tenant's directory read with the roles that tenant may
+   * see plus the fact that something was left out: a platform role recorded on a
+   * customer-bound account names a rung the customer can neither hold nor remove.
+   * The console renders that fact as a gap in the row and never as a role name.
+   */
+  it("marks a withheld role as a gap instead of naming it", async () => {
+    stubFetch(["admin:users:manage"], tenantOverrides, [
+      { ...tenantUsers[0]!, rolesOutsideReach: true },
+      { ...tenantUsers[1]!, roles: [], rolesOutsideReach: true },
+    ]);
+    renderPage();
+
+    const holder = await rowFor("ca@example.test");
+    expect(within(holder).getByText("A role you cannot manage")).toBeTruthy();
+    expect(within(holder).getByText("Customer Admin")).toBeTruthy();
+
+    // An account whose only role sits above the reader is not an account with no
+    // roles, and must not be reported as one.
+    const emptied = await rowFor("resting@example.test");
+    expect(within(emptied).queryByText("No roles")).toBeNull();
+    expect(within(emptied).getByText("A role you cannot manage")).toBeTruthy();
+
+    expect(screen.queryByText("System admin")).toBeNull();
+    expect(screen.queryByText("system_admin")).toBeNull();
+  });
+
+  it("says a withheld role is untouched before a tenant changes the rest", async () => {
+    stubFetch(["admin:users:manage"], tenantOverrides, [
+      { ...tenantUsers[0]!, rolesOutsideReach: true },
+    ]);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Manage roles" }));
+
+    expect(
+      await screen.findByText(
+        "This account holds something above your customer's own level. Your provider set it, and the changes you make here leave it as it is.",
+      ),
+    ).toBeTruthy();
+    // The picker only ever lists roles inside the reader's reach, so an empty
+    // draft here is not an administrator with nothing to do.
+    fireEvent.click(screen.getByRole("checkbox", { name: /^Customer admin/ }));
+    expect(screen.queryByText(/An administrator with no roles/)).toBeNull();
+  });
+
+  it("offers a platform session the plain role list with nothing withheld", async () => {
+    stubFetch();
+    renderPage();
+
+    expect(await rowFor("admin@example.test")).toBeTruthy();
+    expect(screen.queryByText("A role you cannot manage")).toBeNull();
+    expect(screen.queryByText("A role above your level")).toBeNull();
+  });
 });
+
+async function rowFor(login: string): Promise<HTMLElement> {
+  const cell = await screen.findByText(login);
+  return cell.closest("tr")!;
+}

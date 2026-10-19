@@ -26,6 +26,12 @@ interface AdminUser {
   customerId: string | null;
   lifecycle: string;
   roles: string[];
+  /**
+   * Published by the server only on an answer from which role keys had to be
+   * left out for this session. It is a fact about the reader's place in the
+   * ladder, not about the account, and the keys themselves never arrive.
+   */
+  rolesOutsideReach?: boolean;
 }
 
 /**
@@ -70,6 +76,26 @@ const PERMISSIONS_NOT_HELD = "Contains permissions you do not hold.";
 const PROVIDER_ROLE_LABEL = "Provider-level role";
 const PROVIDER_ABOVE_GRANT = "Your provider assigns this role, so you cannot grant it.";
 const PROVIDER_ABOVE_REVOKE = "Your provider assigns this role, so you cannot remove it.";
+
+/**
+ * What a withheld role reads as. The server leaves the key off a customer or
+ * support answer rather than blanking it, so this is the only honest thing the
+ * directory can say: something is there, above the reader, and it is not named.
+ */
+const OUTSIDE_REACH_LABELS = {
+  tenant: "A role you cannot manage",
+  platform: "A role above your level",
+} as const;
+
+function outsideReachLabel(tenant: boolean): string {
+  return tenant ? OUTSIDE_REACH_LABELS.tenant : OUTSIDE_REACH_LABELS.platform;
+}
+
+function outsideReachHint(tenant: boolean): string {
+  return tenant
+    ? "This account holds something above your customer's own level. Your provider set it, and the changes you make here leave it as it is."
+    : "This account holds a role above your own level, so its key is not part of this answer and nothing here can change it.";
+}
 
 function toRoleView(
   role: RoleDefinition,
@@ -323,7 +349,7 @@ export function AdminUsers() {
                 <td>{lifecycleLabel(user.lifecycle)}</td>
                 <td>
                   <div className="admin-users-role-list">
-                    {user.roles.length === 0 ? (
+                    {user.roles.length === 0 && user.rolesOutsideReach !== true ? (
                       <span className="admin-users-role-empty">No roles</span>
                     ) : (
                       user.roles.map((roleKey) => (
@@ -336,6 +362,14 @@ export function AdminUsers() {
                         </span>
                       ))
                     )}
+                    {user.rolesOutsideReach === true ? (
+                      <span
+                        className="admin-users-role-chip admin-users-role-outside"
+                        title={outsideReachHint(tenant)}
+                      >
+                        {outsideReachLabel(tenant)}
+                      </span>
+                    ) : null}
                   </div>
                 </td>
                 {canManage ? (
@@ -715,7 +749,12 @@ function ManageRolesDialog({
               })
             : null}
         </fieldset>
-        {draft.length === 0 ? (
+        {target.rolesOutsideReach === true ? (
+          <p className="admin-users-form-hint" role="note">
+            {outsideReachHint(tenant)}
+          </p>
+        ) : null}
+        {draft.length === 0 && target.rolesOutsideReach !== true ? (
           <p className="admin-users-form-hint" role="note">
             An administrator with no roles cannot do anything. Consider suspending the account
             instead of removing every role.

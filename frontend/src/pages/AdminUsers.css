@@ -94,6 +94,14 @@
   font-size: var(--font-size-xs);
 }
 
+/* A role the server left off this answer: named as a gap, not as a chip with a
+   label the reader could mistake for a role they hold. */
+.admin-users-role-outside {
+  border-style: dashed;
+  background: transparent;
+  color: var(--color-text-tertiary);
+}
+
 .admin-users-form {
   display: flex;
   flex-direction: column;
