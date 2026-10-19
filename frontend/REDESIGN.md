@@ -732,6 +732,125 @@ test and its fixture, not by a real case. The same holds for `outbound_transacti
 this deployment has no `notification_deliveries` rows, so no alert has carried the
 reference a customer would quote. Say so rather than implying a live pass.
 
+## Landed in the twelfth pass (the wire, not only the render)
+
+The eleventh pass finished by teaching the guard to read a DOM. That left three
+things unstated: a read the console never renders is still a read a customer
+session can make, an answer that carries `null` has not withheld anything, and a
+guard that only compares words cannot see a page that fell over. This pass worked
+on the wire.
+
+- **A `null` in a withheld slot still advertises the slot.** The eleventh pass
+  wrote that the bookkeeping identifiers "are absent from the customer answer
+  rather than blanked in the UI". That was the intent, not the JSON: five reads
+  serialized the word `null` into exactly the field they were meant to withhold,
+  so a customer answer said _there is a correlation id, a node reference, a dedup
+  hash, a queue reference, a placement number; we are just not telling you_.
+  `e294afb` puts `skip_serializing_if` on `trace_id`, `deployment_id` and
+  `content_hash` in the trace detail, on the answering `deployment_id` in domain
+  security, outbound intelligence and notification settings, on a delivery row's
+  `outbound_transaction_id`, and on the `internal_key`, `region_code` and
+  `sequence_no` of a customer record. The Rust placement test now asserts the
+  three keys are _not in the serialized object_ for a customer answer and _are_
+  in it for a platform answer, which is the only claim worth keeping: an absent
+  key cannot be re-serialised back into existence by a later refactor of the
+  projection.
+- **A withheld key changes what the console can test for.** `CustomerDetail` used
+  `internal_key !== null` as its marker that placement had been withheld. Against
+  an absent key that predicate is true, and the page would have printed `Internal
+key:` with nothing after it. It now asks for a number, and the tenant fixture
+  in the boundary suite omits the keys rather than setting them to `null`, so the
+  guard renders the real customer answer. A new "crashed render" term
+  (`Something went wrong`, `Cannot read propert…`) is what proved the fixture
+  mattered: the stub matched `/admin/customers/CZA-1` before
+  `/admin/customers/CZA-1/source-ip-groups`, so the tenant's own organisation
+  surface had been rendering an error boundary inside a green sweep. The stub is
+  ordered, the term stays, and the tripwire was verified by removing the stub
+  again and watching the new test fail.
+- **Three reads a customer session can make that no tenant page renders.** The
+  DOM guard is blind to them by construction, so these were swept by calling them
+  directly. `4bf3ceb` answers `GET /admin/permissions` with the permissions a
+  caller is actually allowed to hand out, and `GET /admin/roles` with the levels
+  at or under that caller's own ceiling: a `customer_admin` session was reading
+  "Read the ML model registry and model telemetry." and a directory that named a
+  System Administrator, and neither read is used by the tenant console. Both
+  tests keep an anti-vacuous platform branch that requires the full catalog and
+  every builtin role to answer a platform seat.
+- **The feature switchboard is projected, not refused.** `GET /features` is
+  readable by `customer_admin`, which also holds `policies:manage`, so a refusal
+  would have deleted a capability the architecture already grants: a tenant's own
+  Tenant-scope override. `9b5d43d` moves the read through one pure
+  `project_features` and, for a customer reader, drops the scope ladder, the
+  security floors, the kill-switch flags, the winning-scope label and the
+  description, hides features no Customer scope can reach, returns only that
+  customer's override rows, and replaces the whole question with a `governed_by`
+  outcome word: `you` or `provider`. `b2c0cc1` records what that means at the two
+  call sites that read those narrowed lists, and the guard's role-directory
+  fixture deliberately keeps answering every level, because a console that only
+  renders what the server narrowed cannot tell whether the narrowing regressed.
+
+**Gates**: `cargo test -p nullapart-mail-core --lib` 636 passed (1 ignored),
+`cargo fmt` and `cargo clippy --all-targets -- -D warnings` clean. `pnpm
+check-all` green (297 tests, 34 files) with the placement-absence, crashed-render
+and organisation-record cases.
+
+**Live wire sweep on `.4`.** _(recorded below once this build is deployed.)_
+
+## Landed in the thirteenth pass (the tenant got a switch panel, and a name it owns)
+
+Twelve passes removed words from the customer console. This pass gave it back
+something to do, and moved the last naming decision to the place it can actually
+be enforced.
+
+- **A customer-facing name is catalog data, not a browser dictionary.** The
+  internal name of a switch describes the machinery behind it, and a customer who
+  reads that name can quote it in a ticket, screenshot it, or reason about what
+  the deployment runs. A dictionary in `labels.ts` only cleans the render.
+  `044_customer_catalog_labels.sql` adds `customer_facing_label` to both
+  `feature_definitions` and `policy_families` (plus a customer-facing
+  description), backfills the values the tenant console is allowed to show, and
+  then raises an exception if any tenant-reachable row still carries machinery
+  vocabulary, so the migration itself refuses to install a leak. The projection
+  picks the column: a platform reader gets the stored name, a tenant reader gets
+  the catalog wording, and the frontend dictionary stays only as the fallback for
+  an answer that predates the column. Both paths must emit the same words, which
+  the Rust label test and the boundary guard each check from their own side.
+- **The feature panel was refusing a capability the architecture grants.** The
+  eleventh-pass work narrowed `GET /features`, and the console answered that
+  narrowing by telling a tenant that nothing there was open to them. That was
+  false twice over: `customer_admin` holds `policies:manage`, and the server
+  already authorises a Tenant-scope override write. The page now renders the
+  customer projection as a working panel. A tenant reads the settings their
+  sending is configured for, changes them, and takes them back, with no scope
+  picker offered anywhere: the only level they may write is fixed, so the editor
+  states it as a fact ("Change it for: Your sending") rather than posing a choice
+  the server would reject.
+- **What the tenant panel does not show.** The raw `feature_id`, the "What it
+  controls" description, the platform default, the security-floor and
+  emergency-stop counts, and the scope ladder are all gone from both the render
+  and the answer. The rail reports the one fact a customer projection can
+  honestly publish, which is how many values in force are the provider's decision
+  rather than the customer's, and each row says `set by you` or `set by your
+provider` from `governed_by` instead of naming a tier. Retiring an override says
+  "cleared at your setting" and resolves to "Use your provider's setting"; a
+  read-only customer is told their roles can read but not change, with no
+  instruction to find a system administrator.
+- **The guard had to change shape for this.** `/features` was in
+  `PLATFORM_READS`, asserting a tenant session never asks for it. That assertion
+  was protecting a page that should not have existed; it now belongs to the
+  payload sweep, so the suite carries a customer feature fixture and a
+  non-vacuous test that the customer's own rows actually render while their
+  snake_case keys do not.
+
+**Gates**: `cargo test -p nullapart-mail-core --lib` 638 passed (1 ignored),
+`cargo fmt --check` clean. `pnpm check-all` green (302 tests, 34 files).
+
+**Still open, stated rather than implied.** The live wire sweep on `.4` has not
+re-run against this build, and migration `044` has not been applied to the
+long-lived Postgres volume there. `GET /api/v1/admin/users` still publishes
+platform role keys and platform logins on an answer a customer session can read;
+that surface has been named in twelve passes and not yet fixed.
+
 ## Deploy incident: never `rsync --delete` to `.4`
 
 A previous sync used `rsync --delete` while deploying frontend changes. It was

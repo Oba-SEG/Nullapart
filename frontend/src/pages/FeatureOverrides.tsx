@@ -21,7 +21,7 @@ import { hasPermission, isTenantTier, loadSession } from "../auth/session";
 import { StepUpPrompt } from "../components/StepUpPrompt";
 import { WorkspaceHeader } from "../components/WorkspaceHeader";
 import { WorkflowGuide } from "../components/WorkflowGuide";
-import { ControlRail } from "../components/ControlRail";
+import { ControlRail, type ControlSignal } from "../components/ControlRail";
 import { Button } from "../components/primitives/Button";
 import { Dialog } from "../components/primitives/Dialog";
 import { Hint } from "../components/primitives/Hint";
@@ -30,9 +30,9 @@ import { Select } from "../components/primitives/Select";
 import {
   HINTS,
   OVERRIDE_SCOPE_LABELS,
-  OVERRIDE_VALUE_KIND_LABELS,
   describeOverrideValue,
   overrideScopeLabel,
+  overrideValueKindLabel,
 } from "../lib/labels";
 import { randomUuid } from "../lib/ids";
 import "./FeatureOverrides.css";
@@ -62,18 +62,22 @@ function BreakableToken({ text }: { text: string }) {
 }
 
 /**
- * Primary position holds the human label from the catalog; the raw id sits
- * under it as evidence, because audit records name the id, not the label.
+ * Primary position holds the human label from the catalog. The raw id sits under
+ * it on a platform read only: it is the handle the write path is addressed by and
+ * what audit records name, and a customer console neither needs to quote it nor
+ * should print a snake_case key that names the technique.
  */
-function FeatureName({ feature }: { feature: Feature }) {
+function FeatureName({ feature, showKey }: { feature: Feature; showKey: boolean }) {
   return (
     <div className="features-name">
       <strong>{feature.display_name}</strong>
-      <Hint label={HINTS.internalIdentifier}>
-        <code className="features-key">
-          <BreakableToken text={feature.feature_id} />
-        </code>
-      </Hint>
+      {showKey ? (
+        <Hint label={HINTS.internalIdentifier}>
+          <code className="features-key">
+            <BreakableToken text={feature.feature_id} />
+          </code>
+        </Hint>
+      ) : null}
     </div>
   );
 }
@@ -108,14 +112,16 @@ type OverrideRowProps = {
   override: FeatureOverride;
   canClear: (scope: OverrideScope) => boolean;
   onClear: (feature: Feature, override: FeatureOverride) => void;
+  /** A customer reads their own decisions, not a ladder they were never shown. */
+  tenant: boolean;
 };
 
-function OverrideRow({ feature, override, canClear, onClear }: OverrideRowProps) {
+function OverrideRow({ feature, override, canClear, onClear, tenant }: OverrideRowProps) {
   return (
     <div className="features-override">
       <span className="features-override-head">
-        <strong>{overrideScopeLabel(override.scope, override.scope_id)}</strong>
-        <code>{describeOverrideValue(override.value)}</code>
+        <strong>{overrideScopeLabel(override.scope, override.scope_id, tenant)}</strong>
+        <code>{describeOverrideValue(override.value, tenant)}</code>
       </span>
       <span className="features-meta">
         set by {override.owner_display_name} · {formatDate(override.created_at)} ·{" "}
@@ -127,11 +133,17 @@ function OverrideRow({ feature, override, canClear, onClear }: OverrideRowProps)
           className="btn btn-ghost features-clear"
           onClick={() => onClear(feature, override)}
         >
-          Clear this override
+          {tenant ? "Take this back" : "Clear this override"}
         </button>
       ) : (
-        <Hint label={`Your roles cannot change anything set at this level.`}>
-          <span className="features-lock">Set by a higher level</span>
+        <Hint
+          label={
+            tenant
+              ? "Your roles can read these settings but cannot change them. Ask your provider if one needs to move."
+              : "Your roles cannot change anything set at this level."
+          }
+        >
+          <span className="features-lock">{tenant ? "Read-only" : "Set by a higher level"}</span>
         </Hint>
       )}
     </div>
@@ -171,6 +183,26 @@ function overridesNewestFirst(overrides: FeatureOverride[]): FeatureOverride[] {
   });
 }
 
+/**
+ * The override level in words, for the seat reading it. A customer is not shown
+ * the ladder, so their own level is "your setting" rather than a tier name.
+ */
+function scopePhrase(scope: OverrideScope, tenant: boolean): string {
+  return tenant ? "your setting" : OVERRIDE_SCOPE_LABELS[scope].toLowerCase();
+}
+
+/**
+ * Who the value in force now reflects. A customer is not shown the ladder, so
+ * their write answer says `you` or `your provider`; an operator reads the level.
+ */
+function decidedByPhrase(
+  result: { winning_scope?: OverrideScope; governed_by?: "you" | "provider" },
+  tenant: boolean,
+): string {
+  if (tenant) return result.governed_by === "you" ? "you" : "your provider";
+  return result.winning_scope ? OVERRIDE_SCOPE_LABELS[result.winning_scope].toLowerCase() : "you";
+}
+
 export function FeatureOverrides() {
   const queryClient = useQueryClient();
   const reasonInputId = useId();
@@ -184,16 +216,15 @@ export function FeatureOverrides() {
   });
 
   const current = session.data ?? null;
-  // Feature overrides are a deployment-configuration surface. The navigation
-  // entry is already hidden at the customer level; this stops the direct URL
-  // from fetching and painting the platform's rollout catalog into a tenant
-  // console. The API remains the authorization boundary.
+  // A customer session may write its own Customer-scope overrides, so the read
+  // is the same query on both seats and only the projection differs: a tenant
+  // answer carries no ladder, no platform floors and only its own override rows.
   const tenant = isTenantTier(current);
 
   const features = useQuery({
     queryKey: ["features"],
     queryFn: ({ signal }) => api.get<FeatureList>("/features", signal),
-    enabled: !session.isPending && !tenant,
+    enabled: !session.isPending,
   });
 
   const canManage = hasPermission(current, "policies:manage");
@@ -225,9 +256,10 @@ export function FeatureOverrides() {
       ),
     onSuccess: async (updated, request) => {
       setNotice(
-        `${request.featureName} is now ${describeOverrideValue(updated.effective_value)}, set by ${OVERRIDE_SCOPE_LABELS[
-          updated.winning_scope
-        ].toLowerCase()}.`,
+        `${request.featureName} is now ${describeOverrideValue(
+          updated.effective_value,
+          tenant,
+        )}, set by ${decidedByPhrase(updated, tenant)}.`,
       );
       setEditing(null);
       setShowErrors(false);
@@ -244,10 +276,11 @@ export function FeatureOverrides() {
       ),
     onSuccess: async (updated, request) => {
       setNotice(
-        `Cleared at ${OVERRIDE_SCOPE_LABELS[request.scope].toLowerCase()}. ` +
-          `${request.featureName} is now ${describeOverrideValue(updated.effective_value)}, set by ${OVERRIDE_SCOPE_LABELS[
-            updated.winning_scope
-          ].toLowerCase()}.`,
+        `Cleared at ${scopePhrase(request.scope, tenant)}. ` +
+          `${request.featureName} is now ${describeOverrideValue(
+            updated.effective_value,
+            tenant,
+          )}, set by ${decidedByPhrase(updated, tenant)}.`,
       );
       setClearing(null);
       setClearReason("");
@@ -267,11 +300,13 @@ export function FeatureOverrides() {
   function openEditor(feature: Feature) {
     const scopes = editableScopes(feature);
     const decoded = decodeOverrideValue(feature.effective_value);
+    // A customer answer withholds the ladder, so it opens at the one level that
+    // answer can list; an operator starts at the level currently deciding.
+    const deciding = feature.winning_scope;
     setEditing({
       feature,
-      scope: scopes.includes(feature.winning_scope)
-        ? feature.winning_scope
-        : (scopes[0] ?? "tenant"),
+      scope:
+        deciding !== undefined && scopes.includes(deciding) ? deciding : (scopes[0] ?? "tenant"),
       kind: decoded.kind,
       typed: decoded.typed,
       reason: "",
@@ -357,88 +392,111 @@ export function FeatureOverrides() {
     (showClearErrors || clearReason.length > 0) &&
     clearReasonProblem !== undefined;
 
-  if (tenant) {
-    return (
-      <div className="features-page">
-        <WorkspaceHeader
-          eyebrow="Controlled rollout"
-          title="Feature overrides"
-          description="Which features are switched on for your sending is decided by your provider. A customer console does not list or change them."
-          scope="Set by your provider"
-        />
-        <div className="features-state">
-          Nothing here is open to your customer. Ask your provider if a feature needs to be turned
-          on for your sending.
-        </div>
-      </div>
-    );
-  }
+  const providerDecided = allRows.filter((row) => row.governed_by === "provider").length;
+  const mandatoryRows = allRows.filter((row) => row.mandatory).length;
+  const killSwitchRows = allRows.filter((row) => row.kill_switch).length;
+
+  const emergencyStops: ControlSignal = {
+    label: "Emergency stops",
+    value: featuresAvailable ? killSwitchRows : featuresState,
+    detail: featuresAvailable ? HINTS.emergencyStop : "Not available yet.",
+    tone: featuresAvailable ? "attention" : "neutral",
+  };
+
+  // A customer answer withholds the platform floors and emergency stops, so a
+  // tenant rail reports the one fact its projection does publish: how many
+  // values in force are the provider's decision rather than the customer's.
+  const signals: ControlSignal[] = [
+    {
+      label: "Settings",
+      value: featuresAvailable ? allRows.length : featuresState,
+      detail: featuresAvailable
+        ? tenant
+          ? "Settings your sending is configured for."
+          : "Features this deployment can be configured for."
+        : "The settings list has not returned yet.",
+    },
+    {
+      label: "You can change",
+      value: featuresAvailable ? editableCount : featuresState,
+      detail: featuresAvailable
+        ? tenant
+          ? "Settings your roles can turn on, off or give a value."
+          : "Settings with at least one level your roles can write."
+        : "Changeable settings are counted once the list returns.",
+      tone: featuresAvailable && editableCount === 0 ? "attention" : "neutral",
+    },
+    tenant
+      ? {
+          label: "Set by your provider",
+          value: featuresAvailable ? providerDecided : featuresState,
+          detail: featuresAvailable
+            ? "Your provider decided these, so they stay in force while you change the rest."
+            : "Not available yet.",
+        }
+      : {
+          label: "Security floors",
+          value: featuresAvailable ? mandatoryRows : featuresState,
+          detail: featuresAvailable
+            ? HINTS.securityFloor
+            : "Floor counts are unavailable until the settings list returns.",
+          tone: featuresAvailable ? "attention" : "neutral",
+        },
+    ...(tenant ? [] : [emergencyStops]),
+  ];
 
   return (
     <div className="features-page">
       <WorkspaceHeader
-        eyebrow="Controlled rollout"
-        title="Feature overrides"
-        description="Turn a feature on or off for a group of customers, a whole deployment, or everywhere at once. Every change needs a reason, is signed by you, and can be cleared again."
-        scope={`${editableCount} of ${allRows.length} settings changeable by you`}
+        eyebrow={tenant ? "Your sending" : "Controlled rollout"}
+        title={tenant ? "Feature settings" : "Feature overrides"}
+        description={
+          tenant
+            ? "Turn a setting on or off for your sending, or give it a value of your own. Anything your provider already decided is marked on the row. Every change needs a reason and can be undone."
+            : "Turn a feature on or off for a group of customers, a whole deployment, or everywhere at once. Every change needs a reason, is signed by you, and can be cleared again."
+        }
+        scope={`${editableCount} of ${allRows.length} settings ${
+          tenant ? "yours to change" : "changeable by you"
+        }`}
       />
 
       <ControlRail
-        title="Effective configuration"
-        summary="Each row shows the value in force and who set it. A row without an edit action is one your roles cannot change; the reason is written on the row."
-        signals={[
-          {
-            label: "Settings",
-            value: featuresAvailable ? allRows.length : featuresState,
-            detail: featuresAvailable
-              ? "Features this deployment can be configured for."
-              : "The settings list has not returned yet.",
-          },
-          {
-            label: "You can change",
-            value: featuresAvailable ? editableCount : featuresState,
-            detail: featuresAvailable
-              ? "Settings with at least one level your roles can write."
-              : "Changeable settings are counted once the list returns.",
-            tone: featuresAvailable && editableCount === 0 ? "attention" : "neutral",
-          },
-          {
-            label: "Security floors",
-            value: featuresAvailable
-              ? allRows.filter((row) => row.mandatory).length
-              : featuresState,
-            detail: featuresAvailable
-              ? HINTS.securityFloor
-              : "Floor counts are unavailable until the settings list returns.",
-            tone: featuresAvailable ? "attention" : "neutral",
-          },
-          {
-            label: "Emergency stops",
-            value: featuresAvailable
-              ? allRows.filter((row) => row.kill_switch).length
-              : featuresState,
-            detail: featuresAvailable ? HINTS.emergencyStop : "Not available yet.",
-            tone: featuresAvailable ? "attention" : "neutral",
-          },
-        ]}
+        title={tenant ? "What decides your mail today" : "Effective configuration"}
+        summary={
+          tenant
+            ? "Each row shows the value in force for your sending and who decided it. A row without a change action is one your roles cannot move; the reason is written on the row."
+            : "Each row shows the value in force and who set it. A row without an edit action is one your roles cannot change; the reason is written on the row."
+        }
+        signals={signals}
       />
 
       <WorkflowGuide
-        title="Make a reversible configuration change"
-        description="A feature override is a rollout control. It cannot switch off a security floor or a platform emergency stop."
+        title={
+          tenant ? "Change a setting and get it back" : "Make a reversible configuration change"
+        }
+        description={
+          tenant
+            ? "Your own setting never switches off something your provider requires. If a setting is one they must keep on, the console tells you that instead of changing it."
+            : "A feature override is a rollout control. It cannot switch off a security floor or a platform emergency stop."
+        }
         steps={[
           {
             label: "Compare",
-            detail: "Read the value in force against the default, and see which level set it.",
+            detail: tenant
+              ? "Read the value in force for your sending and see whether you or your provider decided it."
+              : "Read the value in force against the default, and see which level set it.",
           },
           {
             label: "Justify",
-            detail:
-              "Pick the level to change at, write why, and add an expiry when it is temporary.",
+            detail: tenant
+              ? "Write why, and add a date to revert automatically when the change is temporary."
+              : "Pick the level to change at, write why, and add an expiry when it is temporary.",
           },
           {
             label: "Verify",
-            detail: "After saving, the row shows the new value in force and who set it.",
+            detail: tenant
+              ? "After saving, the row shows your new value and you can clear it again."
+              : "After saving, the row shows the new value in force and who set it.",
           },
         ]}
       />
@@ -460,9 +518,11 @@ export function FeatureOverrides() {
             {onlyEditable ? "Showing what you can change" : "Show only what you can change"}
           </button>
           {canManage ? null : (
-            <Hint label={HINTS.callerTier}>
+            <Hint label={tenant ? HINTS.readOnlyTenant : HINTS.callerTier}>
               <span className="features-lock">
-                Read-only: your role cannot manage policy settings
+                {tenant
+                  ? "Read-only: your roles cannot change these settings"
+                  : "Read-only: your role cannot manage policy settings"}
               </span>
             </Hint>
           )}
@@ -482,8 +542,9 @@ export function FeatureOverrides() {
       ) : null}
       {features.isSuccess && allRows.length === 0 ? (
         <div className="features-state">
-          No features are available to configure in this deployment yet. Feature settings appear
-          here once the platform publishes them.
+          {tenant
+            ? "Nothing is open for your customer to change right now. Settings your provider decides are listed here once they let you change one."
+            : "No features are available to configure in this deployment yet. Feature settings appear here once they are published."}
         </div>
       ) : null}
       {features.isSuccess && allRows.length > 0 && rows.length === 0 ? (
@@ -495,18 +556,22 @@ export function FeatureOverrides() {
       {rows.length > 0 ? (
         <div className="card features-table-wrap">
           <table className="features-table">
-            <caption className="sr-only">Feature settings in this deployment</caption>
+            <caption className="sr-only">
+              {tenant ? "Feature settings for your sending" : "Feature settings in this deployment"}
+            </caption>
             <thead>
               <tr>
-                <th scope="col">Feature</th>
-                <th scope="col">What it controls</th>
-                <th scope="col">Default</th>
+                <th scope="col">{tenant ? "Setting" : "Feature"}</th>
+                {tenant ? null : <th scope="col">What it controls</th>}
+                {tenant ? null : <th scope="col">Default</th>}
                 <th scope="col">
-                  <Hint label={HINTS.winningScope}>
-                    <span className="hint-term">Value in force</span>
+                  <Hint label={tenant ? HINTS.inheritTenant : HINTS.winningScope}>
+                    <span className="hint-term">
+                      {tenant ? "On for your sending" : "Value in force"}
+                    </span>
                   </Hint>
                 </th>
-                <th scope="col">Overrides</th>
+                <th scope="col">{tenant ? "Changes you have made" : "Overrides"}</th>
                 <th scope="col">Action</th>
               </tr>
             </thead>
@@ -516,7 +581,7 @@ export function FeatureOverrides() {
                 return (
                   <tr key={feature.feature_id}>
                     <td>
-                      <FeatureName feature={feature} />
+                      <FeatureName feature={feature} showKey={!tenant} />
                       <span className="features-badges">
                         {feature.mandatory ? (
                           <Hint label={HINTS.securityFloor}>
@@ -534,21 +599,29 @@ export function FeatureOverrides() {
                         ) : null}
                       </span>
                     </td>
-                    <td className="features-description">{feature.description}</td>
-                    <td className="features-value">
-                      {describeOverrideValue(feature.default_value)}
-                    </td>
+                    {tenant ? null : (
+                      <td className="features-description">{feature.description}</td>
+                    )}
+                    {tenant ? null : (
+                      <td className="features-value">
+                        {describeOverrideValue(feature.default_value)}
+                      </td>
+                    )}
                     <td>
                       <span className="features-value">
-                        {describeOverrideValue(feature.effective_value)}
+                        {describeOverrideValue(feature.effective_value, tenant)}
                       </span>
                       <span className="features-meta">
-                        set by {OVERRIDE_SCOPE_LABELS[feature.winning_scope].toLowerCase()}
+                        set by {decidedByPhrase(feature, tenant)}
                       </span>
                     </td>
                     <td>
                       {feature.overrides.length === 0 ? (
-                        <span className="features-meta">Nothing set below the default</span>
+                        <span className="features-meta">
+                          {tenant
+                            ? "You have not changed this setting"
+                            : "Nothing set below the default"}
+                        </span>
                       ) : (
                         (() => {
                           const ordered = overridesNewestFirst(feature.overrides);
@@ -560,6 +633,7 @@ export function FeatureOverrides() {
                                 override={leading}
                                 canClear={canClearAt}
                                 onClear={openClear}
+                                tenant={tenant}
                               />
                               {older.length > 0 ? (
                                 <details className="features-override-history">
@@ -571,6 +645,7 @@ export function FeatureOverrides() {
                                       override={override}
                                       canClear={canClearAt}
                                       onClear={openClear}
+                                      tenant={tenant}
                                     />
                                   ))}
                                 </details>
@@ -589,20 +664,30 @@ export function FeatureOverrides() {
                         <Hint
                           label={
                             canManage
-                              ? `This setting is only changed at ${feature.allowed_scopes
-                                  .map((scope) => OVERRIDE_SCOPE_LABELS[scope].toLowerCase())
-                                  .join(" or ")}. Your roles can write ${
-                                  sessionScopes.length === 0
-                                    ? "no override level"
-                                    : sessionScopes
-                                        .map((scope) => OVERRIDE_SCOPE_LABELS[scope].toLowerCase())
-                                        .join(" or ")
-                                }.`
-                              : HINTS.readOnly
+                              ? tenant
+                                ? "Your roles cannot change this setting. Ask your provider if it needs to move."
+                                : `This setting is only changed at ${feature.allowed_scopes
+                                    .map((scope) => OVERRIDE_SCOPE_LABELS[scope].toLowerCase())
+                                    .join(" or ")}. Your roles can write ${
+                                    sessionScopes.length === 0
+                                      ? "no override level"
+                                      : sessionScopes
+                                          .map((scope) =>
+                                            OVERRIDE_SCOPE_LABELS[scope].toLowerCase(),
+                                          )
+                                          .join(" or ")
+                                  }.`
+                              : tenant
+                                ? HINTS.readOnlyTenant
+                                : HINTS.readOnly
                           }
                         >
                           <span className="features-lock">
-                            {canManage ? "Locked at your level" : "Read-only"}
+                            {canManage
+                              ? tenant
+                                ? "Set by your provider"
+                                : "Locked at your level"
+                              : "Read-only"}
                           </span>
                         </Hint>
                       )}
@@ -629,38 +714,48 @@ export function FeatureOverrides() {
             }}
           >
             <p className="features-hint">
-              Your reason and name are recorded with this change and can be read in the audit log.
-              You may be asked to sign in again first.
+              {tenant
+                ? "Your reason and name are recorded with this change. You may be asked to sign in again first."
+                : "Your reason and name are recorded with this change and can be read in the audit log. You may be asked to sign in again first."}
             </p>
-            <Select
-              label="Change it for"
-              value={editing.scope}
-              options={writableScopes(editing.feature.allowed_scopes, sessionScopes).map(
-                (scope) => ({
-                  value: scope,
-                  label: OVERRIDE_SCOPE_LABELS[scope],
-                }),
-              )}
-              onChange={(event) =>
-                setEditing({ ...editing, scope: event.target.value as OverrideScope })
-              }
-            />
+            {tenant ? (
+              <div className="features-field">
+                <span className="features-field-label">Change it for</span>
+                <strong>Your sending</strong>
+                <span className="features-meta">
+                  The value in force today was set by {decidedByPhrase(editing.feature, tenant)}.
+                </span>
+              </div>
+            ) : (
+              <Select
+                label="Change it for"
+                value={editing.scope}
+                options={writableScopes(editing.feature.allowed_scopes, sessionScopes).map(
+                  (scope) => ({
+                    value: scope,
+                    label: OVERRIDE_SCOPE_LABELS[scope],
+                  }),
+                )}
+                onChange={(event) =>
+                  setEditing({ ...editing, scope: event.target.value as OverrideScope })
+                }
+              />
+            )}
             <Select
               label="New value"
               value={editing.kind}
               options={OVERRIDE_VALUE_KINDS.map((kind) => ({
                 value: kind,
-                label:
-                  kind === "typed"
-                    ? OVERRIDE_VALUE_KIND_LABELS.typed
-                    : OVERRIDE_VALUE_KIND_LABELS[kind],
+                label: overrideValueKindLabel(kind, tenant),
                 disabled: kind === "disabled" && editing.feature.mandatory,
               }))}
               onChange={(event) =>
                 setEditing({ ...editing, kind: event.target.value as OverrideValueKind })
               }
             />
-            {editing.kind === "inherit" ? <p className="features-hint">{HINTS.inherit}</p> : null}
+            {editing.kind === "inherit" ? (
+              <p className="features-hint">{tenant ? HINTS.inheritTenant : HINTS.inherit}</p>
+            ) : null}
             {editing.feature.mandatory ? (
               <p className="features-hint">
                 This one is a security floor, so it cannot be switched off. Turn it on or set a
@@ -675,7 +770,11 @@ export function FeatureOverrides() {
                 placeholder="rate_limit=10"
                 maxLength={256}
                 error={showErrors ? typedMissing : undefined}
-                hint="Sent exactly as you type it. The feature decides what a valid value looks like."
+                hint={
+                  tenant
+                    ? "Sent exactly as you type it. Your provider decides what a valid value looks like."
+                    : "Sent exactly as you type it. The feature decides what a valid value looks like."
+                }
               />
             ) : null}
             <div className="features-field">
@@ -734,7 +833,11 @@ export function FeatureOverrides() {
       <Dialog
         open={clearing !== null}
         onClose={closeClear}
-        title={`Clear ${clearing?.feature.display_name ?? "override"}`}
+        title={
+          tenant
+            ? `Take back your change to ${clearing?.feature.display_name ?? "this setting"}`
+            : `Clear ${clearing?.feature.display_name ?? "override"}`
+        }
       >
         {clearing ? (
           <form
@@ -745,7 +848,8 @@ export function FeatureOverrides() {
             }}
           >
             <p className="features-hint">
-              {HINTS.inherit} Your reason is recorded with the change.
+              {tenant ? HINTS.inheritTenant : HINTS.inherit} Your reason is recorded with the
+              change.
             </p>
             <div className="features-field">
               <label htmlFor={clearReasonInputId} className="features-field-label">
@@ -782,10 +886,10 @@ export function FeatureOverrides() {
                 onClick={closeClear}
                 disabled={clearOverride.isPending}
               >
-                Keep the override
+                {tenant ? "Keep your change" : "Keep the override"}
               </Button>
               <Button type="submit" variant="primary" loading={clearOverride.isPending}>
-                Clear override
+                {tenant ? "Take back your change" : "Clear override"}
               </Button>
             </div>
           </form>

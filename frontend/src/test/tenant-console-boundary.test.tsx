@@ -431,6 +431,54 @@ const tenantHeldMessage = {
 };
 
 /**
+ * What `GET /features` answers on a customer seat. It is a real read now, not a
+ * platform read: the API authorizes a tenant session to write its own
+ * Customer-scope overrides, so the console lists them. This fixture is the
+ * projection, not the operator one — no description, no security floor or
+ * emergency stop flags, no scope above the tenant's own, no override rows
+ * written by anyone else, and a `governed_by` outcome word where the ladder
+ * position is withheld. It still carries the raw `feature_id`, because that is
+ * what the write path is addressed by; the guard below proves the console never
+ * prints it.
+ */
+const customerFeatureList = {
+  features: [
+    {
+      feature_id: "outbound_bulk_guard",
+      display_name: "Bulk sending limits",
+      default_value: "enabled",
+      allowed_scopes: ["tenant"],
+      effective_value: "typed:rate_limit=10",
+      governed_by: "you",
+      overrides: [
+        {
+          id: 118,
+          scope: "tenant",
+          scope_id: "CZA-1",
+          value: "typed:rate_limit=10",
+          owner: "00000000-0000-0000-0000-0000000000a1",
+          owner_display_name: "Tenant Admin",
+          reason: "Weekend campaign lift",
+          revision: 3,
+          created_at: "2026-01-05T09:00:00Z",
+          expires_at: "2026-02-01T00:00:00Z",
+        },
+      ],
+    },
+    {
+      feature_id: "deep_ai_analysis",
+      display_name: "Message content review",
+      default_value: "enabled",
+      allowed_scopes: ["tenant"],
+      effective_value: "enabled",
+      governed_by: "provider",
+      overrides: [],
+    },
+  ],
+  allowed_override_scopes: ["tenant"],
+};
+
+/**
  * Payloads are the smallest valid answer each page can render, and they carry
  * real rows wherever platform vocabulary exists anywhere in the installation:
  * the role directory includes system and support roles even though the server
@@ -759,6 +807,7 @@ const PAYLOADS: Array<[string, unknown]> = [
     },
   ],
   ["/mail-trace/transaction", tenantTrace],
+  ["/features", customerFeatureList],
   ["/policies", { families: policyFamilies, caller_tier: "customer" }],
 ];
 
@@ -830,6 +879,10 @@ function stubTenantFetch() {
  * here because it lists every permission the installation publishes, including
  * ones no tenant role can hold; only the role-definition dialog reads it, and a
  * customer console cannot open that dialog.
+ *
+ * `/features` used to be on this list. It is not: a customer session may write
+ * its own Customer-scope overrides, so the read is a tenant read and the payload
+ * above is what the server actually hands that seat.
  */
 const PLATFORM_READS = [
   "/operations/runtime",
@@ -837,7 +890,6 @@ const PLATFORM_READS = [
   "/deep-ai",
   "/connectors",
   "/models",
-  "/features",
   "/audit/checkpoint-status",
   "/admin/permissions",
 ];
@@ -895,7 +947,7 @@ const SURFACES: Surface[] = [
     component: PolicyFamilyDetail,
   },
   {
-    name: "Feature overrides",
+    name: "Feature settings",
     path: "/policies/features",
     entry: "/policies/features",
     component: FeatureOverrides,
@@ -1011,9 +1063,9 @@ describe("tenant console boundary", () => {
       }
       expect(leaks, `${surface.entry} renders platform language`).toEqual([]);
 
-      // Fleet health, the runtime, the model registry, connector remediation,
-      // the rollout catalog and the audit checkpoint are platform reads. A
-      // console that shows none of them must not ask for any of them either.
+      // Fleet health, the runtime, the model registry, connector remediation and
+      // the audit checkpoint are platform reads. A console that shows none of
+      // them must not ask for any of them either.
       const requested = fetchMock.mock.calls.map(([input]) => String(input));
       for (const forbidden of PLATFORM_READS) {
         expect(
@@ -1058,6 +1110,31 @@ describe("tenant console boundary", () => {
     expect(screen.getByText("Mailroom triage")).toBeInTheDocument();
     expect(screen.queryByText("System Administrator")).not.toBeInTheDocument();
     expect(screen.queryByText("Support Agent")).not.toBeInTheDocument();
+  });
+
+  /**
+   * The customer's own feature switches are a real tenant surface now, so the
+   * same blind-spot check applies: the rows have to reach the render, and the
+   * handle the write path is addressed by must stay off the page.
+   */
+  it("reaches the render with the customer's own feature rows", async () => {
+    const fetchMock = stubTenantFetch();
+    renderSurface(surfaceNamed("Feature settings"));
+    await screen.findByText("Your customer · CZA-1");
+
+    expect(await screen.findByText("Bulk sending limits")).toBeInTheDocument();
+    expect(screen.getByText("Message content review")).toBeInTheDocument();
+    expect(screen.getByText("On for your sending")).toBeInTheDocument();
+    expect(screen.getByText("Your setting")).toBeInTheDocument();
+    // The typed value shows once as the value in force and once on the row that
+    // produced it.
+    expect(screen.getAllByText(/rate_limit=10/)).toHaveLength(2);
+    expect(screen.queryByText("outbound_bulk_guard")).not.toBeInTheDocument();
+    expect(screen.queryByText("deep_ai_analysis")).not.toBeInTheDocument();
+    // The read is a tenant read, and it happened.
+    expect(
+      fetchMock.mock.calls.filter(([input]) => String(input).includes("/features")),
+    ).toHaveLength(1);
   });
 
   it("reaches the render with the provider rows the policy queue carries", async () => {

@@ -223,24 +223,29 @@ export interface FeatureOverride {
 }
 
 /**
- * What `GET /features` answers the operator console. The same read answered to a
- * customer-tier session is projected: the platform's security floors, kill
- * switches and scope ladder are absent rather than blanked, features no Customer
- * scope may reach are not listed, and only that customer's own override rows
- * come back alongside a `governed_by` outcome word. This console is never that
- * reader, so the fields it renders stay required here.
+ * What `GET /features` answers. An operator read carries the whole ladder; the
+ * same route answered to a customer-tier session is projected: the platform's
+ * security floors, kill switches and scope ladder are absent rather than blanked,
+ * features no Customer scope may reach are not listed, the platform's prose about
+ * the switch is left out, and only that customer's own override rows come back
+ * alongside a `governed_by` outcome word. The fields both placements publish are
+ * required here; the ones only one of them publishes are optional, because a
+ * console that treated them as always present would print `undefined` for the
+ * reader they are withheld from.
  */
 export interface Feature {
   feature_id: string;
-  /** Catalog label written for operators; the id is what audit records name. */
+  /** Catalog label for the reading seat: the platform's name or the customer's. */
   display_name: string;
-  description: string;
+  description?: string;
   default_value: string;
-  mandatory: boolean;
-  kill_switch: boolean;
+  mandatory?: boolean;
+  kill_switch?: boolean;
   allowed_scopes: OverrideScope[];
   effective_value: string;
-  winning_scope: OverrideScope;
+  winning_scope?: OverrideScope;
+  /** Published only where `winning_scope` is withheld. */
+  governed_by?: "you" | "provider";
   overrides: FeatureOverride[];
 }
 
@@ -255,7 +260,9 @@ export interface FeatureList {
 
 export interface OverrideWriteResult extends FeatureOverride {
   effective_value: string;
-  winning_scope: OverrideScope;
+  /** Withheld from a customer writer, which reads `governed_by` instead. */
+  winning_scope?: OverrideScope;
+  governed_by?: "you" | "provider";
 }
 
 // ---------------------------------------------------------------------------

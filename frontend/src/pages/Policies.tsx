@@ -123,14 +123,12 @@ export function Policies() {
             : "Versioned policy controls"
         }
         actions={
-          // Feature overrides are a deployment-configuration surface. A tenant
-          // console does not offer it, so the entry is hidden for the customer
-          // level the server published.
-          tenantTier ? null : (
-            <Link to="/policies/features" className="btn btn-primary">
-              Feature overrides
-            </Link>
-          )
+          // A customer session writes its own feature settings, so the entry is
+          // on both seats. Only the word differs: a tenant reads them as their
+          // sending's settings, not as a rollout ladder.
+          <Link to="/policies/features" className="btn btn-primary">
+            {tenantTier ? "Feature settings" : "Feature overrides"}
+          </Link>
         }
       />
 

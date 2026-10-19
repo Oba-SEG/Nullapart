@@ -21,6 +21,7 @@ import {
   type ManagementLevel,
   type NotifyTarget,
   type OverrideScope,
+  type OverrideValueKind,
   type RuleCondition,
   type ScannerType,
 } from "../api/policies";
@@ -32,9 +33,15 @@ export const OVERRIDE_SCOPE_LABELS: Record<OverrideScope, string> = {
   tenant: "This customer",
 };
 
-/** Scope label for an override row, which carries the customer it applies to. */
-export function overrideScopeLabel(scope: OverrideScope, scopeId?: string): string {
+/**
+ * Scope label for an override row, which carries the customer it applies to. A
+ * customer seat only ever receives its own rows, so the ladder word and the
+ * customer identifier it repeats are both dropped: the row is simply the
+ * customer's own setting.
+ */
+export function overrideScopeLabel(scope: OverrideScope, scopeId?: string, tenant = false): string {
   if (scope === "tenant") {
+    if (tenant) return "Your setting";
     return scopeId ? `This customer · ${scopeId}` : OVERRIDE_SCOPE_LABELS.tenant;
   }
   return OVERRIDE_SCOPE_LABELS[scope];
@@ -307,11 +314,27 @@ export const OVERRIDE_VALUE_KIND_LABELS = {
   typed: "A specific value",
 } as const;
 
-/** Turns a stored wire value into the words an operator reads. */
-export function describeOverrideValue(value: string): string {
+/**
+ * The same four decisions in a customer's words. "Follow the higher setting" is
+ * the operator's name for a ladder a tenant is never shown, so the choice reads
+ * as what it does for them: the value their provider set comes back into force.
+ */
+const TENANT_OVERRIDE_VALUE_KIND_LABELS = {
+  inherit: "Use your provider's setting",
+  enabled: "On",
+  disabled: "Off",
+  typed: "A specific value",
+} as const;
+
+export function overrideValueKindLabel(kind: OverrideValueKind, tenant: boolean): string {
+  return tenant ? TENANT_OVERRIDE_VALUE_KIND_LABELS[kind] : OVERRIDE_VALUE_KIND_LABELS[kind];
+}
+
+/** Turns a stored wire value into the words the reading seat gets. */
+export function describeOverrideValue(value: string, tenant = false): string {
   const decoded = decodeOverrideValue(value);
   if (decoded.kind === "typed") return decoded.typed || "no value set";
-  return OVERRIDE_VALUE_KIND_LABELS[decoded.kind];
+  return overrideValueKindLabel(decoded.kind, tenant);
 }
 
 /**
@@ -1165,8 +1188,12 @@ export const HINTS = {
     "Where the active value came from. A setting at this level is replaced by anything set closer to the customer.",
   inherit:
     "Stop overriding here and use the value from the next level up. Nothing is deleted; this level stops deciding.",
+  inheritTenant:
+    "Go back to the value your provider set for you. Nothing you saved is deleted; your setting simply stops deciding.",
   readOnly:
     "Your roles cannot change this setting at any level it allows. Ask a system administrator if it needs to move.",
+  readOnlyTenant:
+    "Your roles can read these settings but cannot change them. Ask your provider if one needs to move.",
   stepUp: "Changing this signs you in again first, and every change is recorded with your reason.",
   lifecycle:
     "Active customers send and receive normally. Grace limits mail. Suspended stops new mail. Terminated ends the account.",

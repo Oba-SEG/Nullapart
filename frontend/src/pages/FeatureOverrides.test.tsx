@@ -142,11 +142,87 @@ function savedResult(value: string) {
   };
 }
 
+/**
+ * What `GET /features` answers on a customer seat: the label the catalog carries
+ * for them instead of the platform's name for the machinery, no description, no
+ * floor or stop flags, no scope ladder, and only this customer's own override
+ * rows. `governed_by` is published where `winning_scope` is withheld.
+ */
+const customerBulkGuard = {
+  feature_id: "outbound_bulk_guard",
+  display_name: "Bulk sending limits",
+  default_value: "enabled",
+  allowed_scopes: ["tenant"],
+  effective_value: "typed:rate_limit=10",
+  governed_by: "you",
+  overrides: [
+    {
+      id: "override-tenant",
+      scope: "tenant",
+      scope_id: "CZA-1",
+      value: "typed:rate_limit=10",
+      owner: "6f1f6b3e-7d0a-4d5c-9d43-0a1b2c3d4e5f",
+      owner_display_name: "Lerato Mokoena",
+      reason: "Campaign weekend lift",
+      revision: 3,
+      created_at: "2026-01-05T09:00:00Z",
+      expires_at: "2026-02-01T00:00:00Z",
+    },
+  ],
+};
+
+/** A feature the provider decides, which the tenant can read but not move. */
+const customerContentReview = {
+  feature_id: "deep_ai_analysis",
+  display_name: "Message content review",
+  default_value: "enabled",
+  allowed_scopes: ["tenant"],
+  effective_value: "enabled",
+  governed_by: "provider",
+  overrides: [],
+};
+
+function customerFeaturesBody() {
+  return {
+    data: {
+      features: [customerBulkGuard, customerContentReview],
+      allowed_override_scopes: ["tenant"],
+    },
+  };
+}
+
+/** The write answer on a customer seat: the outcome word, never the ladder. */
+function customerSavedResult(value: string) {
+  return {
+    data: {
+      id: "override-tenant",
+      scope: "tenant",
+      scope_id: "CZA-1",
+      value,
+      owner: "6f1f6b3e-7d0a-4d5c-9d43-0a1b2c3d4e5f",
+      owner_display_name: "Lerato Mokoena",
+      reason: "Weekend campaign sends faster",
+      revision: 5,
+      created_at: "2026-01-07T10:00:00Z",
+      expires_at: null,
+      effective_value: value,
+      governed_by: value === "inherit" ? "provider" : "you",
+    },
+  };
+}
+
+const customerSession = sessionFor(
+  ["customer_admin"],
+  ["policies:view", "policies:manage"],
+  "customer",
+);
+
 function stubFetch(
   session: ReturnType<typeof sessionFor>,
   allowedOverrideScopes = ["tenant"],
   // Stands in for the server echoing the stored value back after a write.
   respondToPut: (body: Record<string, unknown>) => unknown = () => clearedResult(),
+  features: unknown = featuresBody(allowedOverrideScopes),
 ) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -158,7 +234,7 @@ function stubFetch(
       return ok(respondToPut(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>));
     }
     if (url.includes("/features")) {
-      return ok(featuresBody(allowedOverrideScopes));
+      return ok(features);
     }
     throw new Error(`unexpected fetch ${url}`);
   });
@@ -338,18 +414,148 @@ describe("FeatureOverrides", () => {
     expect(screen.getByText(/your role cannot manage policy settings/i)).toBeTruthy();
   });
 
-  it("keeps the deployment rollout catalog out of a customer console", async () => {
-    const fetchMock = stubFetch(sessionFor(["customer_admin"], ["policies:view"], "customer"));
+  it("reads the customer projection with no ladder and no raw key", async () => {
+    stubFetch(
+      customerSession,
+      ["tenant"],
+      () => customerSavedResult("inherit"),
+      customerFeaturesBody(),
+    );
     renderAt("/features-overrides");
 
-    expect(await screen.findByText(/nothing here is open to your customer/i)).toBeTruthy();
-    // The platform surfaces are not merely hidden behind a spinner.
-    expect(screen.queryByText("Outbound bulk sender guardrails")).toBeNull();
-    expect(screen.queryByText("Emergency stops")).toBeNull();
-    expect(screen.queryByText(/deployment/i)).toBeNull();
-    // Nothing is fetched, because a read the tenant console will not show is
-    // still a platform read made with the tenant's session.
-    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/features"))).toBe(false);
+    expect(await screen.findByText("Bulk sending limits")).toBeTruthy();
+    expect(screen.getByText("Message content review")).toBeTruthy();
+    // The identifier is a handle the write path addresses, not a label, and a
+    // customer console never prints one.
+    expect(screen.queryByText("outbound_bulk_guard")).toBeNull();
+    expect(screen.queryByText("deep_ai_analysis")).toBeNull();
+    // Nothing on the customer read names the ladder or the platform's floors.
+    expect(screen.queryByText("Platform-wide")).toBeNull();
+    expect(screen.queryByText("Deployment-wide")).toBeNull();
+    expect(screen.queryByText("Security floor")).toBeNull();
+    expect(screen.queryByText("Emergency stop")).toBeNull();
+    expect(screen.queryByText("This customer · CZA-1")).toBeNull();
+    expect(screen.getByText("Your setting")).toBeTruthy();
+    // The columns an operator compares against are not on a tenant table.
+    expect(screen.queryByText("What it controls")).toBeNull();
+    expect(screen.queryByText("Default")).toBeNull();
+    expect(screen.getByText("On for your sending")).toBeTruthy();
+  });
+
+  it("says who decided each customer value instead of where it came from", async () => {
+    stubFetch(
+      customerSession,
+      ["tenant"],
+      () => customerSavedResult("inherit"),
+      customerFeaturesBody(),
+    );
+    renderAt("/features-overrides");
+    await screen.findByText("Bulk sending limits");
+
+    // Exact case: the rail headline is the same words with a capital S.
+    expect(screen.getByText("set by you")).toBeTruthy();
+    expect(screen.getByText("set by your provider")).toBeTruthy();
+    expect(screen.getByText(/2 of 2 settings yours to change/)).toBeTruthy();
+    expect(screen.getByText("You have not changed this setting")).toBeTruthy();
+  });
+
+  it("writes its own setting with no scope choice offered to a customer", async () => {
+    const fetchMock = stubFetch(
+      customerSession,
+      ["tenant"],
+      (body) => customerSavedResult(String(body.value)),
+      customerFeaturesBody(),
+    );
+    const user = userEvent.setup();
+    renderAt("/features-overrides");
+    await screen.findByText("Bulk sending limits");
+
+    await user.click(screen.getAllByRole("button", { name: "Change" })[0]);
+    // The only level a customer may write is fixed, so no picker is offered and
+    // the dialog states the scope as a fact instead.
+    expect(screen.queryByLabelText("Change it for")).toBeNull();
+    const dialog = screen.getByRole("dialog", { name: /change bulk sending limits/i });
+    expect(within(dialog).getByText("Change it for")).toBeTruthy();
+    expect(within(dialog).getByText("Your sending")).toBeTruthy();
+    expect(within(dialog).getByText("The value in force today was set by you.")).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Use your provider's setting" })).toBeTruthy();
+
+    const valueSelect = await screen.findByLabelText("New value");
+    await user.selectOptions(valueSelect, "disabled");
+    await user.type(screen.getByLabelText("Why this change"), "Weekend campaign sends faster");
+    await user.click(screen.getByRole("button", { name: "Save change" }));
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([input, init]) =>
+          String(input).endsWith("/features/outbound_bulk_guard/overrides") &&
+          init?.method === "PUT",
+      );
+      expect(call).toBeTruthy();
+      expect(JSON.parse(String(call?.[1]?.body))).toEqual({
+        scope: "tenant",
+        value: "disabled",
+        reason: "Weekend campaign sends faster",
+        expires_at: null,
+      });
+    });
+    expect(await screen.findByText(/Bulk sending limits is now Off, set by you/)).toBeTruthy();
+  });
+
+  it("takes back a customer change in the customer's own words", async () => {
+    const fetchMock = stubFetch(
+      customerSession,
+      ["tenant"],
+      (body) => customerSavedResult(String(body.value)),
+      customerFeaturesBody(),
+    );
+    const user = userEvent.setup();
+    renderAt("/features-overrides");
+    await screen.findByText("Bulk sending limits");
+
+    await user.click(screen.getByRole("button", { name: "Take this back" }));
+    const dialog = screen.getByRole("dialog", { name: /take back your change to bulk/i });
+    expect(within(dialog).getByText(/back to the value your provider set/i)).toBeTruthy();
+    await user.type(
+      within(dialog).getByLabelText("Why this is being retired"),
+      "Campaign finished; lift no longer required",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Take back your change" }));
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([input, init]) =>
+          String(input).endsWith("/features/outbound_bulk_guard/overrides") &&
+          init?.method === "PUT",
+      );
+      expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
+        scope: "tenant",
+        value: "inherit",
+      });
+    });
+    expect(await screen.findByText(/cleared at your setting/i)).toBeTruthy();
+    expect(
+      screen.getByText(/is now Use your provider's setting, set by your provider/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/follow the higher setting/i)).toBeNull();
+  });
+
+  it("gives a read-only customer no write action and no platform vocabulary", async () => {
+    stubFetch(
+      sessionFor(["customer_admin"], ["policies:view"], "customer"),
+      ["tenant"],
+      () => customerSavedResult("inherit"),
+      customerFeaturesBody(),
+    );
+    renderAt("/features-overrides");
+    await screen.findByText("Bulk sending limits");
+
+    expect(screen.queryByRole("button", { name: "Change" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Take this back" })).toBeNull();
+    // One chip per row, plus one on the override that cannot be taken back.
+    expect(screen.getAllByText("Read-only")).toHaveLength(3);
+    expect(screen.getByText(/cannot change these settings/i)).toBeTruthy();
+    expect(screen.queryByText(/system administrator/i)).toBeNull();
   });
 
   it("writes a typed value at the level the session was given", async () => {
