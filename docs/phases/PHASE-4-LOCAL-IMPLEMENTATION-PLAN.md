@@ -117,7 +117,9 @@ increment 9: security test battery + canonical gates + local live evidence + rep
    owner-approved data architecture of decision 15 (permissive real data +
    Nullapart-owned synthetic fixtures) — no production or customer message
    data ever enters training (production messages are never automatically
-   training data).
+   training data). The permissive-only half of that gate was reversed by the
+   owner on 2026-10-17 so every catalogued corpus is fetched; the recorded
+   license is provenance, not an approval filter. See `ml/inline/DATASET.md`.
 
 6. **Model registry = one audited, system-scoped table + admin API.**
    Migration creates `inline_ml_models` (model ID/version, input schema
