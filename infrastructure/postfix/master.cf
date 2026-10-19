@@ -42,10 +42,16 @@ smtp      inet  n       -       n       -       -       smtpd
 # command_time_limit, default 1000s). It sits above the filter's own 240s HTTP
 # timeout so a stalled handoff exits EX_TEMPFAIL (queue retry) before Postfix
 # kills the process.
+#
+# Ordering requirement: -o option lines must precede the bare service
+# attribute lines (flags=/user=/null_sender=/argv=). Postfix passes master.cf
+# entries to the pipe daemon in file order, and the daemon's getopt loop stops
+# at the first non-option argument, so an -o line placed after flags= reaches
+# the attribute parser verbatim and dies with "unknown attribute name: -o".
 # ==============================================================================
 mailcore unix  -       n       n       -       10      pipe
-  flags=Rq user=nullapart null_sender=<>
   -o mailcore_time_limit=300s
+  flags=Rq user=nullapart null_sender=<>
   argv=/usr/libexec/nullapart/mailcore-filter-wrapper --queue-id ${queue_id} --client-address ${client_address} --client-hostname ${client_hostname} --client-helo ${client_helo} --sasl-username ${sasl_username} --sender ${sender} -- ${recipient}
 
 # ==============================================================================
