@@ -26,6 +26,7 @@ import {
   fingerprintVersionLabel,
   outboundEventLabel,
   outboundOutcomeLabel,
+  reasonCodeLabel,
 } from "../lib/labels";
 import { severityLabel, type StatusTone } from "../lib/status";
 import "./OutboundIntelligence.css";
@@ -527,14 +528,14 @@ export function OutboundIntelligence() {
                   </div>
                   <p>
                     {event.sender_address ?? "unknown sender"} via{" "}
-                    {event.source_id ?? "unknown source"} · {event.reason_code} ·{" "}
+                    {event.source_id ?? "unknown source"} · {reasonCodeLabel(event.reason_code)} ·{" "}
                     {event.message_count} observed messages
                   </p>
                   {event.remediation_summary ? (
                     <p className="outbound-event-remediation">
                       Action: {event.remediation_summary}
                       {event.credential_rotation_recommended
-                        ? " Rotate connector credentials."
+                        ? " Rotate the credentials this sender uses."
                         : ""}
                     </p>
                   ) : null}

@@ -20,7 +20,6 @@ import {
   resequenceRules,
   ruleFromDraft,
   sortByEvaluationOrder,
-  summarizeCondition,
   tierAllows,
   type AuthResult,
   type ClassBandEntry,
@@ -66,6 +65,8 @@ import {
   POLICY_DISPOSITION_LABELS,
   SCANNER_LABELS,
   TENANT_LEVEL_LABELS,
+  reasonCodeLabel,
+  summarizeRuleCondition,
   tenantLevelBucket,
 } from "../lib/labels";
 import "./PolicyFamilyDetail.css";
@@ -606,11 +607,13 @@ export function PolicyFamilyDetail() {
               ) : null}
             </div>
             <p className="policy-detail-hint">{family.description}</p>
-            <p className="policy-detail-key">
-              <Hint label={HINTS.internalIdentifier}>
-                <code>{family.family_key}</code>
-              </Hint>
-            </p>
+            {tenantTier ? null : (
+              <p className="policy-detail-key">
+                <Hint label={HINTS.internalIdentifier}>
+                  <code>{family.family_key}</code>
+                </Hint>
+              </p>
+            )}
           </>
         ) : null}
       </header>
@@ -833,7 +836,7 @@ export function PolicyFamilyDetail() {
                     <td>{rule.priority}</td>
                     <td>{rule.enabled ? "On" : "Off"}</td>
                     <td className="policy-detail-condition">
-                      {summarizeCondition(rule.condition)}
+                      {summarizeRuleCondition(rule.condition)}
                     </td>
                     <td>
                       <span
@@ -842,7 +845,9 @@ export function PolicyFamilyDetail() {
                         {POLICY_DISPOSITION_LABELS[rule.action.disposition]}
                       </span>
                     </td>
-                    <td className="policy-detail-code">{rule.action.reason_code}</td>
+                    <td className="policy-detail-code">
+                      {reasonCodeLabel(rule.action.reason_code)}
+                    </td>
                     {mayPublish ? (
                       <td>
                         <div className="policy-detail-row-actions">

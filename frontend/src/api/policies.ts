@@ -763,58 +763,6 @@ export function cloneRulesForEditing(rules: Rule[]): Rule[] {
   return sortByEvaluationOrder(structuredClone(rules));
 }
 
-/** Short human-readable condition summary for the rules table. */
-export function summarizeCondition(condition: RuleCondition): string {
-  const parts: string[] = [];
-  const sender = condition.sender;
-  if (sender) {
-    if (sender.domain?.length) parts.push(`sender domain ${sender.domain.join(", ")}`);
-    if (sender.address?.length) parts.push(`sender ${sender.address.join(", ")}`);
-    if (sender.internal !== undefined) {
-      parts.push(sender.internal ? "internal senders" : "external senders");
-    }
-    if (sender.authenticated !== undefined) {
-      parts.push(sender.authenticated ? "authenticated senders" : "unauthenticated senders");
-    }
-  }
-  const recipient = condition.recipient;
-  if (recipient) {
-    if (recipient.domain?.length) parts.push(`recipient domain ${recipient.domain.join(", ")}`);
-    if (recipient.address?.length) parts.push(`recipient ${recipient.address.join(", ")}`);
-    if (recipient.internal !== undefined) {
-      parts.push(recipient.internal ? "internal recipients" : "external recipients");
-    }
-  }
-  const auth = condition.auth;
-  if (auth) {
-    if (auth.spf?.length) parts.push(`spf ${auth.spf.join(", ")}`);
-    if (auth.dkim?.length) parts.push(`dkim ${auth.dkim.join(", ")}`);
-    if (auth.dmarc?.length) parts.push(`dmarc ${auth.dmarc.join(", ")}`);
-  }
-  const content = condition.content;
-  if (content) {
-    if (content.has_attachment !== undefined) {
-      parts.push(content.has_attachment ? "has attachment" : "no attachment");
-    }
-    if (content.attachment_types?.length) {
-      parts.push(`attachment types ${content.attachment_types.join(", ")}`);
-    }
-    if (content.size_gt !== undefined) parts.push(`larger than ${content.size_gt} bytes`);
-    if (content.has_url !== undefined) parts.push(content.has_url ? "has url" : "no url");
-  }
-  const finding = condition.finding;
-  if (finding) {
-    if (finding.scanner?.length) parts.push(`scanner ${finding.scanner.join(", ")}`);
-    if (finding.severity?.length) parts.push(`severity ${finding.severity.join(", ")}`);
-    if (finding.category?.length) parts.push(`category ${finding.category.join(", ")}`);
-    if (finding.false_positive !== undefined) {
-      parts.push(finding.false_positive ? "marked false positive" : "not a false positive");
-    }
-  }
-  const scope = `scope ${condition.scope}`;
-  return parts.length === 0 ? `${scope} · every message` : `${scope} · ${parts.join(" · ")}`;
-}
-
 // ---------------------------------------------------------------------------
 // Authorization affordances (server-side authorization stays authoritative)
 // ---------------------------------------------------------------------------

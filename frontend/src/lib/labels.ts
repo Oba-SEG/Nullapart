@@ -3,9 +3,10 @@
  *
  * Rules from docs/engineering/UX-TERMINOLOGY.md: an enum never renders as its
  * raw wire value in a primary position, "tenant" is never shown to an operator,
- * and a mechanism is never named where an outcome would do. Raw identifiers
- * still appear, but only as secondary evidence next to the label, because audit
- * records and support threads name the key.
+ * and a mechanism is never named where an outcome would do. A machine key (a
+ * reason code, an engine name, a runbook path) never reaches a customer screen
+ * at all: the customer read is built from outcome words, and the key stays
+ * where the platform can use it, in the audit record and the API.
  */
 
 import {
@@ -20,6 +21,7 @@ import {
   type ManagementLevel,
   type NotifyTarget,
   type OverrideScope,
+  type RuleCondition,
   type ScannerType,
 } from "../api/policies";
 import { humanizeToken } from "./text";
@@ -165,18 +167,23 @@ export const FINDING_CATEGORY_LABELS: Record<FindingCategory, string> = {
   unknown: "Unclassified",
 };
 
+/**
+ * Which check produced a finding, in product-capability words. The wire keys
+ * name the engine behind the check; the console never repeats them, because a
+ * customer chooses evidence by what was looked at, not by which daemon looked.
+ */
 export const SCANNER_LABELS: Record<ScannerType, string> = {
-  clamav: "ClamAV antivirus",
-  rspamd: "Rspamd spam filter",
+  clamav: "Malware analysis",
+  rspamd: "Spam analysis",
   urlanalysis: "Link analysis",
   attachment: "Attachment analysis",
-  dkim: "DKIM signing check",
-  spf: "SPF sender check",
-  dmarc: "DMARC policy check",
-  arc: "ARC forwarding check",
-  inlineml: "Inline machine learning",
-  deepai: "Deep AI analysis",
-  custom: "Custom scanner",
+  dkim: "Message signature check",
+  spf: "Sender authorisation check",
+  dmarc: "Domain alignment check",
+  arc: "Forwarding chain check",
+  inlineml: "Automated threat analysis",
+  deepai: "Advanced threat analysis",
+  custom: "Custom check",
 };
 
 /** The SPF/DKIM/DMARC verdicts, in the words the RFC results actually mean. */
@@ -380,6 +387,7 @@ export function verificationStatusLabel(value: string): string {
  */
 const AUDIT_ACTION_LABELS: Record<string, string> = {
   outbound_bulk_sender_upserted: "Approved sender changed",
+  release: "Message released",
 };
 
 export function auditActionLabel(action: string): string {
@@ -615,6 +623,114 @@ export function findingCategoryLabel(value: string): string {
 }
 
 /**
+ * What a decision did to the message. The wire value is a machine key written
+ * by the policy engine, so every code the engine can emit is named here: a
+ * customer needs the outcome ("the message was held because it looked like
+ * phishing"), not `QUARANTINE_PHISHING`. A key that is not listed was typed by
+ * an operator into a rule, so it is echoed back as readable words rather than
+ * guessed at.
+ */
+const REASON_CODE_LABELS: Record<string, string> = {
+  ALLOWED: "Delivered",
+  QUARANTINE_MALWARE: "Held: malware",
+  QUARANTINE_PHISHING: "Held: phishing",
+  QUARANTINE_SPAM: "Held: spam",
+  QUARANTINE_POLICY: "Held: matched your policy",
+  QUARANTINE_ATTACHMENT: "Held: attachment not accepted",
+  REJECT_SPF_FAIL: "Rejected: the sender domain did not authorise it",
+  REJECT_DKIM_FAIL: "Rejected: the message signature did not verify",
+  REJECT_DMARC_FAIL: "Rejected: failed the sender domain's alignment rule",
+  REJECT_SPOOFING: "Rejected: the sender looked spoofed",
+  REJECT_POLICY: "Rejected: refused by your policy",
+  DEFER_RATE_LIMIT: "Deferred: sending rate limit reached",
+  DEFER_TEMPORARY: "Deferred: delivery will be retried",
+  HOLD_PENDING: "Held: waiting for a decision",
+  OUTBOUND_POLICY: "Restricted by an outbound limit",
+  OUTBOUND_UNAUTHORIZED_BULK: "Bulk send from an unapproved sender",
+  OUTBOUND_SOURCE_COMPROMISE: "A sending source looks compromised",
+  OUTBOUND_XOORG_SPOOFING: "A sender is impersonating one of your other domains",
+  OUTBOUND_QUEUE_PRESSURE: "The sending queue is under pressure",
+  OUTBOUND_BULK_ANOMALY: "Bulk volume is outside the usual range",
+  OUTBOUND_ROTATING_RECIPIENTS: "Recipients rotate between sends",
+  OUTBOUND_CAMPAIGN_CLUSTER: "Sends look like one campaign",
+  OUTBOUND_FAILURE_SPIKE: "Delivery failures spiked",
+};
+
+/** What a policy or intelligence decision did, in outcome words. */
+export function reasonCodeLabel(value: string): string {
+  return fromLabels(REASON_CODE_LABELS, value);
+}
+
+/**
+ * One-line summary of what a rule matches, in the words the rule builder uses.
+ * Every value the engine stores is read through a label map here, so the
+ * summary never repeats a scanner key, a verdict token or a severity name the
+ * way the database spells them.
+ */
+export function summarizeRuleCondition(condition: RuleCondition): string {
+  const parts: string[] = [];
+  const sender = condition.sender;
+  if (sender) {
+    if (sender.domain?.length) parts.push(`sender domain ${sender.domain.join(", ")}`);
+    if (sender.address?.length) parts.push(`sender ${sender.address.join(", ")}`);
+    if (sender.internal !== undefined) {
+      parts.push(sender.internal ? "internal senders" : "external senders");
+    }
+    if (sender.authenticated !== undefined) {
+      parts.push(sender.authenticated ? "authenticated senders" : "unauthenticated senders");
+    }
+  }
+  const recipient = condition.recipient;
+  if (recipient) {
+    if (recipient.domain?.length) parts.push(`recipient domain ${recipient.domain.join(", ")}`);
+    if (recipient.address?.length) parts.push(`recipient ${recipient.address.join(", ")}`);
+    if (recipient.internal !== undefined) {
+      parts.push(recipient.internal ? "internal recipients" : "external recipients");
+    }
+  }
+  const auth = condition.auth;
+  if (auth) {
+    if (auth.spf?.length) {
+      parts.push(`sender authorisation ${auth.spf.map((v) => AUTH_RESULT_LABELS[v]).join(", ")}`);
+    }
+    if (auth.dkim?.length) {
+      parts.push(`message signature ${auth.dkim.map((v) => AUTH_RESULT_LABELS[v]).join(", ")}`);
+    }
+    if (auth.dmarc?.length) {
+      parts.push(`domain alignment ${auth.dmarc.map((v) => AUTH_RESULT_LABELS[v]).join(", ")}`);
+    }
+  }
+  const content = condition.content;
+  if (content) {
+    if (content.has_attachment !== undefined) {
+      parts.push(content.has_attachment ? "has an attachment" : "has no attachment");
+    }
+    if (content.attachment_types?.length) {
+      parts.push(`attachment types ${content.attachment_types.join(", ")}`);
+    }
+    if (content.size_gt !== undefined) parts.push(`larger than ${content.size_gt} bytes`);
+    if (content.has_url !== undefined) parts.push(content.has_url ? "contains a link" : "no link");
+  }
+  const finding = condition.finding;
+  if (finding) {
+    if (finding.scanner?.length) {
+      parts.push(`from ${finding.scanner.map((scanner) => SCANNER_LABELS[scanner]).join(", ")}`);
+    }
+    if (finding.severity?.length) {
+      parts.push(`severity ${finding.severity.map((s) => FINDING_SEVERITY_LABELS[s]).join(", ")}`);
+    }
+    if (finding.category?.length) {
+      parts.push(`category ${finding.category.map((c) => FINDING_CATEGORY_LABELS[c]).join(", ")}`);
+    }
+    if (finding.false_positive !== undefined) {
+      parts.push(finding.false_positive ? "marked as a mistake" : "not marked as a mistake");
+    }
+  }
+  const scope = CONDITION_SCOPE_LABELS[condition.scope];
+  return parts.length === 0 ? `${scope} · every message` : `${scope} · ${parts.join(" · ")}`;
+}
+
+/**
  * Verdicts of the DNS and logo checks on the domain page. They share four
  * words with other surfaces but nothing else, so they keep their own map.
  */
@@ -771,7 +887,7 @@ export const HINTS = {
   emergencyStop:
     "An emergency stop is a switch the platform can pull to halt this feature everywhere. It stays listed so you can see it.",
   internalIdentifier:
-    "The internal name for this setting. Audit records and support references use it, so it stays visible.",
+    "The internal name for this setting. Audit records and support references name this key rather than the label.",
   callerTier:
     "The highest management level your current roles reach. It decides which settings you can change on this page.",
   winningScope:

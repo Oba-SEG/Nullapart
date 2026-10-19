@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 
 import { api, type ApiError } from "../api/client";
 import { StatusPill } from "../components/StatusPill";
-import { findingCategoryLabel } from "../lib/labels";
+import { findingCategoryLabel, reasonCodeLabel } from "../lib/labels";
 import { severityLabel, severityTone } from "../lib/status";
 import { StepUpPrompt } from "../components/StepUpPrompt";
 import { ControlRail } from "../components/ControlRail";
@@ -16,7 +16,6 @@ import { Dialog } from "../components/primitives/Dialog";
 import { Hint } from "../components/primitives/Hint";
 import { randomUuid } from "../lib/ids";
 import { notify } from "../lib/notify";
-import { humanizeToken } from "../lib/text";
 import "./Quarantine.css";
 
 interface QuarantineFinding {
@@ -117,7 +116,8 @@ export function Quarantine() {
         item.sender.toLowerCase().includes(needle) ||
         item.tenant_message_id.toLowerCase().includes(needle) ||
         item.transaction_id.toLowerCase().includes(needle) ||
-        item.reason_code.toLowerCase().includes(needle);
+        item.reason_code.toLowerCase().includes(needle) ||
+        reasonCodeLabel(item.reason_code).toLowerCase().includes(needle);
       const matchesSeverity =
         severity === "all" || item.findings.some((finding) => finding.severity === severity);
       return matchesText && matchesSeverity;
@@ -377,10 +377,7 @@ export function Quarantine() {
                       ))
                     )}
                   </td>
-                  <td>
-                    {humanizeToken(item.reason_code)}
-                    <span className="quarantine-meta">{item.reason_code}</span>
-                  </td>
+                  <td>{reasonCodeLabel(item.reason_code)}</td>
                   <td>
                     {new Date(item.quarantined_at).toLocaleString()}
                     {item.released_at ? (
@@ -441,7 +438,7 @@ export function Quarantine() {
             <ul>
               <li>Message: {selected.tenant_message_id}</li>
               <li>Sender: {selected.sender}</li>
-              <li>Reason: {humanizeToken(selected.reason_code)}</li>
+              <li>Reason: {reasonCodeLabel(selected.reason_code)}</li>
             </ul>
             <label>
               Release reason

@@ -83,6 +83,9 @@ describe("Quarantine", () => {
     expect(await screen.findByText("sender@example.test")).toBeTruthy();
     expect(screen.getByText("High", { selector: ".status-pill" })).toBeTruthy();
     expect(screen.getByText("Category: Malware")).toBeTruthy();
+    // The reason reads as an outcome. The engine's machine key never paints.
+    expect(screen.getByText("Held: malware")).toBeTruthy();
+    expect(screen.queryByText("QUARANTINE_MALWARE")).toBeNull();
     expect(screen.getByText("Finding: Static malware rule matched")).toBeTruthy();
     expect(screen.getByText(/never shown here/i)).toBeTruthy();
     expect(screen.getByRole("combobox", { name: "Filter by severity" })).toHaveValue("all");

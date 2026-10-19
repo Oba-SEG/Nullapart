@@ -572,7 +572,10 @@ describe("Policies", () => {
     await user.click(screen.getByRole("button", { name: "Save rule" }));
 
     expect(await screen.findByText("Hold new senders")).toBeTruthy();
-    expect(screen.getByText("HOLD_NEW_SENDER")).toBeTruthy();
+    // The table reads as an outcome, never as the machine key. The key an
+    // operator typed is still in the rule editor, which is where it is edited.
+    expect(screen.getByText("Hold new sender")).toBeTruthy();
+    expect(screen.queryByText("HOLD_NEW_SENDER")).toBeNull();
     // The action column shows the operator wording, never the wire enum.
     expect(screen.getByText("Hold it without a review queue")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Save rule" })).toBeNull();

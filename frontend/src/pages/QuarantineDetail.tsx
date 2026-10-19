@@ -12,9 +12,8 @@ import { Button } from "../components/primitives/Button";
 import { Dialog } from "../components/primitives/Dialog";
 import { Hint } from "../components/primitives/Hint";
 import { randomUuid } from "../lib/ids";
-import { findingCategoryLabel } from "../lib/labels";
+import { auditActionLabel, findingCategoryLabel, reasonCodeLabel } from "../lib/labels";
 import { notify } from "../lib/notify";
-import { humanizeToken } from "../lib/text";
 import { requirementLabel, resultLabel, scannerStatusLabel, severityLabel } from "../lib/status";
 import "./Quarantine.css";
 
@@ -183,7 +182,7 @@ export function QuarantineDetail() {
           <div className="case-action-bar">
             <div className="case-action-context">
               <span className="case-action-id">{data.tenant_message_id}</span>
-              <span className="case-action-reason">{humanizeToken(data.reason_code)}</span>
+              <span className="case-action-reason">{reasonCodeLabel(data.reason_code)}</span>
             </div>
             {data.released_at ? (
               <span className="case-action-released">
@@ -219,10 +218,7 @@ export function QuarantineDetail() {
                 <dt>Recipients</dt>
                 <dd>{data.recipient_count}</dd>
                 <dt>Reason</dt>
-                <dd>
-                  {humanizeToken(data.reason_code)}
-                  <span className="quarantine-meta">{data.reason_code}</span>
-                </dd>
+                <dd>{reasonCodeLabel(data.reason_code)}</dd>
                 <dt>Quarantined</dt>
                 <dd>{new Date(data.quarantined_at).toLocaleString()}</dd>
                 <dt>Released</dt>
@@ -318,7 +314,7 @@ export function QuarantineDetail() {
               <ul className="quarantine-audit">
                 {data.audit.map((entry) => (
                   <li key={`${entry.action}-${entry.created_at}`}>
-                    <strong>{humanizeToken(entry.action)}</strong> · {resultLabel(entry.result)}
+                    <strong>{auditActionLabel(entry.action)}</strong> · {resultLabel(entry.result)}
                     <span className="quarantine-meta">
                       {entry.actor_login} · {new Date(entry.created_at).toLocaleString()}
                     </span>
@@ -364,7 +360,7 @@ export function QuarantineDetail() {
               <ul>
                 <li>Message: {data.tenant_message_id}</li>
                 <li>Sender: {data.sender}</li>
-                <li>Reason: {humanizeToken(data.reason_code)}</li>
+                <li>Reason: {reasonCodeLabel(data.reason_code)}</li>
               </ul>
               <label>
                 Release reason
