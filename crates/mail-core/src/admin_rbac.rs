@@ -6564,8 +6564,22 @@ async fn list_permissions(
         )
         .await;
     }
+    // The catalog is the vocabulary of role *definition*, which only the builtin
+    // System Administrator identity can use. A caller who can only grant roles is
+    // handed the ceiling they can actually reach — the same set the subset rule
+    // enforces — because the full catalog describes platform capabilities
+    // ("the ML model registry", "scanner health and drift operations") that a
+    // customer console has no business naming, even when its UI relabels them.
+    let can_define_roles = holds_role_definition_identity(&session);
     let permissions: Vec<PermissionView> = PERMISSION_CATALOG
         .iter()
+        .filter(|permission| {
+            can_define_roles
+                || session
+                    .permissions
+                    .iter()
+                    .any(|held| held == permission.key)
+        })
         .map(|permission| PermissionView {
             key: permission.key,
             display_name: permission.display_name,
@@ -6605,6 +6619,11 @@ async fn list_roles(
         )
         .await;
     }
+    // A caller can only grant a role whose level ranks at or below their own, so
+    // the higher bundles are not a choice they have — and listing them would put
+    // the platform's role ladder and its permission sets in front of a customer.
+    // The rank comes from the same rule the grant path enforces.
+    let grantable_rank = grantor_rank(&state, &session).await;
     match state
         .0
         .store
@@ -6612,8 +6631,11 @@ async fn list_roles(
         .await
     {
         Ok(roles) => {
-            let roles: Vec<RoleDefinitionView> =
-                roles.into_iter().map(RoleDefinitionView::from).collect();
+            let roles: Vec<RoleDefinitionView> = roles
+                .into_iter()
+                .filter(|role| rank_for_level(&role.role_level) <= grantable_rank)
+                .map(RoleDefinitionView::from)
+                .collect();
             (StatusCode::OK, Json(ApiEnvelope { data: roles })).into_response()
         },
         Err(_) => unavailable(),
@@ -9139,6 +9161,139 @@ mod tests {
             .as_array()
             .expect("permissions")
             .contains(&serde_json::json!(ADMIN_USERS_MANAGE_PERMISSION)));
+    }
+
+    /// The permission catalog is the vocabulary of role *definition*, which only
+    /// the builtin System Administrator identity can perform. A caller who can
+    /// only grant roles is answered with the ceiling they can actually reach,
+    /// because the full catalog describes capabilities a customer has no use for
+    /// ("Read the ML model registry and model telemetry", "Read scanner health,
+    /// drift and evidence operations") even when their console relabels them.
+    #[tokio::test]
+    async fn permission_catalog_answers_a_grantor_with_their_own_ceiling() {
+        let fixture = default_fixture();
+        let app = app(&fixture);
+        // The bootstrapped operator logs in first: it provisions the deployment,
+        // which every later identity signs into.
+        let (admin_cookie, _) = admin_session(&app).await;
+        let (cookie, _) = customer_admin_session(&fixture, &app, "owner@example.test").await;
+
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "GET",
+                "/api/v1/admin/permissions",
+                &cookie,
+                None,
+                None,
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::OK);
+        let keys: Vec<String> = data_of(&read_body(response).await)
+            .as_array()
+            .expect("catalog is an array")
+            .iter()
+            .filter_map(|entry| entry["key"].as_str().map(str::to_string))
+            .collect();
+        assert!(
+            keys.contains(&ADMIN_USERS_MANAGE_PERMISSION.to_string()),
+            "the permissions the caller holds stay listable: {keys:?}"
+        );
+        for platform_only in [
+            crate::model_registry::MODELS_VIEW_PERMISSION,
+            SCANNER_OPERATIONS_VIEW_PERMISSION,
+            crate::deep_ai::DEEP_AI_VIEW_PERMISSION,
+            OPERATIONS_VIEW_PERMISSION,
+            AUDIT_CROSS_CUSTOMER_PERMISSION,
+        ] {
+            assert!(
+                !keys.iter().any(|key| key == platform_only),
+                "a customer read names {platform_only}, which they can neither hold nor grant"
+            );
+        }
+
+        // Anti-vacuous: the same read as the role-definition identity is still
+        // the whole catalog, so the filter is a placement answer, not a broken one.
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "GET",
+                "/api/v1/admin/permissions",
+                &admin_cookie,
+                None,
+                None,
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(
+            data_of(&read_body(response).await)
+                .as_array()
+                .expect("catalog is an array")
+                .len(),
+            PERMISSION_CATALOG.len()
+        );
+    }
+
+    /// The role directory is a grant picker, and the grant path already refuses a
+    /// role above the caller's own level. Listing the higher bundles hands a
+    /// customer the platform's ladder with each role's permission set attached,
+    /// for a choice they provably do not have.
+    #[tokio::test]
+    async fn role_directory_stops_at_the_levels_the_caller_can_grant() {
+        let fixture = default_fixture();
+        let app = app(&fixture);
+        let (admin_cookie, _) = admin_session(&app).await;
+        let (cookie, _) = customer_admin_session(&fixture, &app, "owner@example.test").await;
+
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "GET",
+                "/api/v1/admin/roles",
+                &cookie,
+                None,
+                None,
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::OK);
+        let roles = data_of(&read_body(response).await)
+            .as_array()
+            .expect("roles is an array")
+            .clone();
+        let keys: Vec<&str> = roles
+            .iter()
+            .filter_map(|role| role["roleKey"].as_str())
+            .collect();
+        assert!(
+            keys.contains(&CUSTOMER_ADMIN_ROLE),
+            "the caller's own role is listed: {keys:?}"
+        );
+        assert!(
+            !keys.contains(&SYSTEM_ADMIN_ROLE) && !keys.contains(&SUPPORT_ROLE),
+            "a customer directory carries the platform ladder: {keys:?}"
+        );
+
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "GET",
+                "/api/v1/admin/roles",
+                &admin_cookie,
+                None,
+                None,
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(
+            data_of(&read_body(response).await)
+                .as_array()
+                .expect("roles is an array")
+                .len(),
+            BUILTIN_ROLES.len(),
+            "the role-definition identity still sees every level"
+        );
     }
 
     #[tokio::test]
