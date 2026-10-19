@@ -117,15 +117,26 @@ const PLATFORM_LANGUAGE: Array<{ term: string; pattern: RegExp }> = [
   { term: "MTA queue identifier", pattern: /\bqueue id/i },
   { term: "content dedup hash", pattern: /\bcontent hash\b/i },
   { term: "log correlation id", pattern: /\btrace[_ -]id\b/i },
+  // Authorization keys. The customer's own roles are described by what they
+  // allow, never by the row in the platform's permission table.
+  {
+    term: "permission key",
+    pattern:
+      /\b(admin|audit|trace|policies|quarantine|notifications|domain-security|outbound-intelligence|operations|models|connectors|deep-ai|scanner):[a-z_-]+/i,
+  },
+  // The installation's own bookkeeping for where it filed a customer.
+  { term: "surrogate row key", pattern: /\binternal key\b/i },
 ];
 
-/** The tenant's own organisation record, with no domains or groups set yet. */
+/** The tenant's own organisation record, with no domains or groups set yet.
+ *  Operational placement is null because the server publishes it only to a
+ *  platform seat; the tenant reads its derived customer ID instead. */
 const customerRecord = {
   id: "CZA-1",
   display_name: "Acme Freight",
-  internal_key: 7,
-  region_code: "CZA",
-  sequence_no: 1,
+  internal_key: null,
+  region_code: null,
+  sequence_no: null,
   lifecycle: "active",
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",

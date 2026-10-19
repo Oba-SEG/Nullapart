@@ -22,7 +22,7 @@ import { Hint } from "../components/primitives/Hint";
 import { Input } from "../components/primitives/Input";
 import { Select } from "../components/primitives/Select";
 import { randomUuid } from "../lib/ids";
-import { roleLevelLabel, TENANT_ROLE_LEVEL_LABEL } from "../lib/labels";
+import { permissionCapabilityLabel, roleLevelLabel, TENANT_ROLE_LEVEL_LABEL } from "../lib/labels";
 import { notify } from "../lib/notify";
 import "./Roles.css";
 
@@ -35,12 +35,13 @@ const ROLE_KEY_PATTERN = /^[a-z][a-z0-9_]{2,63}$/;
 const SYSTEM_ADMIN_ROLE = "system_admin";
 
 /**
- * A role can grant `admin:users:manage` and still be refused: the routes behind
- * these buttons keep definition changes to the platform's built-in System
- * Administrator. Stating the reservation is what makes the lock actionable.
+ * A role can hold the administrator-management capability and still be refused:
+ * the routes behind these buttons keep definition changes to the platform's
+ * built-in System Administrator. Stating the reservation is what makes the lock
+ * actionable, and the reason needs no authorization table to read.
  */
 const ROLE_DEFINITION_REFUSAL =
-  "Creating or editing a role needs a provider-level role, and your session does not hold one. A role can grant admin:users:manage and still be refused.";
+  "Creating or editing a role needs a provider-level role, and your session does not hold one. A role can let you manage your administrators and still not let you define roles.";
 
 /**
  * The gate the server publishes on the session decides. A session that carries
@@ -167,12 +168,19 @@ export function Roles() {
     const needle = search.trim().toLowerCase();
     if (!needle) return directory;
     return directory.filter((role) =>
-      [role.roleKey, role.displayName, role.roleLevel, ...role.permissions]
+      [
+        role.displayName,
+        role.roleKey,
+        role.roleLevel,
+        ...role.permissions.map((permission) =>
+          tenant ? permissionCapabilityLabel(permission) : permission,
+        ),
+      ]
         .join(" ")
         .toLowerCase()
         .includes(needle),
     );
-  }, [directory, search]);
+  }, [directory, search, tenant]);
 
   const rolesAvailable = roles.isSuccess;
   const rolesState = roles.isError ? "Unavailable" : "Loading";
@@ -308,7 +316,9 @@ export function Roles() {
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search role key, name, level, or permission"
+            placeholder={
+              tenant ? "Search your roles by name or capability" : "Search role key, name, level"
+            }
           />
         </label>
         {canManage ? (
@@ -377,16 +387,18 @@ export function Roles() {
                 <td>
                   <details className="roles-permissions">
                     <summary>
-                      {role.permissions.length} permission
+                      {role.permissions.length} {tenant ? "capability" : "permission"}
                       {role.permissions.length === 1 ? "" : "s"}
                     </summary>
                     <div className="roles-permission-list">
                       {role.permissions.length === 0 ? (
-                        <span className="roles-permission-empty">No permissions</span>
+                        <span className="roles-permission-empty">
+                          {tenant ? "Nothing extra is allowed" : "No permissions"}
+                        </span>
                       ) : (
                         role.permissions.map((permission) => (
                           <span key={permission} className="roles-permission-chip">
-                            {permission}
+                            {tenant ? permissionCapabilityLabel(permission) : permission}
                           </span>
                         ))
                       )}

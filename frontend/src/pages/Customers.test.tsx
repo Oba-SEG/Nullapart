@@ -305,7 +305,7 @@ describe("Customers", () => {
     expect(screen.queryByRole("button", { name: "New customer" })).toBeNull();
     expect(
       await screen.findByText(
-        /needs the customer management permission, which your roles do not grant/,
+        /needs the customer management capability, which your roles do not grant/,
       ),
     ).toBeTruthy();
   });
@@ -496,7 +496,7 @@ describe("Customers", () => {
     expect(screen.getByText("203.0.113.0/24")).toBeTruthy();
     expect(
       screen.getByText(
-        /Changing your source IP groups needs the admin:customers:manage permission/,
+        /Changing your source IP groups needs the capability to manage customer records/,
       ),
     ).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();

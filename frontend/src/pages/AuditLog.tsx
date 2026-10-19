@@ -460,7 +460,9 @@ export function AuditLog() {
               <dt>Action</dt>
               <dd>
                 {auditActionLabel(detail.data.action)} · {resultLabel(detail.data.result)}
-                <span className="audit-meta">{detail.data.action}</span>
+                {/* The wire name is what a platform operator quotes in a runbook;
+                    to a customer it is a key from a system they do not run. */}
+                {tenant ? null : <span className="audit-meta">{detail.data.action}</span>}
               </dd>
             </div>
             <div>

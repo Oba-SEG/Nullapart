@@ -49,7 +49,8 @@ interface SourceIpGroup {
 interface CustomerSummary {
   id: string;
   display_name: string;
-  internal_key: number;
+  /** Operational placement, published only to a platform seat. */
+  internal_key: number | null;
   region_code: string | null;
   sequence_no: number | null;
   lifecycle: CustomerLifecycle;
@@ -373,36 +374,44 @@ export function CustomerRecord({
                 <dt>Customer ID</dt>
                 <dd className="truncate customer-detail-id">{customer.id}</dd>
               </div>
-              <div>
-                <dt>Internal key</dt>
-                <dd>{customer.internal_key}</dd>
-              </div>
-              <div>
-                <dt>
-                  <Hint
-                    label={`The sending region assigned to ${
-                      ownRecord ? "your customer" : "this customer"
-                    }. ${ownRecord ? "Your provider" : "The platform"} sets it.`}
-                  >
-                    <span className="hint-term">Region</span>
-                  </Hint>
-                </dt>
-                <dd>{customer.region_code ?? "Not placed"}</dd>
-              </div>
-              <div>
-                <dt>
-                  <Hint
-                    label={`The position assigned to ${
-                      ownRecord ? "your customer" : "this customer"
-                    } within its region. ${
-                      ownRecord ? "Your provider" : "The platform"
-                    } assigns it.`}
-                  >
-                    <span className="hint-term">Sequence</span>
-                  </Hint>
-                </dt>
-                <dd>{customer.sequence_no ?? "Not assigned"}</dd>
-              </div>
+              {/* The server publishes operational placement to platform seats
+                  only, so the surrogate key being absent is the marker that the
+                  whole set was withheld. A legacy row that is genuinely
+                  unplaced still says so. */}
+              {customer.internal_key !== null ? (
+                <>
+                  <div>
+                    <dt>Internal key</dt>
+                    <dd>{customer.internal_key}</dd>
+                  </div>
+                  <div>
+                    <dt>
+                      <Hint
+                        label={`The sending region assigned to ${
+                          ownRecord ? "your customer" : "this customer"
+                        }. ${ownRecord ? "Your provider" : "The platform"} sets it.`}
+                      >
+                        <span className="hint-term">Region</span>
+                      </Hint>
+                    </dt>
+                    <dd>{customer.region_code ?? "Not placed"}</dd>
+                  </div>
+                  <div>
+                    <dt>
+                      <Hint
+                        label={`The position assigned to ${
+                          ownRecord ? "your customer" : "this customer"
+                        } within its region. ${
+                          ownRecord ? "Your provider" : "The platform"
+                        } assigns it.`}
+                      >
+                        <span className="hint-term">Sequence</span>
+                      </Hint>
+                    </dt>
+                    <dd>{customer.sequence_no ?? "Not assigned"}</dd>
+                  </div>
+                </>
+              ) : null}
               <div>
                 <dt>Created</dt>
                 <dd>{new Date(customer.created_at).toLocaleString()}</dd>

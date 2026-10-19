@@ -9,6 +9,8 @@
  * publish as `caller_tier` and features publish as `allowed_override_scopes`.
  */
 
+import { permissionCapabilityLabel } from "../lib/labels";
+
 /** Which gate refused the write. Mirrors `Blocker` in `crates/mail-core/src/admin_capabilities.rs`. */
 export type CapabilityBlocker = "permission" | "lifecycle" | "deployment" | "role";
 
@@ -29,11 +31,20 @@ export interface CustomerCapabilities {
  * which case the caller keeps its existing local check rather than inventing a
  * refusal the API may not apply).
  *
- * `permission` names the key the owning route enforces, so a locked control says
- * what to ask for instead of leaving the operator to guess. `roleRefusal`
+ * `permission` names the key the owning route enforces. A lock quotes what that
+ * key lets someone do rather than the key itself, because the key belongs to the
+ * platform's authorization table and the operator only needs the capability.
+ * `roleRefusal`
  * replaces the whole `role` sentence where the reserved identity is not the
  * customer-identity pair — a gate named wrongly is a refusal nobody can act on.
  */
+/** A capability label is written as a control would be ("Manage your
+ *  administrators"); mid-sentence it names the thing, so the lead loses its
+ *  capital. */
+function lowerFirst(label: string): string {
+  return label.charAt(0).toLowerCase() + label.slice(1);
+}
+
 export function capabilityLock(
   capability: WriteCapability | undefined,
   subject: string,
@@ -43,8 +54,8 @@ export function capabilityLock(
   if (capability === undefined || capability.allowed) return "";
   const needed =
     permission === undefined
-      ? "the customer management permission"
-      : `the ${permission} permission`;
+      ? "the customer management capability"
+      : `the capability to ${lowerFirst(permissionCapabilityLabel(permission))}`;
   switch (capability.blocker) {
     case "role":
       return (

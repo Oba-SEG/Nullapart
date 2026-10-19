@@ -147,8 +147,8 @@ export function NotificationSettings({ titlesById = {} }: NotificationSettingsPr
       <section className="card notification-settings" aria-labelledby="notifications-heading">
         <h2 id="notifications-heading">Alert mail</h2>
         <p className="notification-locked">
-          Mail delivery for your domain findings needs the notifications:view permission, which your
-          roles do not grant. Ask your provider to add it to a role on this account.
+          Mail delivery for your domain findings needs the capability to view delivery alerts, which
+          your roles do not grant. Ask your provider to add it to a role on this account.
         </p>
       </section>
     );

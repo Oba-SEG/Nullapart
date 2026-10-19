@@ -145,7 +145,7 @@ describe("NotificationSettings access states", () => {
     renderCard();
     const card = await screen.findByRole("region", { name: "Alert mail" });
 
-    expect(within(card).getByText(/notifications:view permission/)).toBeInTheDocument();
+    expect(within(card).getByText(/capability to view delivery alerts/)).toBeInTheDocument();
     expect(calls.filter((call) => call.url.includes("/notifications/settings"))).toEqual([]);
   });
 
@@ -178,7 +178,9 @@ describe("NotificationSettings access states", () => {
     });
 
     expect(
-      screen.getByText(/Saving notification settings needs the notifications:manage permission/),
+      screen.getByText(
+        /Saving notification settings needs the capability to change delivery alerts/,
+      ),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Save settings/ })).not.toBeInTheDocument();
     expect(screen.getByRole("checkbox")).toBeDisabled();
@@ -254,7 +256,9 @@ describe("NotificationSettings writes", () => {
     });
 
     expect(
-      screen.getByText(/Saving notification settings needs the notifications:manage permission/),
+      screen.getByText(
+        /Saving notification settings needs the capability to change delivery alerts/,
+      ),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Save settings" })).not.toBeInTheDocument();
     expect(screen.getByRole("checkbox")).toBeDisabled();

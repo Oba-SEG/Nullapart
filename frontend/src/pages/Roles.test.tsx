@@ -250,7 +250,7 @@ describe("Roles", () => {
     expect(screen.queryByRole("button", { name: "New role" })).toBeNull();
     expect(screen.queryByText("Managed by platform")).toBeNull();
     expect(
-      screen.getByText(/A role can grant admin:users:manage and still be refused/),
+      screen.getByText(/A role can let you manage your administrators and still not/),
     ).toBeTruthy();
     expect(screen.getByText("Custom roles written by your provider.")).toBeTruthy();
   });
@@ -264,9 +264,12 @@ describe("Roles", () => {
     expect(await screen.findByText("Triage agent")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "New role" })).toBeNull();
     expect(
-      screen.getByText("Creating or editing a role needs the admin:users:manage permission", {
-        exact: false,
-      }),
+      screen.getByText(
+        "Creating or editing a role needs the capability to manage your administrators",
+        {
+          exact: false,
+        },
+      ),
     ).toBeTruthy();
   });
 

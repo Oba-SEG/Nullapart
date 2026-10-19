@@ -395,6 +395,48 @@ export function auditActionLabel(action: string): string {
 }
 
 /**
+ * What each permission key lets someone do, in the words the person assigning
+ * it cares about. A customer console shows these; a platform console shows the
+ * key, because the key is what the API and the runbooks quote. Grants this map
+ * has never seen still read as a capability, never as a colon-separated key.
+ */
+const PERMISSION_CAPABILITY_LABELS: Record<string, string> = {
+  "admin:customers:manage": "Manage customer records",
+  "admin:customers:view": "View customer records",
+  "admin:domains:manage": "Manage your sending domains",
+  "admin:impersonate": "Provider access only",
+  "admin:users:manage": "Manage your administrators",
+  "audit:cross_customer": "Read activity outside your organisation",
+  "audit:export": "Export the activity log",
+  "audit:view": "Read the activity log",
+  "connectors:manage": "Change integrations",
+  "connectors:view": "See integrations",
+  "deep-ai:manage": "Change advanced analysis",
+  "deep-ai:view": "See advanced analysis",
+  "domain-security:manage": "Change domain security settings",
+  "domain-security:view": "View domain security",
+  "models:manage": "Change platform models",
+  "models:view": "See platform models",
+  "notifications:manage": "Change delivery alerts",
+  "notifications:view": "View delivery alerts",
+  "operations:manage": "Change platform operations",
+  "operations:view": "See platform operations",
+  "outbound-intelligence:manage": "Change outbound sender approvals",
+  "outbound-intelligence:view": "View outbound sending activity",
+  "policies:manage": "Change your mail policies",
+  "policies:view": "View your mail policies",
+  "quarantine:release": "Release held mail",
+  "quarantine:view": "View held mail",
+  "scanner:operations:view": "See scanner operations",
+  "trace:content": "Read message contents",
+  "trace:view": "Trace your messages",
+};
+
+export function permissionCapabilityLabel(permission: string): string {
+  return fromLabels(PERMISSION_CAPABILITY_LABELS, permission);
+}
+
+/**
  * Connector vocabularies. A connector card shows three of these at once (what
  * it does, whether it is usable, whether its credentials work), so each gets
  * its own map rather than one generic status word list.

@@ -167,11 +167,13 @@ struct ApiErrorBody {
     message: &'static str,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct CustomerSummaryResponse {
     id: String,
     display_name: String,
-    internal_key: i64,
+    /// Surrogate row key in the installation's own table. Nullable because a
+    /// customer seat is answered without it; see `projected`.
+    internal_key: Option<i64>,
     lifecycle: String,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
@@ -181,6 +183,21 @@ struct CustomerSummaryResponse {
     /// always carry both.
     region_code: Option<String>,
     sequence_no: Option<i64>,
+}
+
+impl CustomerSummaryResponse {
+    /// Operational placement numbers say how the installation filed the
+    /// customer, not who the customer is. A customer seat reads its own
+    /// organisation without them; the derived `id` stays because the customer
+    /// quotes it to their provider.
+    fn projected(mut self, platform: bool) -> Self {
+        if !platform {
+            self.internal_key = None;
+            self.region_code = None;
+            self.sequence_no = None;
+        }
+        self
+    }
 }
 
 #[derive(Serialize)]
@@ -969,6 +986,7 @@ async fn list_customers(
     // Customer entry never reduces the actor's own rights: a System Admin
     // keeps the full customer directory while entered.
     let list_all = has_role(&context, SYSTEM_ADMIN_ROLE);
+    let platform = crate::admin_rbac::platform_placement(&context);
     let rows: Result<Vec<CustomerListRow>, sqlx::Error> = if list_all {
         sqlx::query_as::<_, CustomerListRow>(LIST_ALL_SQL)
             .bind(&state.0.deployment_id.0)
@@ -1002,7 +1020,7 @@ async fn list_customers(
                 CustomerSummaryResponse {
                     id,
                     display_name,
-                    internal_key,
+                    internal_key: Some(internal_key),
                     lifecycle,
                     created_at,
                     updated_at,
@@ -1010,6 +1028,7 @@ async fn list_customers(
                     region_code,
                     sequence_no,
                 }
+                .projected(platform)
             },
         )
         .collect();
@@ -1122,7 +1141,7 @@ async fn create_customer(
     let summary = CustomerSummaryResponse {
         id: customer_id.clone(),
         display_name: display_name.to_string(),
-        internal_key: row.0,
+        internal_key: Some(row.0),
         lifecycle: "active".to_string(),
         created_at: row.1,
         updated_at: row.2,
@@ -1189,6 +1208,7 @@ async fn get_customer(
     if let Err(response) = authorize(&state, &context, &headers, &route).await {
         return response;
     }
+    let platform = crate::admin_rbac::platform_placement(&context);
     let mut transaction = match state.0.pool.begin().await {
         Ok(transaction) => transaction,
         Err(_) => return unavailable(),
@@ -1259,14 +1279,15 @@ async fn get_customer(
                 summary: CustomerSummaryResponse {
                     id,
                     display_name,
-                    internal_key,
+                    internal_key: Some(internal_key),
                     lifecycle,
                     created_at,
                     updated_at,
                     domain_count,
                     region_code,
                     sequence_no,
-                },
+                }
+                .projected(platform),
                 domains,
                 source_ip_groups,
                 capabilities: customer_capabilities(&context, &state.0.deployment_id),
@@ -1397,7 +1418,7 @@ async fn update_customer(
     let summary = CustomerSummaryResponse {
         id: customer_id.clone(),
         display_name: row.0,
-        internal_key: row.1,
+        internal_key: Some(row.1),
         lifecycle: body.lifecycle.clone(),
         created_at: row.2,
         updated_at: row.3,
@@ -2094,6 +2115,35 @@ mod tests {
         assert_eq!(format_customer_id("ZA", 1), "CZA-1");
         assert_eq!(format_customer_id("ZAB", 42), "CZAB-42");
         assert!(valid_path_id(&format_customer_id("EU", 7)));
+    }
+
+    #[test]
+    fn the_placement_numbers_only_travel_to_a_platform_seat() {
+        let summary = CustomerSummaryResponse {
+            id: "CZA-1".to_string(),
+            display_name: "Acme Freight".to_string(),
+            internal_key: Some(7),
+            lifecycle: "active".to_string(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            domain_count: 0,
+            region_code: Some("CZA".to_string()),
+            sequence_no: Some(1),
+        };
+
+        let for_customer = summary.clone().projected(false);
+        assert_eq!(for_customer.internal_key, None);
+        assert_eq!(for_customer.region_code, None);
+        assert_eq!(for_customer.sequence_no, None);
+        // The organisation's own reference stays: it is what the customer
+        // quotes when they contact their provider.
+        assert_eq!(for_customer.id, "CZA-1");
+        assert_eq!(for_customer.display_name, "Acme Freight");
+
+        let for_platform = summary.projected(true);
+        assert_eq!(for_platform.internal_key, Some(7));
+        assert_eq!(for_platform.region_code.as_deref(), Some("CZA"));
+        assert_eq!(for_platform.sequence_no, Some(1));
     }
 
     fn deployment() -> DeploymentId {
