@@ -41,6 +41,30 @@ Each setting declares:
 
 Customer settings cannot weaken System-enforced minimum security bounds.
 
+## Rule profile per family
+
+A published rule set only changes mail where a runtime stage reads it, so the
+policy detail response carries a derived profile for the family and the console
+builds its rule editor from that profile rather than from the shared rule
+contract:
+
+- the enforcement mode, which names the stage that reads the family's revisions,
+  or states that none does;
+- which condition predicates that stage evaluates, per fieldset;
+- the exact `action.metadata` keys the publish validator accepts, with their
+  bounds, built-in defaults and how several enabled rules merge.
+
+`crates/mail-core/src/policy_profile.rs` is the registry, and its tests pin the
+wired set to the constants the readers actually match on, so a family cannot be
+presented as enforced unless a stage reads its rules. Today four families have a
+reader (`ml_threat_classification`, `bulk_sending`, `outbound_abuse`,
+`sender_reputation`), and both readers consume only enabled rules, rule order and
+`action.metadata`. No family evaluates a condition predicate yet, and the console
+says so instead of offering fields the delivery path would ignore.
+
+Wiring a new family means adding its reader constant and profile fields in that
+registry, which is what turns a stored revision into a delivery decision.
+
 ## Policy scope and recipient partitioning
 
 Policy evaluation is customer/recipient scoped even when several customers received the same original SMTP transaction.
