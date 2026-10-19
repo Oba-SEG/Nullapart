@@ -1082,8 +1082,11 @@ states the permission it needs.
   URL and the console never re-derives authorization from role names (`caa8c0a`).
 - **Role grants the console can rely on** (`0aa05a6`): `customer_admin` now
   carries `admin:customers:view`, `admin:domains:manage`,
-  `domain-security:view|manage`, `outbound-intelligence:view|manage`,
-  `notifications:view|manage` and `connectors:view`, and the admin APIs publish
+  `domain-security:view|manage`, `outbound-intelligence:view|manage` and
+  `notifications:view|manage`. This entry originally also listed `connectors:view`
+  alongside them, and the role then also held `deep-ai:view`; both were retired
+  by the pass recorded below, so the list stops at the tenant's own capability
+  set rather than including platform read surfaces. The admin APIs publish
   the blocker behind each refusal through the shared Rust
   `Blocker`/`WriteCapability` in `crates/mail-core/src/admin_capabilities.rs`,
   mirrored by `frontend/src/api/capabilities.ts`. Grantor rank, the
@@ -1147,3 +1150,70 @@ states the permission it needs.
   tunnelled auth. Repairing it means `ALTER ROLE nullapart PASSWORD` on shared
   infrastructure, which needs an explicit decision rather than being done to make
   a gate look green.
+
+### Tenant console boundary: reads, grants and voice (2026-10-19)
+
+The customer console above was browsed again as `ob2-customer-admin` and failed
+on four counts: it still carried system-administrator context, it showed the
+model registry and Deep AI console the tenant cannot operate, its Feature
+overrides entry led to a page with no possible action, and its copy spoke in
+platform terms ("this deployment", "the platform floor", "ask a system
+administrator"). The fix treats a tenant console as a product, not a filtered
+view of the platform console.
+
+- **Two view grants retired from the builtin role** in `BUILTIN_ROLES`
+  (`crates/mail-core/src/admin_rbac.rs`): `deep-ai:view` and `connectors:view`.
+  `customer_admin` keeps neither, and `customer_admin_capability_set_is_the_tenant_boundary`
+  now lists the *view* permissions among the forbidden set alongside
+  `models:view` and `operations:view`, so a future grant cannot reappear without
+  failing the test. Login reconciliation in both directions means the revocation
+  reaches an already-seeded deployment (`.4`) on the next sign-in rather than
+  surviving because the seed was additive-only.
+- **Feature overrides closed at the page.** `list_features` authorizes on
+  `policies:view`, which a customer admin holds, so hiding the nav entry left the
+  URL `/policies/features` free to fetch and paint the platform rollout catalog
+  into a tenant console. `frontend/src/pages/FeatureOverrides.tsx` renders a
+  provider-decided state and does not issue the `/features` read when the
+  server-published tier is `customer`. The API remains the authorization
+  boundary; the page gate removes the leak, it is not the gate.
+- **Readouts a session cannot open are not advertised.** Settings previously
+  published "Platform facts: System role only" and "Runtime: Not available"
+  signals plus matching workflow steps, which teaches a customer administrator
+  about two platform readouts. Both signals, their guide steps and the header
+  sentence now render only when the session carries them. `AuditLog` does the
+  same for the integrity checkpoint: it attests the whole append-only ledger of
+  the installation, not the events inside a customer scope, so the tenant console
+  neither renders the card and rail signal nor calls
+  `/audit/checkpoint-status`.
+- **The pending-session race** in that gate: `enabled: !tenant` is true while the
+  session query is still loading, so a tenant console issued the platform read
+  anyway. It is `enabled: session.isSuccess && !tenant`.
+- **Customer voice** applied across the surfaces a tenant can actually reach:
+  `Policies` (description, table caption, empty state, and the Feature overrides
+  entry hidden at customer level), `Roles` (the role-definition refusal,
+  `ROLE_BUILTIN`, custom-role detail, both captions), `PolicyFamilyDetail`
+  ("ask your provider"), `Dashboard` (tenant title, unverified-domain detail, and
+  the note that named scanner nodes and model registries),
+  `OutboundIntelligence` (header, approval hint, incident paragraph),
+  `CustomerDetail` (region/sequence hints, both rail summaries), `DomainSecurity`
+  ("how the mail system judges this sending source"), `AdminUsers` (the
+  out-of-scope sentence), `NotificationSettings` ("the security floor still
+  applies"), and `frontend/src/api/capabilities.ts`, where the `role` blocker
+  says "provider-level roles" and the `deployment` blocker names "a different
+  Nullapart service" instead of a deployment the operator cannot compare against.
+- **Guard test** `frontend/src/test/tenant-console-boundary.test.tsx`: renders
+  13 tenant surfaces against a `tier: "customer"` session and fails if the
+  rendered text contains a platform term (platform, deployment, installation,
+  system admin(istrator), model registry, deep ai, impersonat*, cross-customer,
+  outbox, dead letters, scanner node, fleet, emergency stop) or if the request
+  log contains a platform read (`/operations/runtime`, `/scanner-operations`,
+  `/deep-ai`, `/connectors`, `/models`, `/features`,
+  `/audit/checkpoint-status`). Responses are empty-but-valid so headers, control
+  rails, guides and locked copy all paint, and any unstubbed read answers 501 so
+  error copy is policed. The scan settles on the shell's resolved session chip
+  before asserting, which is what makes it test the tier-aware render. It caught
+  three real copy leaks and the checkpoint race on its first run.
+- **Gates**: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets
+  -- -D warnings` and `cargo test --workspace` green (613 mail-core lib tests);
+  `pnpm --dir frontend check-all` green (prettier, brand assets, eslint, tsc,
+  264 tests across 33 files).

@@ -74,7 +74,9 @@ Support cannot view message body, raw MIME or attachment content.
 
 Tenant-scoped. Customer RBAC roles may include owner, security admin, mail admin, DMARC admin and read-only admin.
 
-The builtin `customer_admin` role operates one tenant end to end: its own administrators, quarantine and release, policy revisions for the families published at customer level, its own domain onboarding and security posture, its own outbound sender approvals, and its own notification settings. Platform-only capabilities stay out of it: scanner fleet health, customer lifecycle and identity minting, model registration, connector remediation, cross-customer audit and customer entry.
+The builtin `customer_admin` role operates one tenant end to end: its own administrators, quarantine and release, policy revisions for the families published at customer level, its own domain onboarding and security posture, its own outbound sender approvals, and its own notification settings. Platform-only capabilities stay out of it, read surfaces included: scanner fleet health, the Deep AI release and artifact-grant console, the model registry, connector remediation, operations runtime health, customer lifecycle and identity minting, cross-customer audit and customer entry. A tenant console that shows platform state the tenant cannot act on becomes a support queue, so a view-only grant is as much a placement decision as a manage grant and is listed here when it is withdrawn.
+
+`customer_admin_capability_set_is_the_tenant_boundary` in `crates/mail-core/src/admin_rbac.rs` asserts that boundary against the compiled-in catalog, and `frontend/src/test/tenant-console-boundary.test.tsx` renders every customer-reachable console surface and fails if it emits platform vocabulary or issues one of those platform reads.
 
 A tenant grant is bounded by the session's customer scope, never by the permission name. `in_scope()` refuses another tenant's `:customerId` with a 404, outbound writes bind `context.customer_id`, and an approved sender's domain must be a verified domain of the approving tenant.
 

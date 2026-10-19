@@ -121,3 +121,29 @@ keeping ordinary mail delivery independent of Deep AI availability.
   production workload identity/secrets path.
 - Add production SLO/alerts in Phase 9 for Deep-AI queue health, latency,
   validation failures, tool denials and model-unavailable rates.
+
+## Deep AI stays a provider surface (2026-10-19)
+
+Browsing the customer console as `ob2-customer-admin` showed a Deep AI entry
+pointing at regional releases, artifact grants and rollbacks: a tenant operator
+can neither read a decision behind those releases nor change one, and Phase 7
+keeps ordinary mail delivery independent of Deep AI availability. Showing it in a
+customer console turned a provider capability into a support queue.
+
+- `customer_admin` no longer holds `deep-ai:view`; it already lacked
+  `deep-ai:manage`. Both are in the forbidden set of
+  `customer_admin_capability_set_is_the_tenant_boundary`, together with
+  `models:view|manage`, so neither read surface returns without a deliberate
+  architecture change.
+- The routes are unchanged and remain the boundary: `/api/v1/deep-ai` still
+  authorizes on `deep-ai:view` server-side. Removing a permission from a builtin
+  role is a grant change, not an authorization change.
+- Because login reconciles `admin_role_permissions` in both directions, the
+  revocation takes effect on an already-seeded deployment on the next sign-in
+  instead of surviving from the original additive seed.
+- `frontend/src/test/tenant-console-boundary.test.tsx` fails if any customer-tier
+  render issues a `/deep-ai` read, so the placement holds against future UI work
+  rather than living only in this note.
+- Console copy that referenced Deep AI by name in a tenant-visible string was
+  reworded to customer terms; the guard test's platform-term list is what keeps
+  it out.

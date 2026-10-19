@@ -241,12 +241,10 @@ pub const BUILTIN_ROLES: [BuiltinRole; 3] = [
             crate::admin_customers::DOMAINS_MANAGE_PERMISSION,
             crate::domain_security::DOMAIN_SECURITY_VIEW_PERMISSION,
             crate::domain_security::DOMAIN_SECURITY_MANAGE_PERMISSION,
-            crate::deep_ai::DEEP_AI_VIEW_PERMISSION,
             crate::outbound_intelligence_api::OUTBOUND_INTELLIGENCE_VIEW_PERMISSION,
             crate::outbound_intelligence_api::OUTBOUND_INTELLIGENCE_MANAGE_PERMISSION,
             crate::notification_api::NOTIFICATIONS_VIEW_PERMISSION,
             crate::notification_api::NOTIFICATIONS_MANAGE_PERMISSION,
-            crate::connectors_remediation_api::CONNECTORS_VIEW_PERMISSION,
             crate::policy_admin::POLICIES_VIEW_PERMISSION,
             crate::policy_admin::POLICIES_MANAGE_PERMISSION,
             TRACE_VIEW_PERMISSION,
@@ -9040,8 +9038,10 @@ mod tests {
     /// The tenant boundary is a capability list, not a comment. A Customer
     /// Admin runs their own tenant end to end: domain onboarding, their own
     /// outbound sender approvals, their own domain posture and their own
-    /// policy revisions. Platform scanner fleet health, another tenant's
-    /// records, model registration and connector remediation stay out.
+    /// policy revisions stay in. Platform scanner fleet health, another
+    /// tenant's records, the Deep AI model registry and connector remediation
+    /// stay out, read surfaces included: a tenant console that shows platform
+    /// state it cannot act on is a support queue, not a customer product.
     #[test]
     fn customer_admin_capability_set_is_the_tenant_boundary() {
         let role = BUILTIN_ROLES
@@ -9067,9 +9067,13 @@ mod tests {
         for forbidden in [
             SCANNER_OPERATIONS_VIEW_PERMISSION,
             crate::admin_customers::CUSTOMERS_MANAGE_PERMISSION,
+            crate::deep_ai::DEEP_AI_VIEW_PERMISSION,
             crate::deep_ai::DEEP_AI_MANAGE_PERMISSION,
+            crate::connectors_remediation_api::CONNECTORS_VIEW_PERMISSION,
             crate::connectors_remediation_api::CONNECTORS_MANAGE_PERMISSION,
+            crate::model_registry::MODELS_VIEW_PERMISSION,
             crate::model_registry::MODELS_MANAGE_PERMISSION,
+            OPERATIONS_VIEW_PERMISSION,
             OPERATIONS_MANAGE_PERMISSION,
             IMPERSONATE_PERMISSION,
             AUDIT_CROSS_CUSTOMER_PERMISSION,

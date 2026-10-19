@@ -557,6 +557,37 @@ fn tier_name(tier: u8) -> Option<&'static str> {
     }
 }
 
+/// The reason recorded when a policy family gate refuses a caller.
+///
+/// The public body stays the generic `Permission is required`; this text is
+/// what the actor reads back in their own audit log. A customer session does
+/// not administer the provider's level ladder, so its reason names who changes
+/// the family instead of a level above the caller.
+fn family_tier_reason(caller: u8, required: u8) -> String {
+    if caller == 0 {
+        return "This policy is changed by your provider.".to_string();
+    }
+    format!(
+        "This policy needs {}-level access to change",
+        tier_name(required).unwrap_or("higher")
+    )
+}
+
+/// The reason recorded when an override scope gate refuses a caller. Same
+/// customer-level rename as [`family_tier_reason`].
+fn override_scope_reason(caller: Option<u8>, scope: OverrideScope) -> String {
+    if caller == Some(0) {
+        // Not `scope_label`: "Platform-wide" is the platform's own name for that
+        // scope, and this text is what the customer reads back in their audit log.
+        return "These overrides are changed by your provider.".to_string();
+    }
+    format!(
+        "{} overrides need {}-level access",
+        scope_label(scope),
+        tier_name(scope_tier(scope)).unwrap_or("higher")
+    )
+}
+
 /// The highest policy tier this session's roles carry. Builtin roles resolve
 /// through the static catalog (unchanged); custom roles resolve through their
 /// stored `role_level`, so a custom system-level role carrying
@@ -753,10 +784,7 @@ async fn require_family_tier(
             context,
             headers,
             route,
-            &Denial::forbidden(format!(
-                "This policy needs {}-level access to change",
-                tier_name(required).unwrap_or("higher")
-            )),
+            &Denial::forbidden(family_tier_reason(caller, required)),
         )
         .await);
     }
@@ -1983,11 +2011,7 @@ async fn write_override(
             &context,
             &headers,
             &route,
-            &Denial::forbidden(format!(
-                "{} overrides need {}-level access",
-                scope_label(body.scope),
-                tier_name(scope_tier(body.scope)).unwrap_or("higher")
-            )),
+            &Denial::forbidden(override_scope_reason(caller, body.scope)),
         )
         .await;
     }
@@ -3071,6 +3095,39 @@ mod tests {
         assert_eq!(tier_name(1), Some("support"));
         assert_eq!(tier_name(2), Some("system"));
         assert_eq!(tier_name(3), None);
+    }
+
+    /// A refused reason is stored in the audit row and read back by the actor,
+    /// so a customer's reason must not teach them the provider's level ladder.
+    /// The public body is unchanged; only this text moves.
+    #[test]
+    fn tier_refusal_reasons_are_written_in_the_callers_own_words() {
+        assert_eq!(
+            family_tier_reason(0, 2),
+            "This policy is changed by your provider."
+        );
+        assert_eq!(
+            family_tier_reason(1, 2),
+            "This policy needs system-level access to change"
+        );
+        assert_eq!(
+            override_scope_reason(Some(0), OverrideScope::Deployment),
+            "These overrides are changed by your provider."
+        );
+        assert_eq!(
+            override_scope_reason(Some(0), OverrideScope::System),
+            "These overrides are changed by your provider."
+        );
+        assert_eq!(
+            override_scope_reason(Some(1), OverrideScope::System),
+            "Platform-wide overrides need system-level access"
+        );
+        // A session that resolves to no tier is not a customer, so it keeps the
+        // ladder wording rather than being told about a provider it is not below.
+        assert_eq!(
+            override_scope_reason(None, OverrideScope::Deployment),
+            "Deployment-wide overrides need support-level access"
+        );
     }
 
     #[tokio::test]

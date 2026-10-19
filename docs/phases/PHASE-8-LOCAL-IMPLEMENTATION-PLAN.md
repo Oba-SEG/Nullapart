@@ -111,3 +111,30 @@ post-delivery remediation request ledger. It does not execute live Microsoft
   required states.
 - Extend Phase 9 observability for connector outage, stale directory sync,
   provider throttling, expired credentials and remediation failure SLOs.
+
+## Connector status is not a tenant console (2026-10-19)
+
+`customer_admin` held `connectors:view`, so the customer console listed a
+Connectors and remediation surface with per-connector health, provider
+credentials and remediation intents. Phase 8 deliberately ships no provider
+workers: nothing executes a Microsoft 365 or Google Workspace action, so the read
+describes platform state a tenant can neither act on nor interpret. The tenant
+placement is therefore withdrawn until the product actually hands a customer
+their own connectors.
+
+- `connectors:view` is removed from `BUILTIN_ROLES`; `connectors:manage` was
+  already absent. `customer_admin_capability_set_is_the_tenant_boundary` forbids
+  both now, so re-adding either read surface fails the test.
+- No route, scope or write gate changed. `/api/v1/connectors-remediation` still
+  authorizes on `connectors:view` server-side, step-up and idempotency still
+  apply, and tenant data remains RLS-scoped. This is a grant decision, not an
+  authorization change.
+- Login-time reconciliation means the revocation lands on an already-seeded
+  deployment at the next sign-in; the additive-only seed would otherwise have
+  kept `connectors:view` working on `.4` regardless of the catalog.
+- `frontend/src/test/tenant-console-boundary.test.tsx` fails if a customer-tier
+  render requests `/connectors`, so the nav cannot come back through UI work
+  alone.
+- Restoring tenant access is a documented decision, not a permission addition:
+  it needs the provider worker that makes a connector row mean something the
+  customer controls, plus a copy pass so the surface speaks in customer terms.
