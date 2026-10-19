@@ -340,13 +340,19 @@ const tenantTrace = {
 /**
  * Identifiers a tenant console is entitled to print, because they name the
  * customer's own mail rather than a row in the platform's database: a
- * transaction id is what the trace search box takes back, and a message id is
- * what opens a quarantine case. Both are what an operator quotes in a support
- * ticket. They are the only opaque-shaped values the scan lets through.
+ * transaction id is what the trace search box takes back, a message id is what
+ * opens a quarantine case, and an audit event id is what an operator quotes when
+ * they dispute a recorded action. They are the only opaque-shaped values the scan
+ * lets through, and each one is a single constant shared with the fixtures that
+ * serve it, so a payload cannot quietly disagree with the allowlist and stop
+ * being tested.
  */
+const tenantEventId = "6b1f9d2e-4c3a-4f57-9a11-2b3c4d5e6f70";
+
 const CUSTOMER_MAIL_HANDLES = [
   tenantTrace.transaction_id,
   ...tenantTrace.instances.map((instance) => instance.tenant_message_id),
+  tenantEventId,
 ];
 
 function withoutCustomerHandles(text: string): string {
@@ -422,9 +428,9 @@ const PAYLOADS: Array<[string, unknown]> = [
   ["/admin/roles", roleDirectory],
   ["/admin/permissions", []],
   [
-    "/audit/events/event-tenant",
+    `/audit/events/${tenantEventId}`,
     {
-      id: "event-tenant",
+      id: tenantEventId,
       created_at: "2026-01-06T09:57:00Z",
       actor_login: "tenant-admin@example.test",
       actor_roles: ["customer_admin"],
@@ -456,7 +462,7 @@ const PAYLOADS: Array<[string, unknown]> = [
     {
       events: [
         {
-          id: "event-provider",
+          id: "4a71b2c8-9d15-42e6-b7f0-1c3d5e7f9a11",
           created_at: "2026-01-06T09:58:00Z",
           actor_login: "ob1",
           actor_roles: ["system_admin"],
@@ -472,7 +478,9 @@ const PAYLOADS: Array<[string, unknown]> = [
           trace_id: null,
         },
         {
-          id: "event-tenant",
+          // The row the detail test opens, so its key is both the handle the
+          // dialog prints and the needle the stub answers that read with.
+          id: tenantEventId,
           created_at: "2026-01-06T09:57:00Z",
           actor_login: "tenant-admin@example.test",
           actor_roles: ["customer_admin"],
@@ -490,7 +498,7 @@ const PAYLOADS: Array<[string, unknown]> = [
           trace_id: null,
         },
         {
-          id: "event-sender-approval",
+          id: "9c1e7b40-5a2d-4f08-b6c3-8d47e2f1a906",
           created_at: "2026-01-06T09:56:00Z",
           actor_login: "tenant-admin@example.test",
           actor_roles: ["customer_admin"],
@@ -506,7 +514,7 @@ const PAYLOADS: Array<[string, unknown]> = [
           trace_id: null,
         },
         {
-          id: "event-checkpoint",
+          id: "d38b5c02-71e4-4a9f-8b0d-6f2c51a7e944",
           created_at: "2026-01-06T09:55:00Z",
           actor_login: "tenant-admin@example.test",
           actor_roles: ["customer_admin"],
@@ -524,7 +532,7 @@ const PAYLOADS: Array<[string, unknown]> = [
           trace_id: null,
         },
         {
-          id: "event-audit-read",
+          id: "70f2a9c6-4b18-4d63-95e0-2a1c8d6b3f57",
           created_at: "2026-01-06T09:54:00Z",
           actor_login: "tenant-admin@example.test",
           actor_roles: ["customer_admin"],
