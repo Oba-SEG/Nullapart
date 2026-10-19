@@ -819,7 +819,9 @@ async fn session_detail_withholds_platform_machinery_from_the_customer_read() {
     assert!(data["deployment_id"].is_null(), "{data}");
     assert!(data["content_hash"].is_null(), "{data}");
     assert!(data["trace_id"].is_null(), "{data}");
-    assert_eq!(data["postfix_queue_ids"], json!([]));
+    // The queue identifiers are absent as a key, not merely empty: the field
+    // name itself names the platform's mail software.
+    assert!(data["postfix_queue_ids"].is_null(), "{data}");
     assert!(data["delivery_attempts"][0]["postfix_queue_id"].is_null());
     assert_eq!(
         data["delivery_attempts"][0]["smtp_code"],

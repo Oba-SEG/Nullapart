@@ -65,8 +65,8 @@ export interface TraceDeliveryAttempt {
   scheduled_at: string | null;
   completed_at: string | null;
   next_retry_at: string | null;
-  /** MTA queue identifier; withheld from the customer projection. */
-  postfix_queue_id: string | null;
+  /** MTA queue identifier. The customer answer omits the key. */
+  postfix_queue_id?: string | null;
 }
 
 export interface TraceFinding {
@@ -98,8 +98,8 @@ export interface TraceTransaction {
   received_at: string;
   recipients: TraceRecipient[];
   auth: TraceAuthResults;
-  /** MTA queue identifiers — empty in the customer projection. */
-  postfix_queue_ids: string[];
+  /** MTA queue identifiers. The customer answer omits the key. */
+  postfix_queue_ids?: string[];
   instances: TraceInstance[];
   delivery_attempts: TraceDeliveryAttempt[];
   findings: TraceFinding[];

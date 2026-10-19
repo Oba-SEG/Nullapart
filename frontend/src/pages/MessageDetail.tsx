@@ -174,7 +174,7 @@ export function MessageDetail() {
     : [];
   const queueIds = data?.postfix_queue_ids ?? [];
   const hasAttemptQueueIds = data
-    ? data.delivery_attempts.some((attempt) => attempt.postfix_queue_id !== null)
+    ? data.delivery_attempts.some((attempt) => typeof attempt.postfix_queue_id === "string")
     : false;
 
   return (

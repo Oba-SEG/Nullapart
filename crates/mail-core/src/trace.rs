@@ -334,8 +334,10 @@ struct TraceDeliveryAttemptResponse {
     scheduled_at: Option<DateTime<Utc>>,
     completed_at: Option<DateTime<Utc>>,
     next_retry_at: Option<DateTime<Utc>>,
-    /// The MTA's queue identifier for this attempt; absent for a customer
-    /// placement.
+    /// The MTA's queue identifier for this attempt. The key is omitted for a
+    /// customer placement: the field name itself names the platform's mail
+    /// software, so an empty value with a visible key would still say it.
+    #[serde(skip_serializing_if = "Option::is_none")]
     postfix_queue_id: Option<String>,
 }
 
@@ -439,8 +441,11 @@ struct TransactionDetail {
     received_at: DateTime<Utc>,
     recipients: Vec<TraceRecipientResponse>,
     auth: TraceAuthResults,
-    /// MTA queue identifiers; empty for a customer placement. The attempt status,
-    /// SMTP code and timing stay, which is what a customer needs about a delivery.
+    /// MTA queue identifiers. The key is omitted for a customer placement: the
+    /// attempt status, SMTP code and timing stay, which is what a customer needs
+    /// about a delivery, and an empty list under this name would still name the
+    /// platform's mail software.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     postfix_queue_ids: Vec<String>,
     instances: Vec<TraceInstanceResponse>,
     delivery_attempts: Vec<TraceDeliveryAttemptResponse>,
