@@ -326,7 +326,13 @@ export function Policies() {
                             {family.display_name}
                           </Link>
                         )}
-                        <code className="policies-key">{family.family_key}</code>
+                        {/* The family key is how the platform stores the family. A
+                            tenant governs their overrides by name; the policy detail
+                            page already withholds the key from them, so the list
+                            can't be the row that leaks it. */}
+                        {tenantTier ? null : (
+                          <code className="policies-key">{family.family_key}</code>
+                        )}
                       </div>
                     </td>
                     <td className="policies-description">{family.description}</td>

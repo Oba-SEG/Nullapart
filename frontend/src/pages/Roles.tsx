@@ -358,7 +358,10 @@ export function Roles() {
               <tr key={role.roleKey}>
                 <td>
                   <strong>{role.displayName}</strong>
-                  <span className="roles-key">{role.roleKey}</span>
+                  {/* The role key is the row in the platform's role table. A
+                      tenant grants roles by name and never quotes a key back,
+                      so the customer projection shows the name alone. */}
+                  {tenant ? null : <span className="roles-key">{role.roleKey}</span>}
                 </td>
                 <td>
                   <Hint

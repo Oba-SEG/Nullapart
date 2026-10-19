@@ -126,6 +126,12 @@ const PLATFORM_LANGUAGE: Array<{ term: string; pattern: RegExp }> = [
   },
   // The installation's own bookkeeping for where it filed a customer.
   { term: "surrogate row key", pattern: /\binternal key\b/i },
+  // Machine identifiers. A snake_case token is how a platform table keys a row;
+  // a tenant reads a human label for the same thing, so any hit here is a value
+  // that reached the console without a naming layer over it. No word anchors:
+  // `textContent` welds adjacent elements together, so a key rendered straight
+  // after a heading has no boundary to match.
+  { term: "machine key", pattern: /[a-z][a-z0-9]*(?:_[a-z0-9]+)+/ },
 ];
 
 /** The tenant's own organisation record, with no domains or groups set yet.
