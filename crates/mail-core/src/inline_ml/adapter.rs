@@ -126,11 +126,12 @@ fn threshold_findings(
             severity: band,
             category: key.clone(),
             description: format!(
-                "Inline ML score {score:.4} for {key} is in the {} band (thresholds low {:.4}, medium {:.4}, high {:.4})",
+                "Inline ML score {:.2} for {key} is in the {} band (thresholds low {:.2}, medium {:.2}, high {:.2})",
+                score * 100.0,
                 band_label(band),
-                threshold.low,
-                threshold.medium,
-                threshold.high,
+                threshold.low * 100.0,
+                threshold.medium * 100.0,
+                threshold.high * 100.0,
             ),
             details: Some(serde_json::json!({
                 "model": {

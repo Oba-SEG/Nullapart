@@ -72,7 +72,10 @@ services:
       NULLAPART_INLINE_ML_MODEL_PATH: /var/lib/nullapart/inline-ml/onnx/model_int8.onnx
       NULLAPART_INLINE_ML_TOKENIZER_PATH: /var/lib/nullapart/inline-ml/model/tokenizer.json
       NULLAPART_INLINE_ML_MODEL_ID: multilabel-v1
-      NULLAPART_INLINE_ML_MODEL_VERSION: "1"
+      # Must name the active approved registry row for this deployment
+      # (inline_ml_models); bump via .env.local when a new artifact version
+      # is registered, approved and activated.
+      NULLAPART_INLINE_ML_MODEL_VERSION: ${NULLAPART_INLINE_ML_MODEL_VERSION:-1}
       # Server-authoritative identity mode. proxy_header is the local/CI
       # default; oidc is only usable once the NULLAPART_OIDC_* family is set.
       # The OIDC variables stay empty in proxy_header mode and are ignored
