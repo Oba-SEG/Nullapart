@@ -847,10 +847,14 @@ describe("tenant console boundary", () => {
       const text = withoutCustomerHandles(document.body.textContent ?? "");
       const leaks: string[] = [];
       for (const { term, pattern } of PLATFORM_LANGUAGE) {
-        const hit = text.match(pattern);
-        if (hit === null) continue;
-        const from = Math.max(0, (hit.index ?? 0) - 60);
-        leaks.push(`"${term}" in: …${text.slice(from, (hit.index ?? 0) + 60)}…`);
+        // Every match, not the first: a page with three machine keys left on it
+        // is three findings, and the count tells the next reader how deep the
+        // leak runs.
+        const global = new RegExp(pattern.source, `${pattern.flags.replace("g", "")}g`);
+        for (const hit of text.matchAll(global)) {
+          const from = Math.max(0, hit.index - 60);
+          leaks.push(`"${term}" in: …${text.slice(from, hit.index + 60)}…`);
+        }
       }
       expect(leaks, `${surface.entry} renders platform language`).toEqual([]);
 
