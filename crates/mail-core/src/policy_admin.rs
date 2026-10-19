@@ -124,7 +124,7 @@ pub const POLICY_FAMILY_MANAGEMENT_LEVELS: [(&str, &str); 24] = [
 
 const FAMILY_ACTIVE_SQL: &str = "SELECT f.family_key, f.display_name, f.description, \
      f.management_level, f.security_floor, r.revision_number, r.published_by, r.published_at, \
-     r.scope_level \
+     r.scope_level, f.customer_facing_label, f.customer_facing_description \
      FROM policy_families f \
      LEFT JOIN LATERAL ( \
          SELECT pr.revision_number, pr.published_by, pr.published_at, pr.scope_level \
@@ -178,7 +178,8 @@ pub(crate) const FEATURE_DEFINITIONS_SQL: &str =
      kill_switch, allowed_scopes FROM feature_definitions ORDER BY feature_id";
 /// Console-only catalog labels. Kept out of `FEATURE_DEFINITIONS_SQL` so the
 /// runtime feature evaluator never carries presentation data.
-const FEATURE_LABELS_SQL: &str = "SELECT feature_id, display_name FROM feature_definitions";
+const FEATURE_LABELS_SQL: &str =
+    "SELECT feature_id, display_name, customer_facing_label FROM feature_definitions";
 const FEATURE_DEFINITION_SQL: &str = "SELECT feature_id, description, default_value, mandatory, \
      kill_switch, allowed_scopes FROM feature_definitions WHERE feature_id = $1";
 pub(crate) const FEATURE_OVERRIDES_SQL: &str =
@@ -300,9 +301,12 @@ struct RevisionDetailResponse {
 #[derive(Serialize)]
 struct FamilySummaryResponse {
     family_key: String,
-    /// Catalog label for humans. The key stays alongside it because it is what
-    /// audit events and support evidence name.
+    /// Catalog label for humans, in the wording the reading seat gets. The key
+    /// stays alongside it because it is what audit events and support evidence
+    /// name.
     display_name: String,
+    /// Same placement rule as the label: a customer reads what the family does
+    /// for their mail, not the technique the platform named it after.
     description: String,
     management_level: String,
     security_floor: bool,
@@ -413,7 +417,15 @@ struct OverrideWriteResponse {
     created_at: DateTime<Utc>,
     expires_at: Option<DateTime<Utc>>,
     effective_value: String,
-    winning_scope: OverrideScope,
+    /// Withheld from a customer writer, which reads `governed_by` instead. The
+    /// ladder is the platform's own machinery and the list projection already
+    /// says so; the same rule has to hold on the write answer or the answer
+    /// itself teaches the tenant what a `winning_scope` is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    winning_scope: Option<OverrideScope>,
+    /// Additive, and published only where `winning_scope` is withheld.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    governed_by: Option<&'static str>,
 }
 
 #[derive(Deserialize)]
@@ -1150,6 +1162,8 @@ type FamilyActiveRow = (
     Option<String>,
     Option<DateTime<Utc>>,
     Option<String>,
+    Option<String>,
+    Option<String>,
 );
 type CountRow = (String, i64);
 type RevisionRow = (
@@ -1162,6 +1176,8 @@ type RevisionRow = (
     sqlx::types::Json<Value>,
 );
 type FeatureDefinitionRow = (String, String, String, bool, bool, Vec<String>);
+/// `(display_name, customer_facing_label)` read for one feature id.
+type FeatureLabelRow = (String, Option<String>);
 type FeatureOverrideRow = (
     Uuid,
     String,
@@ -1247,6 +1263,51 @@ fn active_revision(
         published_at: row.7?,
         scope_level: RevisionScope::parse(row.8.as_deref()?)?,
     })
+}
+
+/// Whose decision the value in force reflects, in the words a customer reads.
+/// Their own row governs it, otherwise the provider's does; the ladder that
+/// decides between them is the platform's machinery and stays off their answer.
+fn governing_party(winning_scope: OverrideScope) -> &'static str {
+    if winning_scope == OverrideScope::Tenant {
+        "you"
+    } else {
+        "provider"
+    }
+}
+
+/// The wording one seat reads for a catalog row. `customer_facing` is the text
+/// seeded for a tenant (migration 044) and is NULL for a row whose platform name
+/// already reads as an outcome, so the fallback is the shared name rather than a
+/// blank or a key. Chosen by the projection, not by the console: a name that
+/// reaches the network answer is readable in the browser's own inspector even
+/// when nothing prints it. Both catalogs need it because both were seeded with
+/// prose written for the platform's runbook.
+fn catalog_wording(platform: &str, customer_facing: Option<&str>, customer_reader: bool) -> String {
+    match (customer_reader, customer_facing) {
+        (true, Some(wording)) => wording.to_string(),
+        _ => platform.to_string(),
+    }
+}
+
+/// The family row one seat reads. The list and the detail view render the same
+/// fields, so both go through here and a placement decision is made once.
+fn project_family_summary(
+    row: &FamilyActiveRow,
+    revision_count: i64,
+    identities: &HashMap<String, ActorIdentity>,
+    reader_customer: Option<&str>,
+) -> FamilySummaryResponse {
+    let customer_reader = reader_customer.is_some();
+    FamilySummaryResponse {
+        family_key: row.0.clone(),
+        display_name: catalog_wording(&row.1, row.9.as_deref(), customer_reader),
+        description: catalog_wording(&row.2, row.10.as_deref(), customer_reader),
+        management_level: row.3.clone(),
+        security_floor: row.4,
+        revision_count,
+        active_revision: active_revision(row, identities, reader_customer),
+    }
 }
 
 pub(crate) async fn load_definitions(
@@ -1458,14 +1519,13 @@ async fn list_families(
     let reader_customer = reader_customer(caller, &context);
     let families = active_rows
         .iter()
-        .map(|row| FamilySummaryResponse {
-            family_key: row.0.clone(),
-            display_name: row.1.clone(),
-            description: row.2.clone(),
-            management_level: row.3.clone(),
-            security_floor: row.4,
-            revision_count: counts.get(&row.0).copied().unwrap_or(0),
-            active_revision: active_revision(row, &identities, reader_customer),
+        .map(|row| {
+            project_family_summary(
+                row,
+                counts.get(&row.0).copied().unwrap_or(0),
+                &identities,
+                reader_customer,
+            )
         })
         .collect();
     (
@@ -1590,17 +1650,8 @@ async fn get_family(
         });
     }
     let caller_tier = tier_name(caller);
-    let summary = active_revision(&active_row, &identities, reader_customer);
     let profile = rule_profile(&family_key);
-    let family = FamilySummaryResponse {
-        family_key: active_row.0,
-        display_name: active_row.1,
-        description: active_row.2,
-        management_level: active_row.3,
-        security_floor: active_row.4,
-        revision_count: count,
-        active_revision: summary,
-    };
+    let family = project_family_summary(&active_row, count, &identities, reader_customer);
     (
         StatusCode::OK,
         Json(ApiEnvelope {
@@ -1964,7 +2015,8 @@ async fn refresh_family(
 
 /// Builds the feature list one caller is entitled to read. The decision input
 /// is always every stored override, so the effective value is the truth; what
-/// changes with placement is the catalog and the fields. A customer reader may
+/// changes with placement is the catalog, its wording and the fields. A customer
+/// reader may
 /// write only their own Customer scope, so the platform's ladder, its security
 /// floors and kill switches, and the override rows written above them (which
 /// name platform actors and the identifiers of scopes the reader does not belong
@@ -1972,7 +2024,7 @@ async fn refresh_family(
 fn project_features(
     definitions: &[FeatureDefinition],
     overrides: &[LoadedOverride],
-    labels: &HashMap<String, String>,
+    labels: &HashMap<String, FeatureLabelRow>,
     actor_names: &HashMap<String, String>,
     deployment_id: &DeploymentId,
     customer_id: &CustomerId,
@@ -2006,10 +2058,14 @@ fn project_features(
             feature_id: definition.feature_id.clone(),
             // A missing label degrades to the key, never to a 503: the label is
             // presentation, and losing the whole console view over it would
-            // hide the state an operator needs to see.
+            // hide the state an operator needs to see. A customer gets the
+            // catalog's customer wording where it has one, so the platform's
+            // name for the technique is not on their answer at all.
             display_name: labels
                 .get(definition.feature_id.0.as_str())
-                .cloned()
+                .map(|(platform, customer_facing)| {
+                    catalog_wording(platform, customer_facing.as_deref(), customer_reader)
+                })
                 .unwrap_or_else(|| definition.feature_id.0.clone()),
             description: (!customer_reader).then(|| definition.description.clone()),
             default_value: encode_feature_value(&definition.default_value),
@@ -2022,13 +2078,7 @@ fn project_features(
             },
             effective_value: encode_feature_value(&evaluation.value),
             winning_scope: (!customer_reader).then_some(evaluation.winning_scope),
-            governed_by: customer_reader.then_some(
-                if evaluation.winning_scope == OverrideScope::Tenant {
-                    "you"
-                } else {
-                    "provider"
-                },
-            ),
+            governed_by: customer_reader.then(|| governing_party(evaluation.winning_scope)),
             overrides: applicable
                 .iter()
                 .copied()
@@ -2080,12 +2130,17 @@ async fn list_features(
         Ok(overrides) => overrides,
         Err(response) => return response,
     };
-    let labels: HashMap<String, String> =
-        match sqlx::query_as::<_, (String, String)>(FEATURE_LABELS_SQL)
+    let labels: HashMap<String, FeatureLabelRow> =
+        match sqlx::query_as::<_, (String, String, Option<String>)>(FEATURE_LABELS_SQL)
             .fetch_all(&mut *transaction)
             .await
         {
-            Ok(rows) => rows.into_iter().collect(),
+            Ok(rows) => rows
+                .into_iter()
+                .map(|(feature_id, platform, customer_facing)| {
+                    (feature_id, (platform, customer_facing))
+                })
+                .collect(),
             Err(_) => return unavailable(),
         };
     let actor_names = match load_actor_display_names(&mut transaction).await {
@@ -2222,12 +2277,19 @@ async fn write_override(
         return invalid_request();
     }
     if blocks_mandatory_disable(definition.mandatory, &value) {
+        // The same rename discipline as `override_scope_reason`: a customer is
+        // told what they cannot do and who decides it, not that a `mandatory`
+        // flag in the platform's catalog stopped them.
         return denied(
             &state,
             &context,
             &headers,
             &route,
-            &Denial::forbidden("mandatory security features cannot be disabled"),
+            &Denial::forbidden(if caller == Some(0) {
+                "A feature your provider requires cannot be turned off".to_string()
+            } else {
+                "mandatory security features cannot be disabled".to_string()
+            }),
         )
         .await;
     }
@@ -2337,7 +2399,8 @@ async fn write_override(
         created_at,
         expires_at: body.expires_at,
         effective_value: encode_feature_value(&evaluation.value),
-        winning_scope: evaluation.winning_scope,
+        winning_scope: (caller != Some(0)).then_some(evaluation.winning_scope),
+        governed_by: (caller == Some(0)).then(|| governing_party(evaluation.winning_scope)),
     };
     let Some(value) = envelope(&response) else {
         return unavailable();
@@ -3058,7 +3121,7 @@ mod tests {
     struct Switchboard {
         definitions: Vec<FeatureDefinition>,
         overrides: Vec<LoadedOverride>,
-        labels: HashMap<String, String>,
+        labels: HashMap<String, FeatureLabelRow>,
         actor_names: HashMap<String, String>,
     }
 
@@ -3101,14 +3164,20 @@ mod tests {
                 7,
             ),
         ];
+        // `tenant_authorization` stands for the catalog rows whose platform name
+        // already reads as an outcome: no customer wording, so the shared name
+        // is what both seats read.
         let labels = HashMap::from([
             (
                 "tenant_authorization".to_string(),
-                "Customer authorization boundary".to_string(),
+                ("Customer authorization boundary".to_string(), None),
             ),
             (
                 "deep_ai_analysis".to_string(),
-                "Deep AI message analysis".to_string(),
+                (
+                    "Deep AI message analysis".to_string(),
+                    Some("Message content review".to_string()),
+                ),
             ),
         ]);
         let actor_names = HashMap::from([
@@ -3146,12 +3215,17 @@ mod tests {
         assert_eq!(value.as_array().expect("list").len(), 1);
         assert_eq!(value[0]["feature_id"], "deep_ai_analysis");
         assert_eq!(value[0]["allowed_scopes"], serde_json::json!(["tenant"]));
+        // The name a tenant reads is the catalog's customer wording, not the
+        // platform's name for the technique, which is why the platform name is
+        // on the withheld list below rather than merely unprinted.
+        assert_eq!(value[0]["display_name"], "Message content review");
         // The floor flag, the kill switch, the scope ladder and the platform's
         // own prose are absent rather than blanked, so nothing downstream has to
         // remember to hide them.
         for withheld in [
             "tenant_authorization",
             "Deep AI content analysis scanner",
+            "Deep AI message analysis",
             "mandatory",
             "kill_switch",
             "winning_scope",
@@ -3189,6 +3263,7 @@ mod tests {
         for published in [
             "tenant_authorization",
             "Deep AI content analysis scanner",
+            "Deep AI message analysis",
             "\"mandatory\":true",
             "\"kill_switch\":true",
             "\"winning_scope\":\"system\"",
@@ -3228,6 +3303,43 @@ mod tests {
         let value = serde_json::to_value(&projected).expect("serializable");
         assert_eq!(value[0]["governed_by"], "you");
         assert_eq!(value[0]["effective_value"], "enabled");
+    }
+
+    /// Most catalog rows are already named for what they do, so migration 044
+    /// seeds no customer wording for them. A row without it must still reach a
+    /// tenant as a name, never as a blank or the raw key.
+    #[test]
+    fn a_customer_reads_the_shared_label_when_the_catalog_has_no_customer_wording() {
+        let board = switchboard_fixture();
+        let mut definitions = board.definitions.clone();
+        definitions.push(switchboard_definition(
+            "remote_resource_preview",
+            "Preview rendering of remote message resources",
+            false,
+            false,
+            &[OverrideScope::Tenant],
+        ));
+        let mut labels = board.labels.clone();
+        labels.insert(
+            "remote_resource_preview".to_string(),
+            ("Remote resource preview".to_string(), None),
+        );
+        let projected = project_features(
+            &definitions,
+            &board.overrides,
+            &labels,
+            &board.actor_names,
+            &DeploymentId::new("LOCAL-TEST"),
+            &CustomerId::new("local-customer"),
+            true,
+        )
+        .expect("customer projection");
+        let value = serde_json::to_value(&projected).expect("serializable");
+        assert_eq!(value[1]["feature_id"], "remote_resource_preview");
+        assert_eq!(value[1]["display_name"], "Remote resource preview");
+        // The row that does have customer wording keeps using it, so the
+        // fallback above is not the whole answer being quietly renamed away.
+        assert_eq!(value[0]["display_name"], "Message content review");
     }
 
     #[tokio::test]
@@ -3542,6 +3654,89 @@ mod tests {
         );
         assert_eq!(reader_customer(Some(2), &context), None);
         assert_eq!(reader_customer(None, &context), None);
+    }
+
+    /// The two wordings one family row carries, chosen by the reading seat. The
+    /// choice is made in the projection rather than in the console because a
+    /// browser keeps whatever the API put on its answer, and the platform's name
+    /// for a technique has no business being readable there.
+    #[test]
+    fn a_customer_reads_the_family_wording_seeded_for_them() {
+        let identities = HashMap::from([(
+            "platform-id".to_string(),
+            ActorIdentity {
+                display_name: "ob1".to_string(),
+                customer_id: None,
+            },
+        )]);
+        let seeded: FamilyActiveRow = (
+            "ml_threat_classification".to_string(),
+            "ML threat classification".to_string(),
+            "Machine-learning threat classification evidence".to_string(),
+            "support".to_string(),
+            false,
+            Some(4),
+            Some("platform-id".to_string()),
+            Some(Utc::now()),
+            Some("tenant".to_string()),
+            Some("Automatic threat review".to_string()),
+            Some("Automatic threat review evidence".to_string()),
+        );
+
+        let for_customer = project_family_summary(
+            &seeded,
+            3,
+            &identities,
+            reader_customer(Some(0), &context()),
+        );
+        assert_eq!(for_customer.display_name, "Automatic threat review");
+        assert_eq!(for_customer.description, "Automatic threat review evidence");
+        assert_eq!(for_customer.revision_count, 3);
+        let customer_text = serde_json::to_value(&for_customer)
+            .expect("serializable")
+            .to_string();
+        for machinery in ["ML threat classification", "Machine-learning"] {
+            assert!(
+                !customer_text.contains(machinery),
+                "a customer answer must not carry {machinery}: {customer_text}"
+            );
+        }
+
+        // Anti-vacuous: the platform seat of the same row still quotes the name
+        // its own runbooks and audit records use.
+        let for_platform = project_family_summary(&seeded, 3, &identities, None);
+        assert_eq!(for_platform.display_name, "ML threat classification");
+        assert_eq!(
+            for_platform.description,
+            "Machine-learning threat classification evidence"
+        );
+
+        // A row seeded without customer wording falls back to the shared name,
+        // which is the honest answer for a family already named for its outcome.
+        let unseeded: FamilyActiveRow = (
+            "spam_filtering".to_string(),
+            "Spam filtering".to_string(),
+            "Spam classification thresholds and disposition".to_string(),
+            "customer".to_string(),
+            true,
+            Some(1),
+            Some("platform-id".to_string()),
+            Some(Utc::now()),
+            Some("tenant".to_string()),
+            None,
+            None,
+        );
+        let shared = project_family_summary(
+            &unseeded,
+            0,
+            &identities,
+            reader_customer(Some(0), &context()),
+        );
+        assert_eq!(shared.display_name, "Spam filtering");
+        assert_eq!(
+            shared.description,
+            "Spam classification thresholds and disposition"
+        );
     }
 
     /// A refused reason is stored in the audit row and read back by the actor,
