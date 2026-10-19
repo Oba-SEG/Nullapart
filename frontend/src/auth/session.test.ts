@@ -10,8 +10,11 @@ import {
   exchangeLogin,
   exchangeLocalLogin,
   isStepUpRequired,
+  isSystemTier,
+  isTenantTier,
   loadSession,
   logout,
+  sessionTier,
   startImpersonation,
   type Session,
 } from "./session";
@@ -277,5 +280,29 @@ describe("browser session boundary", () => {
     expect(canImpersonate({ ...base, permissions: ["admin:impersonate"] })).toBe(true);
     expect(canImpersonate({ ...base, permissions: ["audit:view"] })).toBe(false);
     expect(canImpersonate({ ...base })).toBe(false);
+  });
+
+  it("reads the tier the server published and nothing else", () => {
+    const base: Session = {
+      authenticated: true,
+      userId: "user-1",
+      email: "admin@example.test",
+      roles: ["system_admin"],
+      customerId: null,
+      expiresAt: "2099-01-01T00:00:00Z",
+    };
+
+    expect(sessionTier({ ...base, tier: "system" })).toBe("system");
+    expect(sessionTier({ ...base, tier: "support" })).toBe("support");
+    expect(sessionTier({ ...base, tier: "customer", customerId: "customer-a" })).toBe("customer");
+    expect(isSystemTier({ ...base, tier: "system" })).toBe(true);
+    expect(isTenantTier({ ...base, tier: "system" })).toBe(false);
+    expect(isTenantTier({ ...base, tier: "customer" })).toBe(true);
+    // An older server, a truncated payload or an invented value publishes no
+    // tier: the shell must not infer one from the role names it can see.
+    expect(sessionTier(base)).toBeNull();
+    expect(sessionTier({ ...base, tier: "platform" as Session["tier"] })).toBeNull();
+    expect(isSystemTier({ ...base, roles: ["system_admin"] })).toBe(false);
+    expect(sessionTier(null)).toBeNull();
   });
 });

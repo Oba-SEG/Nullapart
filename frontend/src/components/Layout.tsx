@@ -20,7 +20,7 @@ import {
   SlidersHorizontal,
   Users,
 } from "lucide-react";
-import { hasPermission, isSystemAdmin, loadSession, logout } from "../auth/session";
+import { hasPermission, loadSession, logout, sessionTier } from "../auth/session";
 import { getSessionPresentation } from "../lib/session-presentation";
 import { ImpersonationBanner } from "./ImpersonationBanner";
 import { ThemeToggle } from "./ThemeToggle";
@@ -75,7 +75,20 @@ export function Layout() {
   const current = session.data ?? null;
   const sessionPresentation = getSessionPresentation(current, session.isError);
   const can = (permission: string) => hasPermission(current, permission);
-  const systemAdmin = isSystemAdmin(current);
+  // The tier is the server's answer to "what kind of session is this", resolved
+  // from the stored level of the roles it issued. Labels and placement read
+  // from it; every link stays permission-gated, because a tier is not an
+  // authorization.
+  const tier = sessionTier(current);
+  const systemTier = tier === "system";
+  const tenantTier = tier === "customer";
+  const sections = {
+    overview: systemTier ? "System overview" : tenantTier ? "Overview" : "Security desk",
+    mail: tenantTier ? "Your mail" : "Customer mail",
+    tenant: "Your customer",
+    governance: "Governance",
+    administration: "Administration",
+  };
 
   return (
     <div className="layout">
@@ -92,7 +105,7 @@ export function Layout() {
         </Link>
 
         <nav ref={navRef} className="sidebar-nav" aria-label="Primary">
-          <p className="nav-section-label">{systemAdmin ? "System overview" : "Security desk"}</p>
+          <p className="nav-section-label">{sections.overview}</p>
           <Link
             to="/"
             className="nav-link"
@@ -100,7 +113,7 @@ export function Layout() {
             activeProps={{ className: "nav-link active" }}
           >
             <LayoutDashboard size={17} aria-hidden="true" />
-            <span>{systemAdmin ? "Overview" : "Security desk"}</span>
+            <span>{tenantTier ? "Overview" : "Security desk"}</span>
           </Link>
           {can("operations:view") ? (
             <Link
@@ -143,7 +156,7 @@ export function Layout() {
             </Link>
           ) : null}
 
-          <p className="nav-section-label">Customer mail</p>
+          <p className="nav-section-label">{sections.mail}</p>
           {can("trace:view") ? (
             <Link
               to="/messages"
@@ -164,7 +177,7 @@ export function Layout() {
               <span>Quarantine</span>
             </Link>
           ) : null}
-          {can("admin:customers:view") ? (
+          {tenantTier || !can("admin:customers:view") ? null : (
             <Link
               to="/customers"
               className="nav-link"
@@ -173,9 +186,45 @@ export function Layout() {
               <Building2 size={17} aria-hidden="true" />
               <span>Customers</span>
             </Link>
+          )}
+
+          {tenantTier ? (
+            <>
+              <p className="nav-section-label">{sections.tenant}</p>
+              {can("admin:customers:view") ? (
+                <Link
+                  to="/customers"
+                  className="nav-link"
+                  activeProps={{ className: "nav-link active" }}
+                >
+                  <Building2 size={17} aria-hidden="true" />
+                  <span>Your organisation</span>
+                </Link>
+              ) : null}
+              {can("admin:users:manage") ? (
+                <Link
+                  to="/admin-users"
+                  className="nav-link"
+                  activeProps={{ className: "nav-link active" }}
+                >
+                  <Users size={17} aria-hidden="true" />
+                  <span>Your administrators</span>
+                </Link>
+              ) : null}
+              {can("admin:users:manage") ? (
+                <Link
+                  to="/roles"
+                  className="nav-link"
+                  activeProps={{ className: "nav-link active" }}
+                >
+                  <KeyRound size={17} aria-hidden="true" />
+                  <span>Your roles</span>
+                </Link>
+              ) : null}
+            </>
           ) : null}
 
-          <p className="nav-section-label">Governance</p>
+          <p className="nav-section-label">{sections.governance}</p>
           {can("deep-ai:view") ? (
             <Link to="/deep-ai" className="nav-link" activeProps={{ className: "nav-link active" }}>
               <Bot size={17} aria-hidden="true" />
@@ -219,8 +268,8 @@ export function Layout() {
             </Link>
           ) : null}
 
-          {systemAdmin ? <p className="nav-section-label">Administration</p> : null}
-          {can("admin:users:manage") || can("admin:impersonate") ? (
+          {systemTier ? <p className="nav-section-label">{sections.administration}</p> : null}
+          {systemTier && (can("admin:users:manage") || can("admin:impersonate")) ? (
             <Link
               to="/admin-users"
               className="nav-link"
@@ -230,7 +279,7 @@ export function Layout() {
               <span>Admin users</span>
             </Link>
           ) : null}
-          {can("admin:users:manage") ? (
+          {systemTier && can("admin:users:manage") ? (
             <Link to="/roles" className="nav-link" activeProps={{ className: "nav-link active" }}>
               <KeyRound size={17} aria-hidden="true" />
               <span>Roles</span>
@@ -238,7 +287,13 @@ export function Layout() {
           ) : null}
           <Link to="/settings" className="nav-link" activeProps={{ className: "nav-link active" }}>
             <Settings size={17} aria-hidden="true" />
-            <span>{systemAdmin ? "Platform settings" : "Workspace settings"}</span>
+            <span>
+              {systemTier
+                ? "Platform settings"
+                : tenantTier
+                  ? "Your settings"
+                  : "Workspace settings"}
+            </span>
           </Link>
         </nav>
 
@@ -278,7 +333,13 @@ export function Layout() {
         <header className="command-context" aria-label="Current operator context">
           <div className="command-context-product">
             <img src="/brand/logos/logo-mark@2x.png" alt="" />
-            <span>{systemAdmin ? "Nullapart System console" : "Nullapart Security Desk"}</span>
+            <span>
+              {systemTier
+                ? "Nullapart System console"
+                : tenantTier
+                  ? "Nullapart Customer console"
+                  : "Nullapart Security Desk"}
+            </span>
             <span className="command-context-state">{sessionPresentation.stateLabel}</span>
           </div>
           <div className="command-context-scope">

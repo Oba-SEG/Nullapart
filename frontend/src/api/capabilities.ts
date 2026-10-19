@@ -9,7 +9,7 @@
  * publish as `caller_tier` and features publish as `allowed_override_scopes`.
  */
 
-/** Which gate refused the write. Mirrors `Blocker` in mail-core. */
+/** Which gate refused the write. Mirrors `Blocker` in `crates/mail-core/src/admin_capabilities.rs`. */
 export type CapabilityBlocker = "permission" | "lifecycle" | "deployment" | "role";
 
 export interface WriteCapability {
@@ -28,14 +28,31 @@ export interface CustomerCapabilities {
  * server says the action is allowed (or has not published a capability yet, in
  * which case the caller keeps its existing local check rather than inventing a
  * refusal the API may not apply).
+ *
+ * `permission` names the key the owning route enforces, so a locked control says
+ * what to ask for instead of leaving the operator to guess. `roleRefusal`
+ * replaces the whole `role` sentence where the reserved identity is not the
+ * customer-identity pair — a gate named wrongly is a refusal nobody can act on.
  */
-export function capabilityLock(capability: WriteCapability | undefined, subject: string): string {
+export function capabilityLock(
+  capability: WriteCapability | undefined,
+  subject: string,
+  permission?: string,
+  roleRefusal?: string,
+): string {
   if (capability === undefined || capability.allowed) return "";
+  const needed =
+    permission === undefined
+      ? "the customer management permission"
+      : `the ${permission} permission`;
   switch (capability.blocker) {
     case "role":
-      return `${subject} is limited to the Support and System roles, and yours include neither. A role can hold the customer permissions and still not be allowed to do this.`;
+      return (
+        roleRefusal ??
+        `${subject} is limited to the Support and System roles, and yours include neither. A role can hold the customer permissions and still not be allowed to do this.`
+      );
     case "permission":
-      return `${subject} needs the customer management permission, which your roles do not grant.`;
+      return `${subject} needs ${needed}, which your roles do not grant.`;
     case "lifecycle":
       return `${subject} is blocked while your own customer account is not active. Restore it first.`;
     case "deployment":

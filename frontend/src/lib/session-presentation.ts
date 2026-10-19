@@ -1,4 +1,4 @@
-import { isSystemAdmin, type Session } from "../auth/session";
+import { isSystemTier, sessionTier, type Session } from "../auth/session";
 
 export type SessionPresentation = {
   asset:
@@ -21,7 +21,7 @@ export function getSessionPresentation(
   queryFailed: boolean,
 ): SessionPresentation {
   if (session?.authenticated) {
-    if (isSystemAdmin(session) && session.impersonation) {
+    if (isSystemTier(session) && session.impersonation) {
       return {
         asset: "/brand/status/status-review-256.png",
         boundaryLabel: "Audited customer entry",
@@ -30,13 +30,25 @@ export function getSessionPresentation(
         mode: "customer-entry",
       };
     }
-    if (isSystemAdmin(session)) {
+    if (isSystemTier(session)) {
       return {
         asset: "/brand/status/status-clean-256.png",
         boundaryLabel: "System administrator",
         scopeLabel: "System-wide authority",
         stateLabel: "System control",
         mode: "system",
+      };
+    }
+    // A resolved tenant tier administers one named customer; an unresolved or
+    // Support session works the desk and is not shown a tenant claim it may
+    // not have.
+    if (sessionTier(session) === "customer" && session.customerId) {
+      return {
+        asset: "/brand/status/status-clean-256.png",
+        boundaryLabel: "Customer administrator",
+        scopeLabel: `Your customer · ${session.customerId}`,
+        stateLabel: "Customer control",
+        mode: "customer",
       };
     }
     return {

@@ -7,6 +7,7 @@
  */
 
 import { api, markSessionSeen, type ApiError } from "../api/client";
+import type { WriteCapability } from "../api/capabilities";
 import { clearCsrfToken, setCsrfToken } from "./csrf";
 import { randomUuid } from "../lib/ids";
 
@@ -47,6 +48,14 @@ export interface Session {
   /** Server-derived claims for UI affordances; every API re-authorizes. */
   permissions?: string[];
   customerId: string | null;
+  /**
+   * The management tier the server resolved from this session's roles, or null
+   * when no role carries a known level. The shell labels and places surfaces
+   * from this: deriving a tier from builtin role names mislabels a session
+   * holding an equivalent custom role. It is presentation only — every route
+   * still authorizes on its own.
+   */
+  tier?: SessionTier | null;
   expiresAt: string;
   stepUpActive?: boolean;
   csrfToken?: string;
@@ -54,6 +63,38 @@ export interface Session {
   impersonation?: ImpersonationInfo | null;
   /** Present only for a System-tier actor; the server decides, not the UI. */
   platform?: PlatformFacts | null;
+  /** Server-resolved write gates. See `SessionCapabilities`. */
+  capabilities?: SessionCapabilities | null;
+}
+
+/**
+ * Server-resolved write gates for surfaces that publish no list payload of their
+ * own. The console gates a control on these instead of re-deriving the gate from
+ * a permission name: `admin:users:manage` is held by a customer administrator,
+ * while the route behind it refuses role definition changes for any identity but
+ * the built-in System Administrator.
+ */
+export interface SessionCapabilities {
+  defineRoles: WriteCapability;
+}
+
+export type SessionTier = "system" | "support" | "customer";
+
+export function sessionTier(session: Session | null): SessionTier | null {
+  const tier = session?.tier;
+  return tier === "system" || tier === "support" || tier === "customer" ? tier : null;
+}
+
+export function isSystemTier(session: Session | null): boolean {
+  return sessionTier(session) === "system";
+}
+
+/**
+ * The tenant boundary: this actor administers one customer and sees its own
+ * organisation rather than the platform directory.
+ */
+export function isTenantTier(session: Session | null): boolean {
+  return sessionTier(session) === "customer";
 }
 
 export function hasPermission(session: Session | null, permission: string): boolean {
@@ -279,14 +320,6 @@ export function isStepUpRequired(error: unknown): boolean {
   return errorCode(error) === "STEP_UP_REQUIRED";
 }
 
-export function hasRole(session: Session | null, role: string): boolean {
-  return session?.roles.includes(role) ?? false;
-}
-
-export function isSystemAdmin(session: Session | null): boolean {
-  return hasRole(session, "system_admin");
-}
-
 export function canImpersonate(session: Session | null): boolean {
   return hasPermission(session, "admin:impersonate");
 }
@@ -307,17 +340,4 @@ export async function startImpersonation(customerId: string, reason: string): Pr
  */
 export async function endImpersonation(): Promise<{ ended: boolean }> {
   return api.post<{ ended: boolean }>("/admin/impersonations/end");
-}
-
-export function isSessionExpired(session: Session): boolean {
-  return new Date(session.expiresAt).getTime() <= Date.now();
-}
-
-export function getEffectiveCustomerId(session: Session): string | null {
-  return session.customerId;
-}
-
-export function canAccessRoute(session: Session | null, requiredRoles: string[]): boolean {
-  if (!session || !session.authenticated || isSessionExpired(session)) return false;
-  return requiredRoles.length === 0 || requiredRoles.some((role) => session.roles.includes(role));
 }

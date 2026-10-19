@@ -7,6 +7,7 @@ const authenticatedSession: Session = {
   userId: "operator-1",
   email: "operator@example.test",
   roles: ["system_admin"],
+  tier: "system",
   customerId: null,
   expiresAt: "2099-01-01T00:00:00Z",
 };
@@ -36,6 +37,29 @@ describe("getSessionPresentation", () => {
       getSessionPresentation(
         {
           ...authenticatedSession,
+          tier: "customer",
+          roles: ["customer_admin"],
+          customerId: "customer-a",
+        },
+        false,
+      ),
+    ).toMatchObject({
+      stateLabel: "Customer control",
+      boundaryLabel: "Customer administrator",
+      scopeLabel: "Your customer · customer-a",
+      mode: "customer",
+    });
+  });
+
+  it("shows a tenant claim only for the tier the server published", () => {
+    // The role name says customer_admin and the session even carries a customer,
+    // but with no published tier the shell stays on the desk wording: the tier
+    // is the server's answer, not something the UI re-derives from roles.
+    expect(
+      getSessionPresentation(
+        {
+          ...authenticatedSession,
+          tier: undefined,
           roles: ["customer_admin"],
           customerId: "customer-a",
         },
