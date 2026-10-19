@@ -473,6 +473,138 @@ it, and `--color-bg-glass` / `--color-bg-glass-strong` still exist as flat
 aliases of the surface colours. Renaming them is a cross-file sweep that should
 ride along with a component pass, not a styling commit.
 
+## Landed in the ninth pass (the tenant console stops describing the platform)
+
+The tenant console was documented as done, then browsed as a customer
+administrator and found to be wrong in four ways: it still carried
+system-administrator context, it showed the model registry the tenant cannot
+open, its Feature overrides entry was a dead end, and its copy was written in
+the platform's voice rather than the customer's.
+
+- **Two grants removed, not two menu entries hidden.** `customer_admin` held
+  `deep-ai:view` and `connectors:view`, so the nav showed a Deep AI console and
+  a connector-remediation queue to an operator who owns neither. Both are gone
+  from `BUILTIN_ROLES`, and because login reconciles `admin_role_permissions` in
+  both directions the revocation reaches an already-seeded deployment on the
+  next sign-in. `customer_admin_capability_set_is_the_tenant_boundary` now
+  forbids the _view_ permissions too, plus `models:view` and `operations:view`:
+  a tenant console that shows platform state it cannot act on is a support
+  queue, not a customer product.
+- **Feature overrides closed at the page, not the link.** Hiding the entry was
+  not enough: `list_features` authorizes on `policies:view`, which the tenant
+  holds, so the URL still painted the platform's rollout catalog into a customer
+  console. `/policies/features` is now hidden for the customer tier and the
+  page itself refuses to fetch `/features` when the server-published tier is
+  `customer`, stating that feature availability is decided by the provider. The
+  API stays the authorization boundary; this removes the leak, not the gate.
+- **Unreachable readouts are not advertised.** Settings used to render a
+  "Platform facts: System role only" and "Runtime: Not available" signal, which
+  tells a customer administrator about two readouts they cannot open. Those
+  signals, their workflow-guide steps and the header sentence now appear only
+  when the session actually carries them. AuditLog is the same call: the
+  integrity checkpoint describes the whole append-only ledger of the
+  installation, not the events inside a customer scope, so the tenant console
+  neither reads `/audit/checkpoint-status` nor renders its card.
+- **A race the guard caught.** Gating that read on `enabled: !tenant` still
+  issued it, because a pending session query reads as "not a tenant". It is
+  gated on `session.isSuccess && !tenant`, and the boundary test settles on the
+  shell's resolved session chip before scanning, which is the same distinction
+  between "the tier is customer" and "the tier is not yet known".
+- **Customer voice across the reachable surfaces.** `Policies` (description,
+  table caption, empty state, and the Feature overrides entry), `Roles`
+  (the role-definition refusal, `ROLE_BUILTIN`, the custom-role detail, both
+  captions), `PolicyFamilyDetail` ("ask your provider", not "ask a system
+  administrator"), `Dashboard` (title, the unverified-domain detail, the
+  mail-flow note that named scanner nodes and model registries),
+  `OutboundIntelligence` (header, the approval hint, the incident paragraph),
+  `CustomerDetail` (the region/sequence hints and both rail summaries),
+  `DomainSecurity` ("how the mail system judges"), `AdminUsers` (the
+  out-of-scope sentence), `NotificationSettings` ("the security floor still
+  applies"), and `frontend/src/api/capabilities.ts`, where a `deployment`
+  blocker now names "a different Nullapart service" because a customer operator
+  has no deployment to compare against.
+- **The guard is a test, not a comment.**
+  `frontend/src/test/tenant-console-boundary.test.tsx` renders 13 tenant
+  surfaces against a real `customer` session and fails on two counts: any
+  platform word in the rendered text (platform, deployment, installation,
+  system admin, model registry, deep ai, impersonat*, cross-customer, outbox,
+  dead letter, scanner node, fleet, emergency stop) and any platform read in
+  the request log (`/operations/runtime`, `/scanner-operations`, `/deep-ai`,
+  `/connectors`, `/models`, `/features`, `/audit/checkpoint-status`). Payloads
+  are empty-but-valid so headers, rails, guides and locked copy all paint;
+  anything unstubbed answers 501 so error copy is policed too. It found three
+  real copy leaks and the checkpoint race on its first run.
+- **Gates**: `pnpm --dir frontend check-all` green (264 tests, 33 files);
+  `cargo fmt --all --check`, `cargo clippy --workspace --all-targets
+-- -D warnings` and `cargo test --workspace` green.
+
+## Landed in the tenth pass (the tenant console stopped echoing the platform)
+
+The ninth pass made the console say the right things. Browsed again as
+`ob2-customer-admin` on `.4`, it still showed the platform in three places the
+console does not write itself: rows the server authored, a role chip that
+humanises whatever key the audit row carries, and a detail route that hard-coded
+"you are not looking at your own record".
+
+- **Provider actors are bucketed, not named.** `AuditLog` rendered
+  `event.actor_roles.map(roleLevelLabel)`, so a `system_admin` row appeared in a
+  tenant's evidence queue as "System Administrator" and the detail dialog printed
+  the bare key. `actorRoleLabels(roleKeys, tenant)` in
+  `frontend/src/lib/labels.ts` folds the builtin platform keys into one "Provider"
+  chip for a customer session and leaves every other key humanised: an audit row
+  carries role keys, not levels, so a custom platform role can only be named, not
+  classified, without reading a role directory the tenant console does not ask
+  for. The scope cell now shows `—` instead of "Platform" when a row has no
+  customer.
+- **A refusal is written in the refuser's language.** `require_family_tier` and
+  the override-scope gate recorded "This policy needs system-level access to
+  change", which the tenant reads back in their own audit log. `family_tier_reason`
+  and `override_scope_reason` in `crates/mail-core/src/policy_admin.rs` keep that
+  wording for a support or system caller and write "This policy is changed by your
+  provider." / "These overrides are changed by your provider." for a customer. The
+  public body stays the generic `Permission is required` and the authorization
+  outcome is untouched, so this is an audit-copy change, not a contract change. A
+  `None` tier is not a customer and keeps the ladder wording.
+- **The ledger is append-only, so old rows keep old words.** Verified live: a
+  refusal written after the deploy reads "This policy is changed by your
+  provider." while the 1:41pm rows from before it still read "…system-level access
+  to change". There is no honest fix. Rewriting a recorded reason would falsify
+  the audit trail, so the historic text is reported, not patched around.
+- **Provider families are information, not dead ends.** 17 of the 24 families a
+  tenant can list are support or system level, and every one of them was a link
+  that 403'd on open and wrote a Denied row into that tenant's own log. For a
+  customer session a family marked _Needs your provider_ renders as a plain name;
+  the tenant's seven families stay links.
+- **`/customers/$customerId` stopped assuming the viewer is platform.** The route
+  hard-coded `ownRecord = false`, so a tenant opening their own record got "The
+  platform sets it" for region, "The platform assigns it" for the sequence, and a
+  Customers list link to a directory they cannot open. `CustomerDetail` now
+  resolves the session and derives `ownRecord` from `isTenantTier(session) &&
+session.customerId === customerId`, which restores the own-record framing and
+  drops both hints for the tenant and keeps them for a platform viewer.
+- **The guard widened to the data path.** `PLATFORM_LANGUAGE` now also fails on
+  `system-level`, `support-level`, a `support_agent`/`support_viewer` key and the
+  platform's own names for entering a customer. Bare `impersonat` was removed:
+  the `impersonation` policy family is inbound sender impersonation, a tenant's
+  own protection, so the word alone is not a leak. Four anti-vacuous assertions
+  were added, so the guard fails if the payload stops reaching the render: the
+  role directory must show the provider-level actor renamed rather than echoed,
+  the audit log must bucket a provider actor while keeping the tenant's own role
+  label, and the policy queue must link one tenant family and refuse to link two
+  provider ones.
+- **Live re-audit**: 22 tenant routes on `.4` as a fresh `customer` session.
+  `PLATFORM_READS` is empty everywhere, including the `/admin/permissions` read
+  the roles page used to make. Zero rendered mentions of models, Deep AI or
+  connectors anywhere in the sweep. The five platform routes (`/deep-ai`,
+  `/connectors-remediation`, `/models`, `/operations`, `/scanner-operations`) fall
+  back to Overview. `/audit-log` was the only route with term hits, and all eight
+  were the pre-deploy rows above.
+- **Gates**: `pnpm --dir frontend check-all` green (272 tests, 33 files);
+  `cargo test -p nullapart-mail-core policy_admin` green (25 passed) with
+  `tier_refusal_reasons_are_written_in_the_callers_own_words` covering all three
+  caller classes; `cargo fmt -p nullapart-mail-core -- --check` leaves
+  `policy_admin.rs` untouched. `cargo test --workspace` recorded separately.
+
 ## Deploy incident: never `rsync --delete` to `.4`
 
 A previous sync used `rsync --delete` while deploying frontend changes. It was

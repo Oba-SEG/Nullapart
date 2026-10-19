@@ -30,9 +30,13 @@ This arc gives the tenant admin real control over their own tenant, then re-shap
 | `outbound-intelligence:manage` | no | **yes** | activate/approve their own senders |
 | `notifications:manage` | n/a | **new, yes** | tenant notification settings |
 | `scanner:operations:view` | yes | **no** | platform fleet health is not a tenant concern |
+| `deep-ai:view` | yes | **no** | revised after live review: a release/artifact-grant console a tenant cannot act on is platform context, not customer value |
+| `connectors:view` | yes | **no** | revised after live review: Phase 8 ships no provider worker, so the rows describe platform state the tenant cannot interpret or change |
 | everything else | unchanged | unchanged | |
 
-Still withheld: `admin:customers:manage`, `admin:impersonate`, `operations:*`, `models:*`, `audit:cross-customer`, `deep-ai:manage`, `connectors:manage`. Each new grant is tenant-bounded by the session's customer scope, not by the permission name: a `customer_admin` holding `admin:domains:manage` still gets a 404 for another tenant's `:customerId`, which is what `domain_management_refuses_a_foreign_customer_and_reaches_their_own` proves.
+Still withheld: `admin:customers:manage`, `admin:impersonate`, `operations:*`, `models:*`, `audit:cross-customer`, `deep-ai:view|manage`, `connectors:view|manage`. Each new grant is tenant-bounded by the session's customer scope, not by the permission name: a `customer_admin` holding `admin:domains:manage` still gets a 404 for another tenant's `:customerId`, which is what `domain_management_refuses_a_foreign_customer_and_reaches_their_own` proves.
+
+The first live pass of this console shipped with `deep-ai:view` and `connectors:view` left in place, which put a Deep AI console, a connector-remediation queue and the model registry in front of a customer administrator. Both grants were withdrawn and the boundary is now enforced twice: the Rust capability-set test lists the view permissions among the forbidden ones, and `frontend/src/test/tenant-console-boundary.test.tsx` renders each customer surface against a `tier: "customer"` session, failing on platform vocabulary or on any `/deep-ai`, `/connectors`, `/models`, `/features`, `/operations/runtime`, `/scanner-operations` or `/audit/checkpoint-status` request. `Policies` also stops offering the Feature overrides entry, and `FeatureOverrides` itself refuses to read `/features` at the customer level, because `list_features` authorizes on `policies:view` — a permission the tenant legitimately holds — so hiding the link alone still leaked the platform rollout catalog by URL.
 
 ### How the revocation reaches an existing deployment
 

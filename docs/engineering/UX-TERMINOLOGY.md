@@ -101,6 +101,15 @@ Tooltips state the rule, not the mechanism. "System-tier families can only be
 published by a system-level role" is a rule. "The tier is resolved server-side from
 your session roles" is a mechanism.
 
+## Strings the server writes and the console echoes
+
+An audit reason or a denial detail is copy authored by the backend, and a customer
+reads it back in their own log. Write it for the caller who will read it: a
+customer-level refusal says "This policy is changed by your provider", not
+"This policy needs system-level access to change". The public response body stays
+the generic `Permission is required`; only the recorded reason changes, and the
+authorization outcome never does.
+
 ## Worked examples
 
 Before:
