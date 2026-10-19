@@ -117,7 +117,7 @@ export function Messages() {
 
       <WorkflowGuide
         title="Trace mail without showing message bodies"
-        description="Search metadata first, then open one message when its delivery and scanner detail is relevant to the investigation."
+        description="Search metadata first, then open one message when its delivery and security detail is relevant to the investigation."
         steps={[
           {
             label: "Search",
@@ -125,7 +125,7 @@ export function Messages() {
           },
           {
             label: "Trace",
-            detail: "Open one result to inspect authentication, delivery and scanner outcomes.",
+            detail: "Open one result to inspect authentication, delivery and security outcomes.",
           },
           {
             label: "Escalate",

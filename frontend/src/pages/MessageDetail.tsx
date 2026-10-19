@@ -185,7 +185,7 @@ export function MessageDetail() {
       <WorkspaceHeader
         eyebrow="Trace investigation"
         title="Message trace"
-        description="Review the metadata, authentication, delivery attempts and scanner findings for one message. The message body stays in its own protected view."
+        description="Review the metadata, authentication, delivery attempts and security findings for one message. The message body stays in its own protected view."
         scope="Delivery record access"
         actions={
           <>
@@ -216,7 +216,7 @@ export function MessageDetail() {
           },
           {
             label: "Inspect stages",
-            detail: "Read delivery and scanner outcomes in their execution order.",
+            detail: "Read delivery and security outcomes in their execution order.",
           },
           {
             label: "Act on linked cases",
@@ -500,7 +500,7 @@ export function MessageDetail() {
           <section className="card" aria-label="Findings">
             <h2 className="detail-section-title">Findings</h2>
             {data.findings.length === 0 ? (
-              <p className="detail-subtitle">No scanner findings are recorded.</p>
+              <p className="detail-subtitle">No security findings are recorded.</p>
             ) : (
               <ul className="detail-findings">
                 {data.findings.map((finding) => (

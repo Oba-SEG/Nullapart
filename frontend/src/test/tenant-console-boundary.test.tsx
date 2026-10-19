@@ -35,6 +35,7 @@ import { OutboundIntelligence } from "../pages/OutboundIntelligence";
 import { Policies } from "../pages/Policies";
 import { PolicyFamilyDetail } from "../pages/PolicyFamilyDetail";
 import { Quarantine } from "../pages/Quarantine";
+import { QuarantineDetail } from "../pages/QuarantineDetail";
 import { Roles } from "../pages/Roles";
 import { Settings } from "../pages/Settings";
 import type { Session } from "../auth/session";
@@ -108,7 +109,10 @@ const PLATFORM_LANGUAGE: Array<{ term: string; pattern: RegExp }> = [
   { term: "cross-customer", pattern: /\bcross-customer\b/i },
   { term: "outbox", pattern: /\boutbox\b/i },
   { term: "dead letters", pattern: /\bdead letters?\b/i },
-  { term: "scanner node", pattern: /\bscanner node/i },
+  // The component the platform runs the checks with. A customer reads what the
+  // checks found, never that a scanner node, an engine or a scanner result is
+  // what produced it.
+  { term: "scanner", pattern: /\bscanner\b/i },
   { term: "fleet", pattern: /\bfleet\b/i },
   { term: "emergency stop", pattern: /\bemergency stop\b/i },
   // The mail server's own bookkeeping. These name the platform's machinery, not
@@ -345,8 +349,70 @@ function withoutCustomerHandles(text: string): string {
   return CUSTOMER_MAIL_HANDLES.reduce((seen, handle) => seen.split(handle).join(" "), text);
 }
 
+/**
+ * What the held-message detail answers a customer seat with. The check names are
+ * the ones the server's capability label publishes ("Malware analysis", not the
+ * engine behind it), and the engine's own bookkeeping — whether a check was
+ * mandatory and how long the node took — is a platform health read. The page
+ * must not render either.
+ */
+const tenantHeldMessage = {
+  tenant_message_id: "7d2c4e6a-1111-2222-3333-444455556666",
+  transaction_id: "0f9d0a6b-1111-2222-3333-444455556666",
+  reason_code: "QUARANTINE_PHISHING",
+  sender: "billing@partner.example",
+  recipient_count: 2,
+  findings: [
+    {
+      id: "1",
+      category: "credential_harvest",
+      severity: "high",
+      description: "A link asks for credentials on a domain this organisation does not own",
+      created_at: "2026-01-06T09:49:57Z",
+    },
+  ],
+  quarantined_at: "2026-01-06T09:49:58Z",
+  released_at: null,
+  release_allowed: true,
+  released_by: null,
+  release_reason: null,
+  retention: {
+    retention_class: "standard",
+    artifact_created_at: "2026-01-06T09:49:56Z",
+    quarantined_at: "2026-01-06T09:49:58Z",
+    released_at: null,
+  },
+  scanner_results: [
+    {
+      capability: "Malware analysis",
+      status: "healthy",
+      required: true,
+      duration_ms: 41,
+      completed_at: "2026-01-06T09:49:57Z",
+    },
+    {
+      capability: "URL reputation",
+      status: "degraded",
+      required: false,
+      duration_ms: null,
+      completed_at: "2026-01-06T09:49:57Z",
+    },
+  ],
+  audit: [
+    {
+      action: "quarantine_hold_reviewed",
+      actor_login: "tenant-admin@example.test",
+      result: "success",
+      created_at: "2026-01-06T10:15:00Z",
+    },
+  ],
+};
+
 const PAYLOADS: Array<[string, unknown]> = [
   ["/auth/session", tenantSession],
+  // Ordering matters: the stub answers the first needle the URL contains, and a
+  // case detail URL also contains the list URL.
+  ["/quarantine/7d2c4e6a-1111-2222-3333-444455556666", tenantHeldMessage],
   ["/quarantine", []],
   ["/admin/users", adminDirectory],
   ["/admin/roles", roleDirectory],
@@ -719,6 +785,12 @@ const SURFACES: Surface[] = [
     component: OutboundIntelligence,
   },
   { name: "Quarantine", path: "/quarantine", entry: "/quarantine", component: Quarantine },
+  {
+    name: "Held message",
+    path: "/quarantine/$tenant_message_id",
+    entry: "/quarantine/7d2c4e6a-1111-2222-3333-444455556666",
+    component: QuarantineDetail,
+  },
   { name: "Messages", path: "/messages", entry: "/messages", component: Messages },
   {
     name: "Message trace",
@@ -998,5 +1070,28 @@ describe("tenant console boundary", () => {
     // Anti-vacuous: the rows are rendered, they simply carry no reference. A
     // sender the customer approved keeps its address.
     expect(text).toContain("news@acmefreight.example");
+  });
+
+  /**
+   * A held message is decided by what the checks found. Which component ran
+   * them, whether that component was mandatory and how long its node took are
+   * health readings of the platform, so a tenant's case detail shows the
+   * capability the server named and the outcome, nothing else.
+   */
+  it("describes a held message's checks as outcomes, not as the platform's machinery", async () => {
+    stubTenantFetch();
+    renderSurface(surfaceNamed("Held message"));
+    await screen.findByText("Your customer · CZA-1");
+
+    expect(await screen.findByText("Security checks")).toBeInTheDocument();
+    expect(screen.getByText("Malware analysis")).toBeInTheDocument();
+    expect(screen.getByText("High: Credential harvesting")).toBeInTheDocument();
+    expect(screen.queryByText("Requirement")).toBeNull();
+    expect(screen.queryByText("Duration")).toBeNull();
+    expect(screen.queryByText(/required/i)).toBeNull();
+
+    const text = document.body.textContent ?? "";
+    expect(text).not.toMatch(/\d+\s*ms/);
+    expect(text).not.toMatch(/scanner/i);
   });
 });

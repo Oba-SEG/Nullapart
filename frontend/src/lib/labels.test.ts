@@ -93,7 +93,7 @@ describe("audit detail naming", () => {
   it("labels a stored column instead of printing it", () => {
     expect(auditDetailFieldLabel("family_key")).toBe("Mail policy");
     expect(auditDetailFieldLabel("scope_level")).toBe("Applies to");
-    expect(auditDetailFieldLabel("source_key")).toBe("Sending range");
+    expect(auditDetailFieldLabel("source_key")).toBe("Report source");
   });
 
   it("humanizes a column the map has never seen", () => {

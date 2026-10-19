@@ -159,7 +159,7 @@ export function Quarantine() {
       <WorkspaceHeader
         eyebrow="Mail on hold"
         title="Quarantine"
-        description="Review held mail using safe metadata: headers and scanner results, never the message body. Releasing a message returns it to delivery."
+        description="Review held mail using safe metadata: headers and security-check results, never the message body. Releasing a message returns it to delivery."
         scope="Release decisions"
       />
 
@@ -182,7 +182,7 @@ export function Quarantine() {
                 ).length
               : casesState,
             detail: casesAvailable
-              ? "Cases with a critical scanner finding."
+              ? "Cases with a critical security finding."
               : "The count appears once held mail finishes loading.",
             tone: casesAvailable ? "attention" : "neutral",
           },
@@ -409,8 +409,8 @@ export function Quarantine() {
 
       <aside className="quarantine-state">
         <ShieldAlert size={20} aria-hidden="true" />
-        The message body is never shown here. Findings are safe summaries of headers and scanner
-        results only.
+        The message body is never shown here. Findings are safe summaries of headers and security
+        checks only.
       </aside>
 
       <Dialog

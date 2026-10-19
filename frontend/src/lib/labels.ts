@@ -96,6 +96,17 @@ export function actorRoleLabels(roleKeys: string[], tenant: boolean): string[] {
   );
 }
 
+/** What a rule matches on, in the words of the seat reading it. */
+export function conditionFieldLabel(field: ConditionFieldName, tenant: boolean): string {
+  if (field === "finding") {
+    // A platform operator picks the check by the engine that runs it. A customer
+    // picks it by what was looked at, so the mechanism word becomes an outcome
+    // word on their seat.
+    return tenant ? "Security check findings" : CONDITION_FIELD_LABELS.finding;
+  }
+  return CONDITION_FIELD_LABELS[field];
+}
+
 /**
  * What a rule matches on. "transaction" and "tenant" are the wire names; an
  * operator reads the scope of the decision instead.
@@ -556,7 +567,7 @@ const AUDIT_DETAIL_KEY_LABELS: Record<string, string> = {
   row_count: "Records",
   rules_count: "Rules",
   scope_level: "Applies to",
-  source_key: "Sending range",
+  source_key: "Report source",
   status: "Result",
   truncated: "Cut short",
 };

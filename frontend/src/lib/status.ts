@@ -74,6 +74,19 @@ export function scannerStatusLabel(status: string): string {
   return SCANNER_STATUS_LABELS[status.toLowerCase()] ?? status;
 }
 
+/**
+ * Whether a check on this message produced an answer, in the words a customer
+ * needs. The engine's own health reads as `healthy` or `unavailable`, which
+ * describes the platform; a customer only has to know that a check answered or
+ * did not, because an unanswered check is why a hold may still be open.
+ */
+export function checkOutcomeLabel(status: string): string {
+  const key = status.toLowerCase();
+  return key === "healthy" || key === "complete" || key === "completed"
+    ? "Completed"
+    : "Not completed";
+}
+
 export function requirementLabel(requirement: string): string {
   return requirement.toLowerCase() === "optional" ? "Optional" : "Required";
 }

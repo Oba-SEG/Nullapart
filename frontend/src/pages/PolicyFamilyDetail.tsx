@@ -53,7 +53,6 @@ import { randomUuid } from "../lib/ids";
 import { humanizeToken } from "../lib/text";
 import {
   AUTH_RESULT_LABELS,
-  CONDITION_FIELD_LABELS,
   CONDITION_SCOPE_LABELS,
   ENFORCEMENT_MODE_LABELS,
   FINDING_CATEGORY_LABELS,
@@ -65,6 +64,7 @@ import {
   POLICY_DISPOSITION_LABELS,
   SCANNER_LABELS,
   TENANT_LEVEL_LABELS,
+  conditionFieldLabel,
   familyDescription,
   familyDisplayName,
   reasonCodeLabel,
@@ -200,6 +200,7 @@ function joinLabels(labels: string[]): string {
 
 interface ConditionNoticeProps {
   conditions: ConditionFieldProfile[];
+  tenant: boolean;
 }
 
 /**
@@ -207,12 +208,12 @@ interface ConditionNoticeProps {
  * server publishes. A family whose predicates are read shows nothing here, so
  * the warning cannot survive the change that makes conditions real.
  */
-function ConditionNotice({ conditions }: ConditionNoticeProps) {
+function ConditionNotice({ conditions, tenant }: ConditionNoticeProps) {
   const byNote = new Map<string, string[]>();
   for (const entry of conditions) {
     if (entry.honoured) continue;
     const labels = byNote.get(entry.note) ?? [];
-    labels.push(CONDITION_FIELD_LABELS[entry.field]);
+    labels.push(conditionFieldLabel(entry.field, tenant));
     byNote.set(entry.note, labels);
   }
   if (byNote.size === 0) return null;
@@ -952,7 +953,9 @@ export function PolicyFamilyDetail() {
               />
             </fieldset>
 
-            {profile ? <ConditionNotice conditions={profile.conditions} /> : null}
+            {profile ? (
+              <ConditionNotice conditions={profile.conditions} tenant={tenantTier} />
+            ) : null}
 
             <fieldset className="policy-detail-fieldset">
               <legend>Sender</legend>
@@ -1074,9 +1077,9 @@ export function PolicyFamilyDetail() {
             </fieldset>
 
             <fieldset className="policy-detail-fieldset">
-              <legend>Scanner findings</legend>
+              <legend>{tenantTier ? "Security check findings" : "Scanner findings"}</legend>
               <CheckGroup<ScannerType>
-                legend="From scanner"
+                legend={tenantTier ? "By check" : "From scanner"}
                 values={editing.scanners}
                 options={SCANNER_TYPES}
                 labels={SCANNER_LABELS}

@@ -4,6 +4,7 @@ import { ArrowLeft, ShieldAlert } from "lucide-react";
 import { useState } from "react";
 
 import { api, type ApiError } from "../api/client";
+import { isTenantTier, loadSession } from "../auth/session";
 import { StepUpPrompt } from "../components/StepUpPrompt";
 import { ControlRail } from "../components/ControlRail";
 import { WorkspaceHeader } from "../components/WorkspaceHeader";
@@ -14,7 +15,13 @@ import { Hint } from "../components/primitives/Hint";
 import { randomUuid } from "../lib/ids";
 import { auditActionLabel, findingCategoryLabel, reasonCodeLabel } from "../lib/labels";
 import { notify } from "../lib/notify";
-import { requirementLabel, resultLabel, scannerStatusLabel, severityLabel } from "../lib/status";
+import {
+  checkOutcomeLabel,
+  requirementLabel,
+  resultLabel,
+  scannerStatusLabel,
+  severityLabel,
+} from "../lib/status";
 import "./Quarantine.css";
 
 interface QuarantineFinding {
@@ -79,6 +86,13 @@ export function QuarantineDetail() {
   const [releaseReason, setReleaseReason] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
 
+  const session = useQuery({
+    queryKey: ["session"],
+    queryFn: ({ signal }) => loadSession(signal),
+    staleTime: 60_000,
+  });
+  const tenant = isTenantTier(session.data ?? null);
+
   const detail = useQuery({
     queryKey: ["quarantine", tenantMessageId],
     queryFn: ({ signal }) =>
@@ -111,7 +125,11 @@ export function QuarantineDetail() {
       <WorkspaceHeader
         eyebrow="Mail on hold"
         title="Held message"
-        description="Review how long this message was held, who acted on it and the scanner results. The message body is never shown here."
+        description={
+          tenant
+            ? "Review how long this message was held, who acted on it and what the security checks found. The message body is never shown here."
+            : "Review how long this message was held, who acted on it and the scanner results. The message body is never shown here."
+        }
         scope="Release controls"
       />
       <WorkflowGuide
@@ -120,7 +138,9 @@ export function QuarantineDetail() {
         steps={[
           {
             label: "Read findings",
-            detail: "Compare the hold reason with the scanner results.",
+            detail: tenant
+              ? "Compare the hold reason with what the security checks found."
+              : "Compare the hold reason with the scanner results.",
           },
           {
             label: "Confirm impact",
@@ -142,18 +162,27 @@ export function QuarantineDetail() {
             {
               label: "Findings",
               value: data.findings.length,
-              detail: "Scanner findings recorded for this message.",
+              detail: tenant
+                ? "Security findings recorded for this message."
+                : "Scanner findings recorded for this message.",
               tone: data.findings.some(
                 (finding) => finding.severity === "critical" || finding.severity === "high",
               )
                 ? "attention"
                 : "neutral",
             },
-            {
-              label: "Required checks",
-              value: `${data.scanner_results.filter((result) => result.required && result.status === "healthy").length}/${data.scanner_results.filter((result) => result.required).length}`,
-              detail: "Required scanner checks that completed cleanly.",
-            },
+            // Whether a required engine came back healthy is the platform's own
+            // health, not a fact about the customer's mail. A tenant read gets
+            // the findings and the release state.
+            ...(tenant
+              ? []
+              : [
+                  {
+                    label: "Required checks",
+                    value: `${data.scanner_results.filter((result) => result.required && result.status === "healthy").length}/${data.scanner_results.filter((result) => result.required).length}`,
+                    detail: "Required scanner checks that completed cleanly.",
+                  },
+                ]),
             {
               label: "Release",
               value: data.released_at ? "Released" : data.release_allowed ? "Ready" : "Blocked",
@@ -248,19 +277,31 @@ export function QuarantineDetail() {
             </div>
           </section>
 
-          <section className="card" aria-label="Scanner results">
-            <h2 className="quarantine-section-title">Scanner results</h2>
+          <section className="card" aria-label={tenant ? "Security checks" : "Scanner results"}>
+            <h2 className="quarantine-section-title">
+              {tenant ? "Security checks" : "Scanner results"}
+            </h2>
             {data.scanner_results.length === 0 ? (
-              <p className="quarantine-subtitle">No scanner results are recorded.</p>
+              <p className="quarantine-subtitle">
+                {tenant ? "No security checks are recorded." : "No scanner results are recorded."}
+              </p>
             ) : (
               <table className="quarantine-table">
-                <caption className="sr-only">Scanner results for this message</caption>
+                <caption className="sr-only">
+                  {tenant
+                    ? "Security checks run for this message"
+                    : "Scanner results for this message"}
+                </caption>
                 <thead>
                   <tr>
-                    <th>Scanner check</th>
-                    <th>Status</th>
-                    <th>Requirement</th>
-                    <th>Duration</th>
+                    <th>{tenant ? "Check" : "Scanner check"}</th>
+                    <th>{tenant ? "Result" : "Status"}</th>
+                    {tenant ? null : (
+                      <>
+                        <th>Requirement</th>
+                        <th>Duration</th>
+                      </>
+                    )}
                     <th>Completed</th>
                   </tr>
                 </thead>
@@ -268,13 +309,21 @@ export function QuarantineDetail() {
                   {data.scanner_results.map((result) => (
                     <tr key={`${result.capability}-${result.completed_at}`}>
                       <td>{result.capability}</td>
-                      <td>{scannerStatusLabel(result.status)}</td>
-                      <td>{requirementLabel(result.required ? "required" : "optional")}</td>
                       <td>
-                        {result.duration_ms === null || result.duration_ms === undefined
-                          ? "—"
-                          : `${result.duration_ms} ms`}
+                        {tenant
+                          ? checkOutcomeLabel(result.status)
+                          : scannerStatusLabel(result.status)}
                       </td>
+                      {tenant ? null : (
+                        <>
+                          <td>{requirementLabel(result.required ? "required" : "optional")}</td>
+                          <td>
+                            {result.duration_ms === null || result.duration_ms === undefined
+                              ? "—"
+                              : `${result.duration_ms} ms`}
+                          </td>
+                        </>
+                      )}
                       <td>{new Date(result.completed_at).toLocaleString()}</td>
                     </tr>
                   ))}
@@ -332,8 +381,9 @@ export function QuarantineDetail() {
 
           <aside className="quarantine-state">
             <ShieldAlert size={20} aria-hidden="true" />
-            Each result names a product capability only. Engine names, versions, endpoints and
-            message content are never shown.
+            {tenant
+              ? "Each check is described by what it found for your mail. Message content is never shown here."
+              : "Each result names a product capability only. Engine names, versions, endpoints and message content are never shown."}
           </aside>
 
           <Dialog
