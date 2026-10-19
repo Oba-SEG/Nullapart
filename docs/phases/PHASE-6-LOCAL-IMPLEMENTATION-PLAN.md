@@ -243,3 +243,22 @@ completion unless the code, tests and local deployment evidence match it.
   - `cargo clippy --workspace --all-targets -- -D warnings`
   - `cargo test --workspace`
   - `pnpm --dir frontend check-all`
+
+### Tenant sender approval and its scope proof (2026-10-19)
+
+- `customer_admin` now holds `outbound-intelligence:view|manage` (`0aa05a6`), so
+  the approved-sender surface is a tenant capability rather than a platform-only
+  one, and the console renders the enforced permission key on any action the
+  caller still lacks (`5f9ecd1`).
+- Approval writes refuse a sender address whose domain the calling customer has
+  not verified: `POST /api/v1/outbound-intelligence/approved-senders` returns
+  `DOMAIN_NOT_VERIFIED` for a foreign or unverified domain. The check reads the
+  tenant's verified-domain set from server-side ownership, never from the
+  submitted address, which is what stops one tenant approving a sending domain it
+  does not control.
+- The write path keeps the Phase 6 gates intact: step-up where the route
+  requires it, `x-csrf-token`, a mandatory `x-idempotency-key`, the shared
+  high-risk token bucket, and an audit row naming the sender and the reason.
+- Live on `.4`: a foreign `:customerId` returned 404, an unverified domain
+  returned `DOMAIN_NOT_VERIFIED`, and the tenant's own verified domain returned
+  200 with the approval recorded and audited.

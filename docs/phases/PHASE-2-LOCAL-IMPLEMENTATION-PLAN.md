@@ -170,3 +170,46 @@ not a completion claim.
   released through the authenticated API. Reinjection succeeded with Postfix
   queue id `43C7662246A`, the outbox event was published, and
   `reinjection_dead_letters` remained `0`.
+
+### Pre-queue Rspamd evidence reaches the durable scan (2026-10-19)
+
+`e166799`. The after-queue filter used to hand the pipeline a zero-valued
+`MilterObservations`, so the scanner fabric recorded no `rspamd` row and Rspamd's
+spam verdict never influenced a tenant scan. The evidence chain now lives behind
+one bounded contract in `crates/mail-core/src/milter_evidence.rs`, documented in
+`docs/05-SCANNER-FABRIC.md`.
+
+- Trust boundary: `infrastructure/rspamd/lua.d/nullapart_evidence.lua` strips
+  every client-supplied `X-Spam*`/`X-Rspamd*`/Nullapart evidence header at
+  prefilter and re-adds Rspamd's own only at or above the `add_header` band; the
+  public listener keeps `receive_override_options=no_header_body_checks` so
+  cleanup-stage checks cannot delete the evidence the milter just wrote; the
+  milter-free reinjection listener strips the same names through
+  `header_checks_reinjection`, so reinjected mail cannot carry stale evidence
+  back into the queue.
+- Fail-closed rules: `reject = 1000` and `greylist = 998` stay unreachable in
+  `local.d/actions.conf` because Mail Core owns disposition; `local_networks` is
+  narrowed to loopback, since the packaged RFC1918/docker default silently
+  skipped SPF/DKIM/DMARC for every lab message and left domain-authentication
+  evidence permanently empty.
+- Merge semantics: evidence observed adds one `rspamd`
+  `OPTIONAL_ENRICHMENT` row (`required: false`, so it cannot mark a scan failed),
+  a spam action adds a `Spam` finding that follows the existing local policy
+  contract, and absent or clean evidence adds no finding and can never turn a
+  disposition clean.
+- Parser bounds: 64 KiB header scan window, finite score in `0..=1000`, at most
+  64 symbols of 64 chars, 8 actions of 32 chars, 32 symbols carried into finding
+  details. `process_handoff` re-validates the same bounds at the API edge even
+  though the producer is our own filter.
+- **Verification**: `cargo fmt --all -- --check`, `cargo clippy --workspace
+  --all-targets` (clean after the `map_identity` fix) and `cargo test
+  -p nullapart-mail-core --lib` — 613 passed, covering parse, unfold, forged-name
+  rejection, out-of-range score/symbol rejection, contract validation and the
+  three merge paths. `postgres_scanner_pipeline::milter_spam_evidence_persists_rspamd_row_and_quarantines`
+  compiles under `--all-targets` but did not run: tunnelled `--ignored`
+  connections to the `.4` volume currently fail with PostgreSQL `28P01` (see the
+  Phase 3 2026-10-19 entry).
+- **Not yet deployed**: only the frontend image was rebuilt on `.4`. The rspamd,
+  postfix and mailcore-filter images still run the pre-evidence build, so the
+  live pipeline behaves exactly as before until those three are rebuilt and the
+  stack is restarted. No end-to-end SMTP evidence is claimed for this change.

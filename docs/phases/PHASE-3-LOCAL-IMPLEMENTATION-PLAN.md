@@ -1065,3 +1065,85 @@ decision required before any identity-provider integration is recorded.
   database through a tunnel, including the new `recorded_by` constraint test
   that keeps legacy `NULL` rows valid. `pnpm --dir frontend check-all` green
   (173 tests, 26 files).
+
+### Customer-admin console (2026-10-19)
+
+Design: `docs/superpowers/specs/2026-10-19-customer-admin-console-design.md`
+(`2e10b4d`). Capability first, then information architecture: the tenant gets
+four real capabilities (own-domain self-service, more policy families, its own
+notification settings, outbound sender approval) and every withheld action
+states the permission it needs.
+
+- **Server publishes the tier, not the client**: the session projection carries
+  `tier` (`system` / `support` / `customer`, resolved from stored role levels
+  through `rank_for_level`), `platform` (System only) and
+  `capabilities.defineRoles`. The shell and navigation render from that
+  projection, so a customer session cannot reach a platform surface by typing a
+  URL and the console never re-derives authorization from role names (`caa8c0a`).
+- **Role grants the console can rely on** (`0aa05a6`): `customer_admin` now
+  carries `admin:customers:view`, `admin:domains:manage`,
+  `domain-security:view|manage`, `outbound-intelligence:view|manage`,
+  `notifications:view|manage` and `connectors:view`, and the admin APIs publish
+  the blocker behind each refusal through the shared Rust
+  `Blocker`/`WriteCapability` in `crates/mail-core/src/admin_capabilities.rs`,
+  mirrored by `frontend/src/api/capabilities.ts`. Grantor rank, the
+  no-self-modification rule and the builtin-identity reservation are enforced on
+  the write path and audited with the reason.
+- **Policy ownership moved** (`1655c6a`, migration `041_customer_policy_levels.sql`):
+  `quarantine`, `spam_filtering` and `notifications` became customer-managed, so
+  a tenant edits 7 of 24 families and each of the other 17 states which tier
+  publishes it. `spam_filtering` keeps `security_floor = true`, and the migration
+  ends with a `DO $$` guard that aborts unless exactly 7 families are customer
+  level, because the console copy counts on that invariant.
+- **Tenant notification stack** (`188948e`, `6c14414`, migrations
+  `042_tenant_notification_settings.sql`,
+  `043_notification_acknowledgment.sql`): `GET/PUT
+  /api/v1/notifications/settings` for the caller's own customer, an
+  `notification_deliveries` ledger keyed by
+  `notification:<domain_security_notifications.id>`, digest coalescing, a
+  verified-domain constraint on both recipients and target domains, and
+  `POST /api/v1/notifications/findings/{id}/acknowledge` that records who closed
+  a finding and why. `docs/14-NOTIFICATIONS-REMEDIATION.md` and
+  `docs/runbooks/OUTBOUND-DKIM-SIGNING.md` describe the delivery worker, whose
+  DKIM identity list fails closed: an unprovisioned signer writes no `sent` row.
+- **Two surfaces turned into the tenant's own** (`67dffbf`, `5f9ecd1`):
+  `/customers` renders "Your organisation" with the tenant's domains and no
+  cross-customer affordance, `/admin-users` and `/roles` become "Your
+  administrators" / "Your roles" with the platform columns removed, and the
+  console stops offering writes the API refuses, so a locked control names the
+  enforced permission instead of failing silently.
+- **Operator copy defects found by live browsing** (`c4b6c83`): built-in roles
+  publish no description, so every role chip fell back to "Custom role." and a
+  customer admin read the platform's own roles as their own; the domain-security
+  and Deep-AI headers interpolated the raw deployment id (`LOCAL-TEST`) into a
+  sentence where an operator expects their own scope.
+- **Gates**: `cargo fmt --all -- --check`, `cargo clippy --workspace
+  --all-targets` (clean after the `map_identity` fix) and `cargo test
+  -p nullapart-mail-core --lib` — 613 passed, 1 ignored. `pnpm --dir frontend
+  check-all` — format, brand, lint, typecheck and 250 tests across 32 files.
+- **Live evidence on `192.168.8.4`**: migrations 041/042/043 applied manually
+  (local migrations only run at `initdb`); 7 customer families with the
+  `spam_filtering` floor intact; RLS active on both new tables and mailcore
+  granted only the privileges it needs; an `ob2-customer-admin` session returned
+  `tier: "customer"`, `platform: null` and
+  `capabilities.defineRoles = {allowed:false, blocker:"role"}`; notification
+  settings PUT flipped `effective.deliverable` from `false` to `true` and a
+  recipient on an unverified domain was refused with
+  `RECIPIENT_DOMAIN_NOT_VERIFIED`; another tenant's `:customerId` returned 404;
+  role-definition writes were denied with "role definition changes require the
+  builtin system_admin role" and self-grants with "cannot modify own roles", both
+  audited; acknowledge returned `changed: true` and then `changed: false` on a
+  fresh idempotency key. At 1440x900 the tenant console shows the grouped
+  navigation, the self-row lock sentence, the read-only role list, the "Show only
+  what you can change" policy filter, `admin:customers:manage` named on every
+  locked customer action, and the "BIMI is not ready" toast after a real
+  Acknowledge click.
+- **Unexecuted, and why**: the new PostgreSQL cases (notification settings
+  persistence, delivery ledger, acknowledgment) compile under `cargo clippy
+  --all-targets` but did not run. Every `--ignored` case through the SSH tunnel
+  fails at `connect()` with PostgreSQL `28P01`: the volume's stored verifier for
+  the superuser `nullapart` no longer matches `.env.local`, while `pg_hba.conf`
+  is `trust` for `127.0.0.1/32`, so in-container success proves nothing about
+  tunnelled auth. Repairing it means `ALTER ROLE nullapart PASSWORD` on shared
+  infrastructure, which needs an explicit decision rather than being done to make
+  a gate look green.

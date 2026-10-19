@@ -641,3 +641,42 @@ Known limitations:
   explicit customer policy are implemented. Phase 5 enforces the privacy
   distinction by quarantining metadata only and never handing `ruf` content to
   aggregate parsing, logs, UI rendering or training.
+
+## Tenant domain-security notices (2026-10-19)
+
+Phase 5 recorded findings and readiness states, but a customer only learned about
+them by opening the console. Tenant notification settings close that gap and keep
+every Phase 5 privacy boundary: the notice carries the finding, the domain and
+the remediation text already stored, never message content.
+
+- `GET/PUT /api/v1/notifications/settings` and
+  `POST /api/v1/notifications/findings/{id}/acknowledge` are scoped from the
+  authenticated session, not from a client-supplied customer id (`188948e`,
+  migrations `042_tenant_notification_settings.sql`,
+  `043_notification_acknowledgment.sql`).
+- Recipients are refused with `RECIPIENT_DOMAIN_NOT_VERIFIED` unless the
+  recipient address sits on one of the tenant's own verified domains, so a
+  customer cannot turn the service mailer into an exfiltration path to an address
+  it does not control.
+- The delivery worker (`crates/mail-core/src/notification_delivery.rs`) sends
+  through the private outbound path and fails closed on DKIM: a domain is
+  mailable only when it appears in `NULLAPART_OUTBOUND_DKIM_IDENTITIES`
+  (`domain:selector`) **and** is verified. A skipped notice writes no `sent` row,
+  so the ledger never claims a delivery that did not happen.
+  `docs/runbooks/OUTBOUND-DKIM-SIGNING.md` documents the provisioning boundary
+  and the `..._WORKER_ENABLED=false` switch.
+- Delivery is recorded in `notification_deliveries` under
+  `notification:<domain_security_notifications.id>`, retries are bounded, and a
+  finding whose content changed before a retry is recorded as
+  `content_changed_before_retry` rather than mailed as a stale notice. Digest
+  windows coalesce repeated findings instead of mailing each one.
+- Live on `.4` (`6c14414`): settings `GET → PUT → GET` flipped
+  `effective.deliverable` from `false` to `true` once a verified recipient was
+  added; the unverified recipient was refused; acknowledge returned
+  `changed: true` and then `changed: false` with a fresh idempotency key, and
+  both the change and the earlier denials are in the audit trail. At 1440x900 a
+  customer-admin session closed the "BIMI is not ready" finding from the domain
+  security surface.
+- The RLS-backed persistence tests for these tables are written and compile, but
+  did not execute: tunnelled `--ignored` connections to the `.4` volume currently
+  fail with PostgreSQL `28P01` (see the Phase 3 2026-10-19 entry).
