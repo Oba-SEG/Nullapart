@@ -1032,8 +1032,76 @@ warnings` clean, `cargo test --test postgres_trace --no-run` links.
 **What this does not prove.** The `postgres_trace` assertions are `#[ignore]`d DB
 tests and compile-verify only: the local tunnel to the test database has been
 broken since the RBAC pass. The live wire sweep on `.4` and migration `044` are
-still outstanding (task 81). Two of the four answers remain: the quarantine
-checks' capability keys, status and duration, and the internal failure prose in
+still outstanding (task 81). One of the four answers remained: the internal
+failure prose in `GET /notifications/settings` delivery rows. The quarantine
+check internals are handled in the pass below.
+
+## Landed in the eighteenth pass (a held message answers with a verdict, not a run report)
+
+This closes the quarantine answer from the same list of four. The customer read
+of a case carried three facts about the platform's scanning machinery: the
+fabric's own status token (`clean`, `error`, `unknown`, `not_applicable`),
+whether the delivery decision _required_ that check, and how many milliseconds
+the scanner ran.
+
+- **`capability` was already safe, and checking that changed the plan.** The
+  stored row's `capability` is produced by `scanner_capability_label` at
+  `crates/mail-core/src/quarantine.rs:868`, which is fed the raw scanner id and
+  returns a human name before anything is persisted. So the leak was never the
+  check's name; it was the run telemetry beside it. The fix projects those three
+  keys away instead of renaming the one that was fine.
+- **One additive key: `outcome`.** A customer decides whether to release a held
+  message, so they need the verdict, and a withheld verdict is worse than a
+  withheld duration. `crates/mail-core/src/quarantine_api.rs` now emits
+  `outcome` for a customer placement and `status` / `required` / `duration_ms`
+  for a platform one, each `#[serde(skip_serializing_if = "Option::is_none")]`
+  so the other side's key is absent rather than null. Same shape as the
+  sixteenth and seventeenth passes, and for the same contract reason: an
+  existing endpoint gains a key, it does not lose one.
+- **The status vocabulary projects onto one axis.** `customer_check_outcome`
+  maps the six stored tokens onto `clear`, `threat_found`, `suspicious_found`,
+  `not_applicable`, `no_answer`. Anything it does not recognise answers
+  `no_answer`, never `clear`. That is AGENTS.md's "unknown/scanner/model failure
+  never silently becomes CLEAN" applied to the wording a tenant reads, and the
+  unit test walks all eight cases including an empty string.
+- **The old label was wrong, not just platform-ish.** `checkOutcomeLabel` used
+  to take the raw status and call everything that was not `healthy` / `complete`
+  "Not completed" — so a real `threat` result rendered as "Not completed" to a
+  tenant. The customer answer now carries an outcome key and
+  `frontend/src/lib/status.ts` maps it to "No issue found", "Threat found",
+  "Something suspicious", "No answer recorded", "Not applicable", with the same
+  fail-closed default for a missing or unknown key.
+- **The route, not only the projection.** A unit test on `from_detail` would not
+  have caught the handler forgetting to ask who is reading. `quarantine_api.rs`
+  now has a store double that answers `detail` with one recorded check, and one
+  test that reads the same case twice through `quarantine_router`: as
+  `customer_admin` (gets `outcome: "threat_found"`, `capability` and
+  `completed_at`, and none of `status` / `required` / `duration_ms`) and as
+  `system_admin` (gets `status: "threat"` and no `outcome`). Proven red by
+  hard-coding `platform = true` in the handler: the customer half failed before
+  it was restored.
+- **The guard keeps a platform row on purpose.** The `Held message` fixture now
+  has two checks: one answering the way a platform seat would, with `status`
+  "healthy", `required` true and `duration_ms` 41 but no `outcome`, and one with
+  `outcome: "suspicious_found"`. A tenant page that branches on payload presence
+  rather than placement would print `healthy` here and be caught. Proven red by
+  rendering the raw key next to the capability: the surface reported a
+  `"machine key"` hit on `suspicious_found` before the page was restored.
+
+**Gates**: `cargo fmt --all`, `cargo test -p nullapart-mail-core --lib` 646
+passed (1 ignored), `cargo clippy -p nullapart-mail-core --all-targets -- -D
+warnings` clean, `cargo test --test postgres_quarantine_detail --no-run` links.
+`pnpm check-all` green (309 tests, 34 files).
+
+**What this does not prove.** The route test answers from an in-memory store
+double, so it covers the handler and the projection but not the SQL read that
+turns a `scanner_results` row into a `QuarantineScannerResult`. That
+read is unchanged here and its `postgres_quarantine_detail` test stays
+`#[ignore]`d, compile-verify only, for the same broken local tunnel.
+`scanner_results` exists only on the detail answer, so the list projection had
+nothing to withhold. `/api/v1/scanner-operations` sits behind
+`scanner:operations:view`, a permission no role in the catalog grants, and is
+outside this slice. The remaining named leak is the internal failure prose in
 `GET /notifications/settings` delivery rows.
 
 ## Deploy incident: never `rsync --delete` to `.4`

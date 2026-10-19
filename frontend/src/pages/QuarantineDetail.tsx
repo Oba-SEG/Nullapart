@@ -41,8 +41,13 @@ interface QuarantineRetention {
 
 interface QuarantineScannerResult {
   capability: string;
-  status: string;
-  required: boolean;
+  /** What the check concluded, in customer keys. The platform answer omits it. */
+  outcome?: string;
+  /** The fabric's own status token. The customer answer omits the key. */
+  status?: string;
+  /** Whether the delivery decision required the check. The customer answer omits it. */
+  required?: boolean;
+  /** How long the check ran. The customer answer omits the key. */
   duration_ms?: number | null;
   completed_at: string;
 }
@@ -311,7 +316,7 @@ export function QuarantineDetail() {
                       <td>{result.capability}</td>
                       <td>
                         {tenant
-                          ? checkOutcomeLabel(result.status)
+                          ? checkOutcomeLabel(result.outcome)
                           : scannerStatusLabel(result.status)}
                       </td>
                       {tenant ? null : (

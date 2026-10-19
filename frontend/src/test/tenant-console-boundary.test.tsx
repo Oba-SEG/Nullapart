@@ -433,6 +433,10 @@ const tenantHeldMessage = {
   scanner_results: [
     {
       capability: "Malware analysis",
+      // A platform answer read by a tenant seat: the status token, the
+      // requirement and the wall clock all stay here on purpose, and there is no
+      // outcome key, so a projection regression shows up as a machine word on the
+      // page rather than a passing render.
       status: "healthy",
       required: true,
       duration_ms: 41,
@@ -440,9 +444,7 @@ const tenantHeldMessage = {
     },
     {
       capability: "URL reputation",
-      status: "degraded",
-      required: false,
-      duration_ms: null,
+      outcome: "suspicious_found",
       completed_at: "2026-01-06T09:49:57Z",
     },
   ],
@@ -973,6 +975,7 @@ const SURFACES: Surface[] = [
     path: "/quarantine/$tenant_message_id",
     entry: "/quarantine/7d2c4e6a-1111-2222-3333-444455556666",
     component: QuarantineDetail,
+    ready: "Something suspicious",
   },
   { name: "Messages", path: "/messages", entry: "/messages", component: Messages },
   {

@@ -33,6 +33,50 @@ function renderDetail() {
   );
 }
 
+const tenantSession = {
+  authenticated: true,
+  userId: "actor-2",
+  email: "tenant-admin@example.test",
+  roles: ["customer_admin"],
+  permissions: ["quarantine:view", "quarantine:release"],
+  customerId: "CZA-1",
+  expiresAt: "2099-01-01T00:00:00Z",
+  csrfToken: "csrf-token",
+  impersonation: null,
+  tier: "customer",
+};
+
+/**
+ * Serves one detail answer to a tenant seat. The rows carry the platform's run
+ * telemetry as well, which a real customer answer would not: if the console ever
+ * renders that instead of the outcome, this fixture shows it.
+ */
+function stubTenantDetail(scannerResults: unknown[]) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const body = String(input).includes("/auth/session")
+        ? { data: tenantSession }
+        : {
+            data: {
+              tenant_message_id: "tenant-message-1",
+              transaction_id: "transaction-1",
+              sender: "newsletter@partner.example",
+              recipient_count: 2,
+              reason_code: "QUARANTINE_MALWARE",
+              quarantined_at: "2026-01-01T00:00:00Z",
+              released_at: null,
+              release_allowed: true,
+              findings: [],
+              audit: [],
+              scanner_results: scannerResults,
+            },
+          };
+      return { ok: true, status: 200, json: async () => body };
+    }),
+  );
+}
+
 describe("QuarantineDetail", () => {
   it("renders retention, audit and capability labels without engine exposure", async () => {
     vi.stubGlobal(
@@ -116,5 +160,47 @@ describe("QuarantineDetail", () => {
     renderDetail();
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/not found|unavailable/i);
+  });
+
+  /**
+   * A tenant's check table reads as what the platform concluded about their own
+   * message. The run report behind a check (its status token, whether the fabric
+   * required it, how long it took) is not on a customer answer, so an answer that
+   * still carries it must not reach the page either.
+   */
+  it("names each check outcome for a tenant and hides the run report", async () => {
+    stubTenantDetail([
+      {
+        capability: "Malware analysis",
+        outcome: "clear",
+        status: "clean",
+        required: true,
+        duration_ms: 41,
+        completed_at: "2026-01-01T00:00:01Z",
+      },
+      {
+        capability: "URL reputation",
+        outcome: "threat_found",
+        completed_at: "2026-01-01T00:00:02Z",
+      },
+      {
+        capability: "Document safety",
+        outcome: "no_answer",
+        completed_at: "2026-01-01T00:00:03Z",
+      },
+    ]);
+    renderDetail();
+
+    expect(await screen.findByText("No issue found")).toBeTruthy();
+    expect(screen.getByText("Threat found")).toBeTruthy();
+    expect(screen.getByText("No answer recorded")).toBeTruthy();
+
+    expect(screen.queryByText("Requirement")).toBeNull();
+    expect(screen.queryByText("Duration")).toBeNull();
+    expect(screen.queryByText("41 ms")).toBeNull();
+    const body = document.body.textContent ?? "";
+    for (const withheld of ["clean", "threat_found", "no_answer"]) {
+      expect(body, `tenant check table carried ${withheld}`).not.toContain(withheld);
+    }
   });
 });

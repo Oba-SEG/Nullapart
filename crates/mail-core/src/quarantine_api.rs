@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use nullapart_policy::TenantContext;
 
+use crate::admin_rbac::platform_placement;
 use crate::quarantine::{
     AuthorizedQuarantineRelease, QuarantineError, QuarantineFindingSummary,
     QuarantineReleaseRequest, QuarantineService,
@@ -80,6 +81,9 @@ impl QuarantineFindingResponse {
 /// Safe detail projection for one case. It adds retention state, audit
 /// linkage and capability-labelled scanner results to the list projection;
 /// it still carries no raw content, artifact location or engine diagnostic.
+/// A check's run telemetry (its status token, whether the fabric required it and
+/// how long it took) is written for a platform seat; a customer is answered with
+/// the outcome instead.
 #[derive(Debug, Serialize)]
 pub struct QuarantineDetailResponse {
     #[serde(flatten)]
@@ -102,10 +106,60 @@ pub struct QuarantineRetentionResponse {
 #[derive(Debug, Serialize)]
 pub struct QuarantineScannerResultResponse {
     pub capability: String,
-    pub status: String,
-    pub required: bool,
+    /// What the check concluded about this message. Emitted only for a customer
+    /// placement, and only under this name: a customer decides whether to release
+    /// a held message, so they need the verdict, and `no_answer` is the one state
+    /// that must never read as a clean result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+    /// The fabric's own status token for the run. Absent for a customer
+    /// placement: `error`, `unknown` and `not_applicable` are words about the
+    /// platform's scanning machinery, and the verdict a tenant acts on travels
+    /// as `outcome` instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// Whether the platform's delivery decision required this check. Absent for
+    /// a customer placement: it is fabric topology, not a fact about the mail.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required: Option<bool>,
+    /// Wall clock the scanner took. Absent for a customer placement, and for a
+    /// platform run that recorded no timing.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<i64>,
     pub completed_at: DateTime<Utc>,
+}
+
+/// Projects one stored check onto the answer for the seat reading it: a customer
+/// gets the outcome, a platform seat gets the run telemetry it triages with.
+fn scanner_result_view(
+    result: crate::quarantine::QuarantineScannerResult,
+    platform: bool,
+) -> QuarantineScannerResultResponse {
+    QuarantineScannerResultResponse {
+        capability: result.capability,
+        outcome: (!platform).then_some(customer_check_outcome(&result.status).to_string()),
+        status: platform.then_some(result.status),
+        required: platform.then_some(result.required),
+        duration_ms: platform.then_some(result.duration_ms).flatten(),
+        completed_at: result.completed_at,
+    }
+}
+
+/// Projects a stored scanner status onto the one axis a customer reads: did this
+/// check answer, and what did it say about the message.
+///
+/// An unrecognised status answers `no_answer` rather than `clear`. A check the
+/// console cannot interpret has not told the tenant anything, and the fail-closed
+/// rule that keeps an unknown scan from becoming CLEAN applies to the wording too.
+fn customer_check_outcome(status: &str) -> &'static str {
+    match status {
+        "clean" => "clear",
+        "threat" => "threat_found",
+        "suspicious" => "suspicious_found",
+        "not_applicable" => "not_applicable",
+        "unknown" | "error" => "no_answer",
+        _ => "no_answer",
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -138,7 +192,11 @@ impl QuarantineCaseResponse {
 }
 
 impl QuarantineDetailResponse {
-    fn from_detail(detail: crate::quarantine::QuarantineDetail, release_allowed: bool) -> Self {
+    fn from_detail(
+        detail: crate::quarantine::QuarantineDetail,
+        release_allowed: bool,
+        platform: bool,
+    ) -> Self {
         let crate::quarantine::QuarantineDetail {
             item,
             retention,
@@ -164,13 +222,7 @@ impl QuarantineDetailResponse {
             }),
             scanner_results: scanner_results
                 .into_iter()
-                .map(|result| QuarantineScannerResultResponse {
-                    capability: result.capability,
-                    status: result.status,
-                    required: result.required,
-                    duration_ms: result.duration_ms,
-                    completed_at: result.completed_at,
-                })
+                .map(|result| scanner_result_view(result, platform))
                 .collect(),
             audit: audit
                 .into_iter()
@@ -220,6 +272,7 @@ async fn get_quarantine(
         );
     };
     let release_allowed = AuthorizedQuarantineRelease::from_authenticated_context(&context).is_ok();
+    let platform = platform_placement(&context);
     match state
         .service
         .detail(
@@ -231,7 +284,7 @@ async fn get_quarantine(
         Ok(detail) => (
             StatusCode::OK,
             Json(ApiEnvelope {
-                data: QuarantineDetailResponse::from_detail(detail, release_allowed),
+                data: QuarantineDetailResponse::from_detail(detail, release_allowed, platform),
             }),
         )
             .into_response(),
@@ -403,8 +456,9 @@ mod tests {
 
     use super::*;
     use crate::quarantine::{
-        InMemoryQuarantineRepository, QuarantineCase, QUARANTINE_RELEASE_PERMISSION,
-        QUARANTINE_VIEW_PERMISSION,
+        InMemoryQuarantineRepository, QuarantineCase, QuarantineCreateRequest, QuarantineDetail,
+        QuarantineListItem, QuarantineRepository, QuarantineScannerResult,
+        QUARANTINE_RELEASE_PERMISSION, QUARANTINE_VIEW_PERMISSION,
     };
 
     fn context(customer_id: &str, step_up: bool) -> TenantContext {
@@ -436,6 +490,12 @@ mod tests {
             session_id: "session".to_string(),
             authenticated_at: Utc::now(),
         }
+    }
+
+    fn platform_context(customer_id: &str) -> TenantContext {
+        let mut context = context(customer_id, false);
+        context.actor.roles = vec![crate::admin_rbac::SYSTEM_ADMIN_ROLE.to_string()];
+        context
     }
 
     #[tokio::test]
@@ -543,6 +603,222 @@ mod tests {
                 !rendered.contains(forbidden),
                 "detail leaked {forbidden}: {rendered}"
             );
+        }
+    }
+
+    /// One case with one recorded check, so both seats can read the same detail
+    /// projection without a database.
+    fn detail_fixture(status: &str) -> crate::quarantine::QuarantineDetail {
+        crate::quarantine::QuarantineDetail {
+            item: QuarantineListItem {
+                case: QuarantineCase {
+                    tenant_message_id: TenantMessageId::new(),
+                    transaction_id: TransactionId::new(),
+                    deployment_id: nullapart_mail_contracts::DeploymentId::new("LOCAL-TEST"),
+                    customer_id: CustomerId::new("customer-a"),
+                    artifact_id: ArtifactId::new(),
+                    reason_code: ReasonCode::quarantine_malware(),
+                    quarantined_at: Utc::now(),
+                    released_at: None,
+                    released_by: None,
+                    release_reason: None,
+                },
+                envelope_sender: "newsletter@partner.example".to_string(),
+                recipient_count: 2,
+                findings: Vec::new(),
+            },
+            retention: None,
+            scanner_results: vec![QuarantineScannerResult {
+                capability: "Malware analysis".to_string(),
+                status: status.to_string(),
+                required: true,
+                duration_ms: Some(41),
+                completed_at: Utc::now(),
+            }],
+            audit: Vec::new(),
+        }
+    }
+
+    /// A detail store that answers with recorded checks, so the placement split
+    /// can be proven through the route instead of by calling the projection by
+    /// hand. Create and release are not part of this double.
+    struct CheckStoreRepository {
+        item: QuarantineListItem,
+        checks: Vec<QuarantineScannerResult>,
+    }
+
+    #[async_trait::async_trait]
+    impl QuarantineRepository for CheckStoreRepository {
+        async fn create(
+            &self,
+            _request: &QuarantineCreateRequest,
+        ) -> Result<QuarantineCase, QuarantineError> {
+            Err(QuarantineError::NotFound)
+        }
+
+        async fn release(
+            &self,
+            _authorization: &AuthorizedQuarantineRelease,
+            _request: &QuarantineReleaseRequest,
+        ) -> Result<QuarantineCase, QuarantineError> {
+            Err(QuarantineError::NotFound)
+        }
+
+        async fn list(
+            &self,
+            customer_id: &CustomerId,
+            deployment_id: &nullapart_mail_contracts::DeploymentId,
+        ) -> Result<Vec<QuarantineListItem>, QuarantineError> {
+            if self.item.case.customer_id == *customer_id
+                && self.item.case.deployment_id == *deployment_id
+            {
+                Ok(vec![self.item.clone()])
+            } else {
+                Ok(Vec::new())
+            }
+        }
+
+        async fn detail(
+            &self,
+            customer_id: &CustomerId,
+            deployment_id: &nullapart_mail_contracts::DeploymentId,
+            tenant_message_id: &TenantMessageId,
+        ) -> Result<QuarantineDetail, QuarantineError> {
+            let item = self
+                .list(customer_id, deployment_id)
+                .await?
+                .into_iter()
+                .find(|item| item.case.tenant_message_id == *tenant_message_id)
+                .ok_or(QuarantineError::NotFound)?;
+            Ok(QuarantineDetail {
+                item,
+                retention: None,
+                scanner_results: self.checks.clone(),
+                audit: Vec::new(),
+            })
+        }
+    }
+
+    /// The placement split is decided by the seat that asked, not by what the
+    /// store happened to record, so both reads below hit the same route with the
+    /// same stored check.
+    #[tokio::test]
+    async fn the_detail_route_writes_the_outcome_for_a_customer_and_the_run_report_for_the_platform(
+    ) {
+        let detail = detail_fixture("threat");
+        let repository = Arc::new(CheckStoreRepository {
+            item: detail.item.clone(),
+            checks: detail.scanner_results.clone(),
+        }) as Arc<dyn QuarantineRepository>;
+        let app = quarantine_router(QuarantineApiState::new(QuarantineService::new(repository)));
+        let path = format!(
+            "/api/v1/quarantine/{}",
+            detail.item.case.tenant_message_id.0
+        );
+
+        let read = |context| {
+            let app = app.clone();
+            let path = path.clone();
+            async move {
+                let response = app
+                    .oneshot(
+                        Request::get(&path)
+                            .extension(context)
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                serde_json::from_slice::<serde_json::Value>(&body).expect("detail json")
+            }
+        };
+
+        let customer = read(context("customer-a", false)).await;
+        let customer_check = &customer["data"]["scanner_results"][0];
+        assert_eq!(customer_check["outcome"], serde_json::json!("threat_found"));
+        assert_eq!(
+            customer_check["capability"],
+            serde_json::json!("Malware analysis")
+        );
+        for withheld in ["status", "required", "duration_ms"] {
+            assert!(
+                customer_check.get(withheld).is_none(),
+                "customer route answer carried {withheld}: {customer_check}"
+            );
+        }
+
+        let platform = read(platform_context("customer-a")).await;
+        let platform_check = &platform["data"]["scanner_results"][0];
+        assert_eq!(platform_check["status"], serde_json::json!("threat"));
+        assert!(
+            platform_check.get("outcome").is_none(),
+            "platform route answer carried an outcome key: {platform_check}"
+        );
+    }
+
+    /// A check's run telemetry is the platform's own bookkeeping: which status
+    /// token the fabric recorded, whether the delivery decision required the
+    /// check, and how long it ran. What a tenant needs from the same row is
+    /// whether the check answered, so the customer answer carries one outcome key
+    /// and none of the other three.
+    #[test]
+    fn a_customer_detail_answer_names_the_check_outcome_and_omits_the_run_report() {
+        let body = serde_json::to_value(QuarantineDetailResponse::from_detail(
+            detail_fixture("error"),
+            true,
+            false,
+        ))
+        .expect("detail serializes");
+        let check = &body["scanner_results"][0];
+
+        assert_eq!(check["outcome"], serde_json::json!("no_answer"));
+        for withheld in ["status", "required", "duration_ms"] {
+            assert!(
+                check.get(withheld).is_none(),
+                "customer detail carried {withheld}: {check}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_platform_detail_answer_keeps_the_run_report_it_triages_with() {
+        let body = serde_json::to_value(QuarantineDetailResponse::from_detail(
+            detail_fixture("clean"),
+            true,
+            true,
+        ))
+        .expect("detail serializes");
+        let check = &body["scanner_results"][0];
+
+        assert_eq!(check["status"], serde_json::json!("clean"));
+        assert_eq!(check["required"], serde_json::json!(true));
+        assert_eq!(check["duration_ms"], serde_json::json!(41));
+        assert!(
+            check.get("outcome").is_none(),
+            "platform detail carried an outcome key: {check}"
+        );
+    }
+
+    /// A status the projection does not know is answered as no outcome, never as
+    /// a clear result: the rule that keeps an inconclusive scan from becoming
+    /// CLEAN applies to the wording a customer reads as well.
+    #[test]
+    fn check_statuses_project_onto_outcomes_and_never_default_to_clear() {
+        for (status, expected) in [
+            ("clean", "clear"),
+            ("threat", "threat_found"),
+            ("suspicious", "suspicious_found"),
+            ("unknown", "no_answer"),
+            ("error", "no_answer"),
+            ("not_applicable", "not_applicable"),
+            ("healthy", "no_answer"),
+            ("", "no_answer"),
+        ] {
+            assert_eq!(customer_check_outcome(status), expected, "for {status}");
         }
     }
 

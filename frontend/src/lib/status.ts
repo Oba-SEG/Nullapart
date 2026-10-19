@@ -70,21 +70,35 @@ const SCANNER_STATUS_LABELS: Record<string, string> = {
   failed: "Failed",
 };
 
-export function scannerStatusLabel(status: string): string {
+export function scannerStatusLabel(status: string | undefined): string {
+  if (status === undefined) return "Not reported";
   return SCANNER_STATUS_LABELS[status.toLowerCase()] ?? status;
 }
 
 /**
- * Whether a check on this message produced an answer, in the words a customer
- * needs. The engine's own health reads as `healthy` or `unavailable`, which
- * describes the platform; a customer only has to know that a check answered or
- * did not, because an unanswered check is why a hold may still be open.
+ * What a check concluded about this message, in the words a customer decides
+ * with. The server's customer answer carries one of these keys and none of the
+ * platform's own status token, which reads as `error` or `unknown` and describes
+ * the machinery rather than the mail. An unanswered check matters: it is one
+ * reason a hold is still open.
  */
-export function checkOutcomeLabel(status: string): string {
-  const key = status.toLowerCase();
-  return key === "healthy" || key === "complete" || key === "completed"
-    ? "Completed"
-    : "Not completed";
+const CHECK_OUTCOME_LABELS: Record<string, string> = {
+  clear: "No issue found",
+  threat_found: "Threat found",
+  suspicious_found: "Something suspicious",
+  no_answer: "No answer recorded",
+  not_applicable: "Not applicable",
+};
+
+/**
+ * An outcome the console cannot interpret is reported as no answer, never as a
+ * clean result. That is the same fail-closed rule the scanner runs under, applied
+ * to the wording: a tenant reading a held message must not be able to mistake an
+ * unread check for a passed one.
+ */
+export function checkOutcomeLabel(outcome: string | undefined): string {
+  if (outcome === undefined) return CHECK_OUTCOME_LABELS.no_answer;
+  return CHECK_OUTCOME_LABELS[outcome.toLowerCase()] ?? CHECK_OUTCOME_LABELS.no_answer;
 }
 
 export function requirementLabel(requirement: string): string {
