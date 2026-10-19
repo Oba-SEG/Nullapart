@@ -447,3 +447,150 @@ async fn source_classification_mutation_is_idempotent_audited_and_scoped() {
         .expect("cross-tenant classification route must answer");
     assert_eq!(cross_tenant.status(), StatusCode::NOT_FOUND);
 }
+
+async fn seed_notification(pool: &PgPool, fixture: &Fixture, title: &str) -> Uuid {
+    sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO domain_security_notifications (\
+            deployment_id, customer_id, domain_id, notification_type, severity, title, detail\
+         ) VALUES ($1, $2, $3, 'dkim_selector_failure', 'critical', $4, 'Selector s1 no longer answers') \
+         RETURNING id",
+    )
+    .bind(&fixture.deployment_id)
+    .bind(&fixture.customer_id)
+    .bind(fixture.domain_id)
+    .bind(title)
+    .fetch_one(pool)
+    .await
+    .expect("notification fixture must insert")
+}
+
+async fn acknowledge(
+    pool: &PgPool,
+    fixture: &Fixture,
+    notification_id: Uuid,
+    key: &str,
+) -> (StatusCode, Value) {
+    let response = domain_security_router(DomainSecurityState::new(
+        pool.clone(),
+        DeploymentId::new(&fixture.deployment_id),
+    ))
+    .layer(Extension(context(fixture)))
+    .oneshot(
+        Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/api/v1/domain-security/notifications/{notification_id}/acknowledge"
+            ))
+            .header("x-idempotency-key", key)
+            .body(Body::empty())
+            .expect("request must build"),
+    )
+    .await
+    .expect("acknowledge route must answer");
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body must buffer");
+    (
+        status,
+        serde_json::from_slice(&bytes).expect("response must be JSON"),
+    )
+}
+
+#[tokio::test]
+#[ignore = "requires migrated local PostgreSQL through 043_notification_acknowledgment.sql"]
+async fn notification_acknowledgment_is_scoped_audited_and_stays_visible_as_history() {
+    let pool = connect().await;
+    let suffix = Uuid::new_v4().simple().to_string();
+    let primary = seed_fixture(&pool, &suffix, "primary-ack").await;
+    let other = seed_fixture(&pool, &suffix, "other-ack").await;
+    seed_domain_security_rows(&pool, &primary).await;
+    let notification_id = seed_notification(&pool, &primary, "DKIM selector broken").await;
+    let foreign_notification = seed_notification(&pool, &other, "DKIM selector broken").await;
+
+    let (status, value) =
+        acknowledge(&pool, &primary, notification_id, &format!("ack-{suffix}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(value["data"]["status"], "acknowledged");
+    assert_eq!(value["data"]["changed"], true);
+    assert_eq!(value["data"]["acknowledged_by"], "operator@example.test");
+
+    let stored: (String, Option<String>, i64) = sqlx::query_as(
+        "SELECT status, acknowledged_by, count(*) OVER ()::bigint \
+         FROM domain_security_notifications WHERE id = $1",
+    )
+    .bind(notification_id)
+    .fetch_one(&pool)
+    .await
+    .expect("acknowledged notification must be readable");
+    assert_eq!(
+        stored,
+        (
+            "acknowledged".to_string(),
+            Some("operator@example.test".to_string()),
+            1
+        )
+    );
+
+    let audit_count: i64 = sqlx::query_scalar(
+        "SELECT count(*)::bigint FROM audit_events \
+         WHERE deployment_id = $1 AND action = 'domain_security_notification_acknowledged'",
+    )
+    .bind(&primary.deployment_id)
+    .fetch_one(&pool)
+    .await
+    .expect("audit count must be readable");
+    assert_eq!(audit_count, 1);
+
+    // The open queue drops it and the acknowledgment history keeps it, so the
+    // alert is resolved from the worklist without disappearing from the tenant.
+    let projection = domain_security_router(DomainSecurityState::new(
+        pool.clone(),
+        DeploymentId::new(&primary.deployment_id),
+    ))
+    .layer(Extension(context(&primary)))
+    .oneshot(
+        Request::builder()
+            .uri("/api/v1/domain-security")
+            .body(Body::empty())
+            .expect("request must build"),
+    )
+    .await
+    .expect("projection must answer");
+    assert_eq!(projection.status(), StatusCode::OK);
+    let bytes = to_bytes(projection.into_body(), usize::MAX)
+        .await
+        .expect("response body must buffer");
+    let view: Value = serde_json::from_slice(&bytes).expect("response must be JSON");
+    assert!(view["data"]["notifications"]
+        .as_array()
+        .expect("notifications array")
+        .iter()
+        .all(|item| item["id"] != notification_id.to_string()));
+    let acknowledged = view["data"]["recent_acknowledgments"]
+        .as_array()
+        .expect("recent acknowledgments array");
+    assert_eq!(acknowledged.len(), 1);
+    assert_eq!(acknowledged[0]["id"], notification_id.to_string());
+    assert!(acknowledged[0]["acknowledged_at"].is_string());
+
+    // Replaying the key returns the recorded response and writes nothing more.
+    let (replay_status, replay) =
+        acknowledge(&pool, &primary, notification_id, &format!("ack-{suffix}")).await;
+    assert_eq!(replay_status, StatusCode::OK);
+    assert_eq!(replay["data"], value["data"]);
+
+    // A second operator with a new key learns it was already handled.
+    let (second_status, second) =
+        acknowledge(&pool, &primary, notification_id, "ack-second-operator").await;
+    assert_eq!(second_status, StatusCode::OK);
+    assert_eq!(second["data"]["changed"], false);
+    assert_eq!(
+        second["data"]["acknowledged_at"],
+        value["data"]["acknowledged_at"]
+    );
+
+    // Another tenant's notification id is not reachable, even with manage rights.
+    let (cross_status, _) = acknowledge(&pool, &primary, foreign_notification, "ack-cross").await;
+    assert_eq!(cross_status, StatusCode::NOT_FOUND);
+}

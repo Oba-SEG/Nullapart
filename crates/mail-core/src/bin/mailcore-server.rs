@@ -27,6 +27,10 @@ use nullapart_mail_core::domain_security::{domain_security_router, DomainSecurit
 use nullapart_mail_core::handoff::HandoffConfig;
 use nullapart_mail_core::inline_ml::stage::InlineMlStage;
 use nullapart_mail_core::model_registry::{model_registry_router, ModelRegistryState};
+use nullapart_mail_core::notification_api::{notification_router, NotificationApiState};
+use nullapart_mail_core::notification_delivery::{
+    NotificationDeliveryConfig, NotificationDeliveryWorker,
+};
 use nullapart_mail_core::operations_api::{operations_router, OperationsState};
 use nullapart_mail_core::outbound_intelligence_api::{
     outbound_intelligence_router, OutboundIntelligenceApiState,
@@ -164,6 +168,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             DomainObserverConfig::default(),
         );
         tokio::spawn(domain_observer_worker.run());
+    }
+    // Service notices are a side channel: an unconfigured or unprovisioned
+    // delivery worker must never stop the mail node from starting. The error
+    // is logged at every boot and no notice is claimed, so the delivery ledger
+    // stays empty rather than reporting sends that did not happen.
+    if env::var("NULLAPART_NOTIFICATION_DELIVERY_WORKER_ENABLED")
+        .map(|value| value != "false")
+        .unwrap_or(true)
+    {
+        match NotificationDeliveryConfig::from_env(&node_id).and_then(|config| {
+            NotificationDeliveryWorker::new(pool.clone(), deployment_id.clone(), config)
+        }) {
+            Ok(worker) => {
+                tokio::spawn(worker.run());
+            },
+            Err(error) => tracing::error!(
+                %error,
+                "notification delivery worker is not running: fix the configuration or set \
+                 NULLAPART_NOTIFICATION_DELIVERY_WORKER_ENABLED=false to silence this"
+            ),
+        }
     }
 
     let mut trace_config = TraceConfig {
@@ -368,6 +393,10 @@ async fn local_quarantine_api(
         .merge(outbound_intelligence_router(
             OutboundIntelligenceApiState::new(pool.clone(), deployment_id.clone()),
         ))
+        .merge(notification_router(NotificationApiState::new(
+            pool.clone(),
+            deployment_id.clone(),
+        )))
         .merge(connectors_remediation_router(
             ConnectorsRemediationState::new(pool.clone(), deployment_id.clone()),
         ))

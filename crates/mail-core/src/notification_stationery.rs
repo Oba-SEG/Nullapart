@@ -1,9 +1,9 @@
-//! Branded, content-safe stationery for future Nullapart service notices.
+//! Branded, content-safe stationery for Nullapart service notices.
 //!
-//! This module deliberately renders a complete HTML and plain-text alternative
-//! but does **not** send mail. Dispatch remains an explicit, audited workflow
-//! owned by the phase that introduces it. Keeping the template pure avoids a
-//! styling change accidentally becoming a new outbound side effect.
+//! This module renders a complete HTML and plain-text alternative and nothing
+//! else: it stays pure so a styling change cannot accidentally become an
+//! outbound side effect. Dispatch lives in `notification_delivery`, which is
+//! the audited, ledger-backed workflow that consumes these templates.
 
 /// Content supplied by a trusted server-side notification workflow.
 ///
@@ -34,9 +34,9 @@ pub const EMAIL_STATIONERY_BANNER_CONTENT_ID: &str = "nullapart-stationery-banne
 const EMAIL_STATIONERY_BANNER_PNG: &[u8] =
     include_bytes!("../assets/brand/nullapart-email-stationery-banner@2x.png");
 
-/// Return supplied stationery artwork that a future mail composer may attach as
-/// a CID part. `render_html` intentionally does not reference it yet: this
-/// repository has no reviewed notification dispatch/attachment composer.
+/// Return supplied stationery artwork that a mail composer may attach as a CID
+/// part. `render_html` intentionally does not reference it yet: the current
+/// delivery worker sends text and HTML alternatives only, with no attachments.
 #[must_use]
 pub fn inline_assets() -> [InlineStationeryAsset; 1] {
     [InlineStationeryAsset {

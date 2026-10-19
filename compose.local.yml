@@ -86,6 +86,15 @@ services:
       NULLAPART_OIDC_CLIENT_SECRET: ${NULLAPART_OIDC_CLIENT_SECRET:-}
       NULLAPART_OIDC_REDIRECT_URI: ${NULLAPART_OIDC_REDIRECT_URI:-}
       NULLAPART_OIDC_SCOPES: ${NULLAPART_OIDC_SCOPES:-profile email}
+      # Service-notice delivery worker. It only sends through the private
+      # signed outbound hop, so it needs the domains whose DKIM keys are
+      # actually provisioned on this node as domain:selector pairs. Local
+      # compose mounts dkim-unconfigured by default, so the worker is off
+      # unless both are set in .env.local; the code default is enabled.
+      NULLAPART_NOTIFICATION_DELIVERY_WORKER_ENABLED: ${NULLAPART_NOTIFICATION_DELIVERY_WORKER_ENABLED:-false}
+      NULLAPART_OUTBOUND_DKIM_IDENTITIES: ${NULLAPART_OUTBOUND_DKIM_IDENTITIES:-}
+      NULLAPART_PRIVATE_OUTBOUND_ENDPOINT: ${NULLAPART_PRIVATE_OUTBOUND_ENDPOINT:-postfix:10027}
+      NULLAPART_NOTIFICATION_SENDER_LOCAL_PART: ${NULLAPART_NOTIFICATION_SENDER_LOCAL_PART:-notifications}
     ports:
       - "${NULLAPART_BIND_ADDRESS:-127.0.0.1}:${NULLAPART_MAILCORE_PORT:-58081}:8081"
     volumes:

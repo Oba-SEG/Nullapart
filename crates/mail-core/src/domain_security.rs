@@ -8,7 +8,7 @@
 use std::sync::{Arc, Mutex};
 
 use axum::{
-    extract::{rejection::JsonRejection, Extension, State},
+    extract::{rejection::JsonRejection, Extension, Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -33,12 +33,19 @@ pub const DOMAIN_SECURITY_MANAGE_PERMISSION: &str = "domain-security:manage";
 
 const DOMAIN_SECURITY_PATH: &str = "/api/v1/domain-security";
 const SOURCE_CLASSIFICATIONS_PATH: &str = "/api/v1/domain-security/source-classifications";
+const NOTIFICATION_ACKNOWLEDGE_PATH: &str =
+    "/api/v1/domain-security/notifications/:notification_id/acknowledge";
 const IDEMPOTENCY_HEADER: &str = "x-idempotency-key";
 const SOURCE_KEY_MAX_LEN: usize = 128;
 const SOURCE_DOMAIN_MAX_LEN: usize = 253;
 const NOTES_MAX_LEN: usize = 512;
 const AUDIT_SOURCE_CLASSIFICATION_CHANGED: &str = "domain_source_classification_changed";
 const AUDIT_RESOURCE_SOURCE: &str = "domain_source";
+const AUDIT_NOTIFICATION_ACKNOWLEDGED: &str = "domain_security_notification_acknowledged";
+const AUDIT_RESOURCE_NOTIFICATION: &str = "domain_security_notification";
+/// Acknowledged findings returned beside the open queue, so an operator can see
+/// that the alert they dismissed is recorded rather than gone.
+const ACKNOWLEDGED_HISTORY_LIMIT: i64 = 10;
 
 #[derive(Clone)]
 pub struct DomainSecurityState(Arc<DomainSecurityStateInner>);
@@ -118,6 +125,7 @@ struct DomainSecurityResponse {
     summary: DomainSecuritySummary,
     domains: Vec<DomainSecurityDomain>,
     notifications: Vec<DomainSecurityNotification>,
+    recent_acknowledgments: Vec<AcknowledgedNotification>,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -265,12 +273,42 @@ enum IdempotencyRejection {
     Invalid,
 }
 
+#[derive(Debug, Serialize)]
+struct NotificationAcknowledgmentResponse {
+    notification_id: Uuid,
+    notification_type: String,
+    severity: String,
+    title: String,
+    status: String,
+    acknowledged_by: Option<String>,
+    acknowledged_at: Option<DateTime<Utc>>,
+    /// False when the finding was already acknowledged, so a replay or a second
+    /// operator can see that this call recorded nothing new.
+    changed: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct AcknowledgedNotification {
+    id: Uuid,
+    domain_id: Option<Uuid>,
+    notification_type: String,
+    severity: String,
+    title: String,
+    detail: String,
+    acknowledged_by: Option<String>,
+    acknowledged_at: Option<DateTime<Utc>>,
+}
+
 pub fn domain_security_router(state: DomainSecurityState) -> Router {
     Router::new()
         .route(DOMAIN_SECURITY_PATH, get(get_domain_security))
         .route(
             SOURCE_CLASSIFICATIONS_PATH,
             post(post_source_classification),
+        )
+        .route(
+            NOTIFICATION_ACKNOWLEDGE_PATH,
+            post(post_notification_acknowledgment),
         )
         .with_state(state)
 }
@@ -387,6 +425,16 @@ async fn get_domain_security(
         Ok(value) => value,
         Err(response) => return response,
     };
+    let recent_acknowledgments = match load_recent_acknowledgments(
+        &mut transaction,
+        &state.0.deployment_id.0,
+        &context.customer_id.0,
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
 
     if transaction.commit().await.is_err() {
         return unavailable();
@@ -482,6 +530,7 @@ async fn get_domain_security(
                 summary,
                 domains,
                 notifications,
+                recent_acknowledgments,
             },
         }),
     )
@@ -668,6 +717,155 @@ async fn post_source_classification(
         changed,
         updated_at,
     };
+    let Some(value) = envelope(&response) else {
+        return unavailable();
+    };
+    if complete(&mut transaction, &key, &operation, value)
+        .await
+        .is_err()
+    {
+        return unavailable();
+    }
+    if transaction.commit().await.is_err() {
+        return unavailable();
+    }
+
+    (StatusCode::OK, Json(ApiEnvelope { data: response })).into_response()
+}
+
+async fn post_notification_acknowledgment(
+    State(state): State<DomainSecurityState>,
+    Path(notification_id): Path<Uuid>,
+    context: Option<Extension<TenantContext>>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(Extension(context)) = context else {
+        return api_error(
+            StatusCode::UNAUTHORIZED,
+            "UNAUTHENTICATED",
+            "Authentication is required",
+        );
+    };
+    if context.customer_lifecycle != CustomerLifecycle::Active
+        || context.deployment_id != state.0.deployment_id
+        || !has_permission(&context, DOMAIN_SECURITY_MANAGE_PERMISSION)
+    {
+        return api_error(StatusCode::FORBIDDEN, "FORBIDDEN", "Permission is required");
+    }
+    if !context.has_step_up() {
+        return api_error(
+            StatusCode::FORBIDDEN,
+            "STEP_UP_REQUIRED",
+            "Step-up authentication is required",
+        );
+    }
+    if !try_consume(&state.0.mutation_limiter) {
+        return rate_limited();
+    }
+    let key = match require_idempotency_key(&headers) {
+        Ok(key) => key,
+        Err(rejection) => return idempotency_rejection_response(rejection),
+    };
+
+    let mut transaction = match state.0.pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(_) => return unavailable(),
+    };
+    if set_scope(
+        &mut transaction,
+        &state.0.deployment_id.0,
+        &context.customer_id.0,
+    )
+    .await
+    .is_err()
+    {
+        return unavailable();
+    }
+    let operation = format!("domain-security:notification-acknowledgment:{notification_id}");
+    match claim(&mut transaction, &key, &operation).await {
+        Ok(ClaimOutcome::Fresh) => {},
+        Ok(ClaimOutcome::Replay(value)) => return replay_response(value),
+        Ok(ClaimOutcome::InProgress) => return conflict("Request is already in progress"),
+        Ok(ClaimOutcome::OperationMismatch) => return invalid_request(),
+        Err(_) => return unavailable(),
+    }
+
+    let current = match sqlx::query(
+        "SELECT notification_type, severity, title, status, acknowledged_by, acknowledged_at \
+         FROM domain_security_notifications \
+         WHERE id = $1 AND deployment_id = $2 AND customer_id = $3",
+    )
+    .bind(notification_id)
+    .bind(&state.0.deployment_id.0)
+    .bind(&context.customer_id.0)
+    .fetch_optional(&mut *transaction)
+    .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return not_found("Notification was not found"),
+        Err(_) => return unavailable(),
+    };
+    let notification_type: String = current.get("notification_type");
+    let severity: String = current.get("severity");
+    let title: String = current.get("title");
+    let was_open: bool = current.get::<String, _>("status") == "open";
+
+    let (status, acknowledged_by, acknowledged_at) = if was_open {
+        let row = match sqlx::query(
+            "UPDATE domain_security_notifications \
+             SET status = 'acknowledged', acknowledged_by = $2, acknowledged_at = now(), \
+                 updated_at = now() \
+             WHERE id = $1 AND deployment_id = $3 AND customer_id = $4 AND status = 'open' \
+             RETURNING status, acknowledged_by, acknowledged_at",
+        )
+        .bind(notification_id)
+        .bind(&context.actor.login)
+        .bind(&state.0.deployment_id.0)
+        .bind(&context.customer_id.0)
+        .fetch_optional(&mut *transaction)
+        .await
+        {
+            Ok(Some(row)) => row,
+            Ok(None) => return conflict("Notification changed; reload and retry"),
+            Err(_) => return unavailable(),
+        };
+        (
+            row.get("status"),
+            row.get("acknowledged_by"),
+            row.get("acknowledged_at"),
+        )
+    } else {
+        (
+            current.get("status"),
+            current.get("acknowledged_by"),
+            current.get("acknowledged_at"),
+        )
+    };
+
+    let response = NotificationAcknowledgmentResponse {
+        notification_id,
+        notification_type,
+        severity,
+        title,
+        status,
+        acknowledged_by,
+        acknowledged_at,
+        changed: was_open,
+    };
+
+    if write_notification_acknowledgment_audit(
+        &mut transaction,
+        &state.0.deployment_id.0,
+        &context,
+        &headers,
+        &response,
+    )
+    .await
+    .is_err()
+    {
+        return unavailable();
+    }
+
     let Some(value) = envelope(&response) else {
         return unavailable();
     };
@@ -990,6 +1188,41 @@ async fn load_notifications(
     .map_err(|_| unavailable())
 }
 
+async fn load_recent_acknowledgments(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    deployment_id: &str,
+    customer_id: &str,
+) -> Result<Vec<AcknowledgedNotification>, Response> {
+    sqlx::query(
+        "SELECT id, domain_id, notification_type, severity, title, detail, \
+                acknowledged_by, acknowledged_at \
+         FROM domain_security_notifications \
+         WHERE status = 'acknowledged' AND deployment_id = $1 AND customer_id = $2 \
+         ORDER BY acknowledged_at DESC NULLS LAST \
+         LIMIT $3",
+    )
+    .bind(deployment_id)
+    .bind(customer_id)
+    .bind(ACKNOWLEDGED_HISTORY_LIMIT)
+    .fetch_all(&mut **transaction)
+    .await
+    .map(|rows| {
+        rows.into_iter()
+            .map(|row| AcknowledgedNotification {
+                id: row.get("id"),
+                domain_id: row.get("domain_id"),
+                notification_type: row.get("notification_type"),
+                severity: row.get("severity"),
+                title: row.get("title"),
+                detail: row.get("detail"),
+                acknowledged_by: row.get("acknowledged_by"),
+                acknowledged_at: row.get("acknowledged_at"),
+            })
+            .collect()
+    })
+    .map_err(|_| unavailable())
+}
+
 fn next_actions(
     dmarc: &DmarcDomainMetrics,
     authorization: Option<&ReportAuthorizationStatus>,
@@ -1239,6 +1472,48 @@ async fn write_source_classification_audit(
             "source_key": request.source_key,
             "classification": request.classification.as_str(),
             "changed": changed,
+        }),
+    };
+    PostgresAuditStore::insert_record(transaction, deployment_id, &record)
+        .await
+        .map_err(|_| unavailable())
+}
+
+async fn write_notification_acknowledgment_audit(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    deployment_id: &str,
+    context: &TenantContext,
+    headers: &HeaderMap,
+    response: &NotificationAcknowledgmentResponse,
+) -> Result<(), Response> {
+    let (impersonated_subject, impersonated_customer) = match &context.impersonation {
+        Some(impersonation) => (
+            impersonation.impersonated_subject.clone(),
+            Some(impersonation.impersonated_customer.0.clone()),
+        ),
+        None => (None, None),
+    };
+    let record = AuditEventRecord {
+        id: Uuid::new_v4(),
+        created_at: Utc::now(),
+        actor_id: context.actor.actor_id.0.to_string(),
+        actor_login: context.actor.login.clone(),
+        actor_roles: context.actor.roles.clone(),
+        impersonated_subject,
+        impersonated_customer,
+        customer_id: Some(context.customer_id.0.clone()),
+        action: AUDIT_NOTIFICATION_ACKNOWLEDGED.to_string(),
+        resource_type: AUDIT_RESOURCE_NOTIFICATION.to_string(),
+        resource_id: Some(response.notification_id.to_string()),
+        result: "success".to_string(),
+        source_ip: source_ip_from(headers),
+        session_id: Some(context.session_id.clone()),
+        trace_id: context.trace_id.clone(),
+        details: json!({
+            "notification_type": response.notification_type,
+            "severity": response.severity,
+            "title": response.title,
+            "changed": response.changed,
         }),
     };
     PostgresAuditStore::insert_record(transaction, deployment_id, &record)
@@ -1497,6 +1772,84 @@ mod tests {
             );
         }
         let denied = router.oneshot(request()).await.expect("response");
+        assert_eq!(denied.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    fn acknowledgment_request(uri_id: Uuid, key: Option<&str>) -> Request<Body> {
+        let mut builder = Request::builder().method("POST").uri(format!(
+            "/api/v1/domain-security/notifications/{uri_id}/acknowledge"
+        ));
+        if let Some(key) = key {
+            builder = builder.header("x-idempotency-key", key);
+        }
+        builder.body(Body::empty()).expect("request")
+    }
+
+    #[tokio::test]
+    async fn acknowledgment_requires_manage_permission_before_database_access() {
+        let response = domain_security_router(state())
+            .layer(Extension(context(vec![
+                DOMAIN_SECURITY_VIEW_PERMISSION.to_string()
+            ])))
+            .oneshot(acknowledgment_request(Uuid::new_v4(), Some("ack-1")))
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn acknowledgment_requires_step_up_before_the_store_is_reached() {
+        let mut standard = context(vec![DOMAIN_SECURITY_MANAGE_PERMISSION.to_string()]);
+        standard.actor.authentication_assurance = AuthenticationAssurance::Standard;
+        let response = domain_security_router(state())
+            .layer(Extension(standard))
+            .oneshot(acknowledgment_request(Uuid::new_v4(), Some("ack-1")))
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn acknowledgment_requires_an_idempotency_key_before_the_store_is_reached() {
+        let response = domain_security_router(state())
+            .layer(Extension(context(vec![
+                DOMAIN_SECURITY_MANAGE_PERMISSION.to_string()
+            ])))
+            .oneshot(acknowledgment_request(Uuid::new_v4(), None))
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn acknowledgment_route_enforces_the_high_risk_budget() {
+        let router =
+            domain_security_router(state_with_budget(100, 2)).layer(Extension(context(vec![
+                DOMAIN_SECURITY_MANAGE_PERMISSION.to_string(),
+            ])));
+        let notification_id = Uuid::new_v4();
+        for attempt in 0..2 {
+            let response = router
+                .clone()
+                .oneshot(acknowledgment_request(
+                    notification_id,
+                    Some(&format!("ack-budget-{attempt}")),
+                ))
+                .await
+                .expect("response");
+            assert_eq!(
+                response.status(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "every request inside the budget must reach the failing pool"
+            );
+        }
+        let denied = router
+            .oneshot(acknowledgment_request(
+                notification_id,
+                Some("ack-budget-2"),
+            ))
+            .await
+            .expect("response");
         assert_eq!(denied.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 

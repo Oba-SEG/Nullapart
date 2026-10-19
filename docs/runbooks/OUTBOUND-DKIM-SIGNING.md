@@ -72,6 +72,36 @@ keyless and contains only empty map templates. `.gitignore` rejects its
 5. For production, complete an external received-message verification and
    record DNS/SPF/DMARC evidence in the commissioning record.
 
+## Domain security service notices
+
+The notification delivery worker shares this signing boundary. It sends tenant
+domain-security notices through the same private submission path, so a notice is
+mailed only for a sending domain that appears in
+`NULLAPART_OUTBOUND_DKIM_IDENTITIES` as a `domain:selector` pair and also has a
+verified domain of its own. The list names provisioned signers; it is metadata
+only and never carries a private key.
+
+The list is mandatory. Enabling the worker with an empty or malformed list is a
+startup configuration error, so the worker logs and does not run rather than
+starting a mailer that can only skip. An unconfigured worker never prevents the
+mail node from starting, and skipped or unsent notices never write a `sent`
+ledger row.
+
+`NULLAPART_NOTIFICATION_DELIVERY_WORKER_ENABLED=false` silences the boot error on
+deployments that do not mail notices at all. Notices for a domain with no
+provisioned signer are skipped fail closed with no ledger write, so the same run
+after provisioning a key for that domain delivers the notice.
+
+Configure with:
+
+- `NULLAPART_OUTBOUND_DKIM_IDENTITIES` — required `domain:selector` pairs;
+- `NULLAPART_NOTIFICATION_DELIVERY_INTERVAL_SECS` — poll interval, default 300;
+- `NULLAPART_NOTIFICATION_SENDER_LOCAL_PART` — envelope sender local part;
+- `NULLAPART_PRIVATE_OUTBOUND_ENDPOINT` — the `postfix:10027` submission path.
+
+Follow the provisioning steps above for each notice-sending domain before
+enabling the worker, then confirm a `sent` ledger row exists for a test notice.
+
 ## Rotate or revoke
 
 1. Provision a new key and selector alongside the old one.
