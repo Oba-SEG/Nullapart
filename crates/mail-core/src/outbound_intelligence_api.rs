@@ -421,6 +421,31 @@ async fn post_approved_sender(
         Err(_) => return unavailable(),
     }
 
+    // Approval is scoped to the caller's own tenant, so a Customer Admin can
+    // only ever raise limits for domains this customer owns. Enforcement would
+    // not leak across tenants without this (the runtime lookup is keyed to
+    // customer_id), but it would let a tenant record an approval for a domain
+    // it does not control.
+    let domain_verified = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM domains \
+         WHERE customer_id = $1 AND domain = $2 AND verification_status = 'verified')",
+    )
+    .bind(&context.customer_id.0)
+    .bind(&request.sending_domain)
+    .fetch_one(&mut *transaction)
+    .await;
+    match domain_verified {
+        Ok(true) => {},
+        Ok(false) => {
+            return api_error(
+                StatusCode::BAD_REQUEST,
+                "DOMAIN_NOT_VERIFIED",
+                "Sender domain is not a verified domain of this customer",
+            )
+        },
+        Err(_) => return unavailable(),
+    }
+
     let previous = match sqlx::query(
         "SELECT active, max_messages_per_minute, max_messages_per_hour, \
                 max_recipients_per_message, max_unique_recipients_per_hour, reason, expires_at \

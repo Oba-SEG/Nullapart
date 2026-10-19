@@ -80,6 +80,7 @@ use crate::admin_audit::{
     source_ip_from, AuditEventRecord, AuditStore, PostgresAuditStore,
     AUDIT_CROSS_CUSTOMER_PERMISSION, AUDIT_EXPORT_PERMISSION, AUDIT_VIEW_PERMISSION,
 };
+use crate::admin_capabilities::{Blocker, WriteCapability};
 use crate::oidc::{
     self, IdentityConfig, IdentityProviderKind, OidcConfig, OidcError, OIDC_CALLBACK_PATH,
     OIDC_REAUTH_PATH,
@@ -182,6 +183,8 @@ pub const BUILTIN_ROLES: [BuiltinRole; 3] = [
             crate::deep_ai::DEEP_AI_MANAGE_PERMISSION,
             crate::outbound_intelligence_api::OUTBOUND_INTELLIGENCE_VIEW_PERMISSION,
             crate::outbound_intelligence_api::OUTBOUND_INTELLIGENCE_MANAGE_PERMISSION,
+            crate::notification_api::NOTIFICATIONS_VIEW_PERMISSION,
+            crate::notification_api::NOTIFICATIONS_MANAGE_PERMISSION,
             crate::policy_admin::POLICIES_VIEW_PERMISSION,
             crate::policy_admin::POLICIES_MANAGE_PERMISSION,
             crate::model_registry::MODELS_VIEW_PERMISSION,
@@ -212,6 +215,8 @@ pub const BUILTIN_ROLES: [BuiltinRole; 3] = [
             crate::deep_ai::DEEP_AI_MANAGE_PERMISSION,
             crate::outbound_intelligence_api::OUTBOUND_INTELLIGENCE_VIEW_PERMISSION,
             crate::outbound_intelligence_api::OUTBOUND_INTELLIGENCE_MANAGE_PERMISSION,
+            crate::notification_api::NOTIFICATIONS_VIEW_PERMISSION,
+            crate::notification_api::NOTIFICATIONS_MANAGE_PERMISSION,
             crate::policy_admin::POLICIES_VIEW_PERMISSION,
             crate::policy_admin::POLICIES_MANAGE_PERMISSION,
             crate::model_registry::MODELS_VIEW_PERMISSION,
@@ -232,11 +237,15 @@ pub const BUILTIN_ROLES: [BuiltinRole; 3] = [
             AUDIT_EXPORT_PERMISSION,
             QUARANTINE_VIEW_PERMISSION,
             QUARANTINE_RELEASE_PERMISSION,
-            SCANNER_OPERATIONS_VIEW_PERMISSION,
             crate::admin_customers::CUSTOMERS_VIEW_PERMISSION,
+            crate::admin_customers::DOMAINS_MANAGE_PERMISSION,
             crate::domain_security::DOMAIN_SECURITY_VIEW_PERMISSION,
+            crate::domain_security::DOMAIN_SECURITY_MANAGE_PERMISSION,
             crate::deep_ai::DEEP_AI_VIEW_PERMISSION,
             crate::outbound_intelligence_api::OUTBOUND_INTELLIGENCE_VIEW_PERMISSION,
+            crate::outbound_intelligence_api::OUTBOUND_INTELLIGENCE_MANAGE_PERMISSION,
+            crate::notification_api::NOTIFICATIONS_VIEW_PERMISSION,
+            crate::notification_api::NOTIFICATIONS_MANAGE_PERMISSION,
             crate::connectors_remediation_api::CONNECTORS_VIEW_PERMISSION,
             crate::policy_admin::POLICIES_VIEW_PERMISSION,
             crate::policy_admin::POLICIES_MANAGE_PERMISSION,
@@ -387,6 +396,18 @@ pub const PERMISSION_CATALOG: &[PermissionMeta] = &[
         group: "Outbound intelligence",
     },
     PermissionMeta {
+        key: crate::notification_api::NOTIFICATIONS_VIEW_PERMISSION,
+        display_name: "View notification controls",
+        description: "Read this tenant's notification delivery settings and history.",
+        group: "Notifications",
+    },
+    PermissionMeta {
+        key: crate::notification_api::NOTIFICATIONS_MANAGE_PERMISSION,
+        display_name: "Manage notification controls",
+        description: "Change which domain-security findings are mailed, to which verified recipient addresses, and how often.",
+        group: "Notifications",
+    },
+    PermissionMeta {
         key: crate::policy_admin::POLICIES_VIEW_PERMISSION,
         display_name: "View policies",
         description: "Read policy sets, revisions and tenant feature overrides.",
@@ -455,6 +476,17 @@ fn permissions_in_catalog(permissions: &[String]) -> bool {
     permissions
         .iter()
         .all(|permission| is_allowed_permission(permission))
+}
+
+/// The stored `role_level` mapped onto the static level vocabulary, so a
+/// resolved tier is always one of the published strings and never an
+/// unvalidated value read out of the database. Anything unknown resolves to
+/// `None` and grants nothing.
+fn static_role_level(role_level: &str) -> Option<&'static str> {
+    ROLE_LEVELS
+        .into_iter()
+        .find(|level| *level == role_level)
+        .filter(|level| rank_for_level(level) > 0)
 }
 #[derive(Debug, thiserror::Error)]
 pub enum AdminRbacError {
@@ -627,10 +659,57 @@ struct SessionView {
     csrf_token: String,
     /// Active acting-as context powering the persistent impersonation banner.
     impersonation: Option<SessionImpersonationView>,
+    /// The management tier the server resolved from this session's roles:
+    /// `system`, `support`, `customer`, or `null` when no role carries a known
+    /// level. The console labels and places its surfaces from this instead of
+    /// re-deriving a tier from builtin role names, which silently mislabeled a
+    /// session holding a custom role. It is a presentation input only: every
+    /// route still authorizes on permissions.
+    tier: Option<&'static str>,
     /// Platform facts, published only to a System-tier actor. A Support or
     /// Customer session gets `None`, so platform configuration never widens
     /// its own audience through this payload.
     platform: Option<PlatformView>,
+    /// Server-resolved write capabilities for surfaces that publish no list of
+    /// their own. The console gates a control on these instead of re-deriving
+    /// the gate from a permission name, which offered role writes to any holder
+    /// of `admin:users:manage` while the route reserved them for the built-in
+    /// System identity.
+    capabilities: SessionCapabilitiesView,
+}
+
+/// The role-definition write gate, in the shared capability shape.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionCapabilitiesView {
+    define_roles: WriteCapability,
+}
+
+/// The identity that may create, edit or delete a role definition. Held by the
+/// built-in System role alone: a custom role can grant the permission and still
+/// not be allowed to redefine what roles mean.
+fn holds_role_definition_identity(session: &ActiveSession) -> bool {
+    session
+        .roles
+        .iter()
+        .any(|role| role == SYSTEM_ADMIN_ROLE && is_builtin_role(role))
+}
+
+/// The same predicate the role definition routes run, in published form. The
+/// per-request step-up and rate-budget checks are deliberately not modelled
+/// here, exactly as in the customer capabilities.
+fn define_roles_capability(session: &ActiveSession) -> WriteCapability {
+    if !session
+        .permissions
+        .iter()
+        .any(|permission| permission == ADMIN_USERS_MANAGE_PERMISSION)
+    {
+        return WriteCapability::from_blocker(Some(Blocker::Permission));
+    }
+    if !holds_role_definition_identity(session) {
+        return WriteCapability::from_blocker(Some(Blocker::Role));
+    }
+    WriteCapability::from_blocker(None)
 }
 
 #[derive(Debug, Serialize)]
@@ -647,6 +726,7 @@ fn session_view(
     session: &ActiveSession,
     template: &ControlPlaneTemplate,
     step_up_ttl_secs: i64,
+    tier: Option<&'static str>,
     platform: Option<PlatformView>,
 ) -> SessionView {
     SessionView {
@@ -673,7 +753,11 @@ fn session_view(
                 started_at: impersonation.started_at.to_rfc3339(),
             }
         }),
+        tier,
         platform,
+        capabilities: SessionCapabilitiesView {
+            define_roles: define_roles_capability(session),
+        },
     }
 }
 
@@ -1074,14 +1158,15 @@ pub trait AdminRbacStore: Send + Sync {
         role_key: &str,
     ) -> Result<Option<String>, AdminRbacError>;
 
-    /// Whether any of these role keys is stored at `system` level for this
-    /// deployment. Resolves through the stored `role_level`, so a custom
-    /// system-level role counts exactly like the builtin System Administrator.
-    async fn has_system_role(
+    /// The stored `role_level` of every one of these role keys that exists for
+    /// this deployment, in one read. Resolves through the stored level rather
+    /// than the static catalog, so a custom system-level role counts exactly
+    /// like the builtin System Administrator.
+    async fn role_levels_for_keys(
         &self,
         deployment_id: &str,
         role_keys: &[String],
-    ) -> Result<bool, AdminRbacError>;
+    ) -> Result<Vec<String>, AdminRbacError>;
 
     /// The `deployments` record for this deployment. `Ok(None)` means the row
     /// could not be read, which the caller reports as unavailable instead of
@@ -2127,15 +2212,18 @@ impl AdminRbacStore for InMemoryAdminRbacStore {
             .map(|record| record.role_level))
     }
 
-    async fn has_system_role(
+    async fn role_levels_for_keys(
         &self,
         deployment_id: &str,
         role_keys: &[String],
-    ) -> Result<bool, AdminRbacError> {
-        Ok(role_keys.iter().any(|role_key| {
-            self.role_definition(deployment_id, role_key)
-                .is_some_and(|record| record.role_level == "system")
-        }))
+    ) -> Result<Vec<String>, AdminRbacError> {
+        Ok(role_keys
+            .iter()
+            .filter_map(|role_key| {
+                self.role_definition(deployment_id, role_key)
+                    .map(|record| record.role_level)
+            })
+            .collect())
     }
 
     async fn deployment_facts(
@@ -2364,6 +2452,12 @@ impl PostgresAdminRbacStore {
 
     /// Idempotently seeds the builtin roles and their permissions for a
     /// deployment (called on every login, before any management change).
+    ///
+    /// `BUILTIN_ROLES` is the authority for what a builtin role holds: the
+    /// management API refuses to edit these rows, so the seed also retires
+    /// grants the catalog no longer lists. Without that, an additive-only
+    /// seed would leave a permission revoked from the catalog still effective
+    /// for every already-seeded session table on an existing deployment.
     async fn ensure_builtin_roles(
         transaction: &mut sqlx::Transaction<'static, Postgres>,
         deployment_id: &str,
@@ -2382,15 +2476,38 @@ impl PostgresAdminRbacStore {
             .execute(&mut **transaction)
             .await
             .map_err(|_| AdminRbacError::PersistenceFailed)?;
+
+            let role_id: Uuid = sqlx::query_scalar::<_, Uuid>(
+                "SELECT id FROM admin_roles \
+                 WHERE deployment_id = $1 AND role_key = $2",
+            )
+            .bind(deployment_id)
+            .bind(role.key)
+            .fetch_one(&mut **transaction)
+            .await
+            .map_err(|_| AdminRbacError::PersistenceFailed)?;
+
+            sqlx::query(
+                "DELETE FROM admin_role_permissions \
+                 WHERE role_id = $1 AND NOT (permission = ANY($2))",
+            )
+            .bind(role_id)
+            .bind(
+                role.permissions
+                    .iter()
+                    .map(|permission| (*permission).to_string())
+                    .collect::<Vec<String>>(),
+            )
+            .execute(&mut **transaction)
+            .await
+            .map_err(|_| AdminRbacError::PersistenceFailed)?;
+
             for permission in role.permissions {
                 sqlx::query(
                     "INSERT INTO admin_role_permissions (role_id, permission) \
-                     SELECT id, $3 FROM admin_roles \
-                     WHERE deployment_id = $1 AND role_key = $2 \
-                     ON CONFLICT DO NOTHING",
+                     VALUES ($1, $2) ON CONFLICT DO NOTHING",
                 )
-                .bind(deployment_id)
-                .bind(role.key)
+                .bind(role_id)
                 .bind(permission)
                 .execute(&mut **transaction)
                 .await
@@ -3536,29 +3653,29 @@ impl AdminRbacStore for PostgresAdminRbacStore {
         Ok(level)
     }
 
-    async fn has_system_role(
+    async fn role_levels_for_keys(
         &self,
         deployment_id: &str,
         role_keys: &[String],
-    ) -> Result<bool, AdminRbacError> {
+    ) -> Result<Vec<String>, AdminRbacError> {
         if role_keys.is_empty() {
-            return Ok(false);
+            return Ok(Vec::new());
         }
         let mut transaction = self.begin_scoped(deployment_id).await?;
-        let found = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM admin_roles \
-             WHERE deployment_id = $1 AND role_level = 'system' AND role_key = ANY($2))",
+        let levels = sqlx::query_scalar::<_, String>(
+            "SELECT role_level FROM admin_roles \
+             WHERE deployment_id = $1 AND role_key = ANY($2)",
         )
         .bind(deployment_id)
         .bind(role_keys.to_vec())
-        .fetch_one(&mut *transaction)
+        .fetch_all(&mut *transaction)
         .await
         .map_err(|_| AdminRbacError::PersistenceFailed)?;
         transaction
             .commit()
             .await
             .map_err(|_| AdminRbacError::PersistenceFailed)?;
-        Ok(found)
+        Ok(levels)
     }
 
     async fn deployment_facts(
@@ -4048,32 +4165,71 @@ impl AdminRbacState {
         self.0.identity.oidc.as_ref()
     }
 
+    /// Highest management tier this session's roles carry.
+    ///
+    /// Builtins resolve through the static catalog and custom roles through
+    /// their stored `role_level`, so a custom system-level role is a System
+    /// session and a custom customer-level role is a tenant session. A role
+    /// whose level cannot be read, or which is not one of the three known
+    /// levels, contributes nothing; a session that resolves no level at all
+    /// publishes `null` rather than a guessed tier.
+    async fn session_tier(&self, session: &ActiveSession) -> Option<&'static str> {
+        let builtin_levels: Vec<&'static str> = session
+            .roles
+            .iter()
+            .filter_map(|role| {
+                BUILTIN_ROLES
+                    .iter()
+                    .find(|builtin| builtin.key == role.as_str())
+                    .map(|builtin| builtin.role_level)
+            })
+            .collect();
+        let custom: Vec<String> = session
+            .roles
+            .iter()
+            .filter(|role| {
+                !BUILTIN_ROLES
+                    .iter()
+                    .any(|builtin| builtin.key == role.as_str())
+            })
+            .cloned()
+            .collect();
+        let stored_levels: Vec<String> = if custom.is_empty() {
+            Vec::new()
+        } else {
+            match self
+                .0
+                .store
+                .role_levels_for_keys(self.0.deployment_id.0.as_str(), &custom)
+                .await
+            {
+                Ok(levels) => levels,
+                Err(error) => {
+                    error!(%error, "failed to resolve custom role levels for the session tier");
+                    Vec::new()
+                },
+            }
+        };
+        builtin_levels
+            .into_iter()
+            .chain(stored_levels.iter().map(String::as_str))
+            .filter_map(static_role_level)
+            .max_by_key(|level| rank_for_level(level))
+    }
+
     /// Platform facts for a System-tier session; `None` for every other actor.
     ///
-    /// The tier check reads the stored role level, so a custom system-level
-    /// role sees exactly what the builtin System Administrator sees and a
-    /// Support or Customer session sees nothing new. A role level that cannot
-    /// be resolved fails closed to `None`. A deployment row that cannot be read
-    /// degrades to an unavailable record instead of failing the session, and
-    /// the region then comes from the configured template rather than being
-    /// invented.
-    async fn platform_view(&self, session: &ActiveSession) -> Option<PlatformView> {
-        let deployment_id = self.0.deployment_id.0.as_str();
-        let system_tier = match self
-            .0
-            .store
-            .has_system_role(deployment_id, &session.roles)
-            .await
-        {
-            Ok(found) => found,
-            Err(error) => {
-                error!(%error, "failed to resolve role level for the platform readout");
-                return None;
-            },
-        };
-        if !system_tier {
+    /// Takes the tier already resolved for this session, so a custom
+    /// system-level role sees exactly what the builtin System Administrator
+    /// sees and a Support or Customer session sees nothing new. A deployment
+    /// row that cannot be read degrades to an unavailable record instead of
+    /// failing the session, and the region then comes from the configured
+    /// template rather than being invented.
+    async fn platform_view(&self, tier: Option<&'static str>) -> Option<PlatformView> {
+        if tier != Some("system") {
             return None;
         }
+        let deployment_id = self.0.deployment_id.0.as_str();
         let facts = match self.0.store.deployment_facts(deployment_id).await {
             Ok(facts) => facts,
             Err(error) => {
@@ -4896,11 +5052,13 @@ async fn establish_session(
         // A freshly minted session can never have an active impersonation.
         impersonation: None,
     };
+    let tier = state.session_tier(&session).await;
     let view = session_view(
         &session,
         &state.0.template,
         state.0.session_config.step_up_ttl_secs,
-        state.platform_view(&session).await,
+        tier,
+        state.platform_view(tier).await,
     );
     match presentation {
         LoginPresentation::Json => (
@@ -5478,11 +5636,13 @@ async fn get_session(
             "Authentication is required",
         );
     };
+    let tier = state.session_tier(&session).await;
     let view = session_view(
         &session,
         &state.0.template,
         state.0.session_config.step_up_ttl_secs,
-        state.platform_view(&session).await,
+        tier,
+        state.platform_view(tier).await,
     );
     (StatusCode::OK, Json(ApiEnvelope { data: view })).into_response()
 }
@@ -6320,11 +6480,7 @@ async fn authorize_role_definition_change(
         )
             .into_response());
     }
-    if !session
-        .roles
-        .iter()
-        .any(|role| role == SYSTEM_ADMIN_ROLE && is_builtin_role(role))
-    {
+    if !holds_role_definition_identity(session) {
         return Err(denied_with(
             state,
             &subject,
@@ -8881,6 +9037,50 @@ mod tests {
         assert_eq!(keys.len(), total, "the catalog publishes a duplicate key");
     }
 
+    /// The tenant boundary is a capability list, not a comment. A Customer
+    /// Admin runs their own tenant end to end: domain onboarding, their own
+    /// outbound sender approvals, their own domain posture and their own
+    /// policy revisions. Platform scanner fleet health, another tenant's
+    /// records, model registration and connector remediation stay out.
+    #[test]
+    fn customer_admin_capability_set_is_the_tenant_boundary() {
+        let role = BUILTIN_ROLES
+            .iter()
+            .find(|role| role.key == CUSTOMER_ADMIN_ROLE)
+            .expect("customer_admin is a builtin role");
+        let held: std::collections::HashSet<&str> = role.permissions.iter().copied().collect();
+
+        for required in [
+            crate::admin_customers::DOMAINS_MANAGE_PERMISSION,
+            crate::domain_security::DOMAIN_SECURITY_MANAGE_PERMISSION,
+            crate::outbound_intelligence_api::OUTBOUND_INTELLIGENCE_MANAGE_PERMISSION,
+            crate::policy_admin::POLICIES_MANAGE_PERMISSION,
+            QUARANTINE_RELEASE_PERMISSION,
+            ADMIN_USERS_MANAGE_PERMISSION,
+        ] {
+            assert!(
+                held.contains(required),
+                "a tenant operator cannot exercise {required}"
+            );
+        }
+
+        for forbidden in [
+            SCANNER_OPERATIONS_VIEW_PERMISSION,
+            crate::admin_customers::CUSTOMERS_MANAGE_PERMISSION,
+            crate::deep_ai::DEEP_AI_MANAGE_PERMISSION,
+            crate::connectors_remediation_api::CONNECTORS_MANAGE_PERMISSION,
+            crate::model_registry::MODELS_MANAGE_PERMISSION,
+            OPERATIONS_MANAGE_PERMISSION,
+            IMPERSONATE_PERMISSION,
+            AUDIT_CROSS_CUSTOMER_PERMISSION,
+        ] {
+            assert!(
+                !held.contains(forbidden),
+                "customer_admin must not hold {forbidden}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn role_listing_projects_builtins_with_flags_and_counts() {
         let fixture = default_fixture();
@@ -9659,7 +9859,12 @@ mod tests {
         let app = app(&fixture);
         let (cookie, _) = admin_session(&app).await;
 
-        let platform = session_data(&app, &cookie).await["platform"].clone();
+        let data = session_data(&app, &cookie).await;
+        assert_eq!(
+            data["tier"], "system",
+            "the builtin System Administrator resolves to the system tier"
+        );
+        let platform = data["platform"].clone();
         assert_eq!(platform["deploymentId"], "TEST-DEPLOYMENT");
         assert_eq!(platform["deploymentName"], "Nullapart Local");
         assert_eq!(platform["deploymentRegion"], "af-south-1");
@@ -9693,9 +9898,113 @@ mod tests {
         let (cookie, _) = customer_admin_session(&fixture, &app, "north@example.test").await;
 
         let data = session_data(&app, &cookie).await;
+        assert_eq!(
+            data["tier"], "customer",
+            "a Customer Administrator resolves to the customer tier whatever its login"
+        );
         assert!(
             data["platform"].is_null(),
             "a customer-tier session must not receive platform configuration"
+        );
+    }
+
+    #[tokio::test]
+    async fn role_definition_writes_are_published_for_the_identity_the_route_enforces() {
+        let fixture = default_fixture();
+        let app = app(&fixture);
+        let (admin_cookie, _) = admin_session(&app).await;
+        let (customer_cookie, customer_csrf) =
+            customer_admin_session(&fixture, &app, "north@example.test").await;
+
+        let admin = session_data(&app, &admin_cookie).await;
+        assert_eq!(admin["capabilities"]["defineRoles"]["allowed"], true);
+        assert!(
+            admin["capabilities"]["defineRoles"]["blocker"].is_null(),
+            "the built-in System identity is the only one the route accepts"
+        );
+
+        let customer = session_data(&app, &customer_cookie).await;
+        assert!(
+            customer["permissions"]
+                .as_array()
+                .expect("permissions is an array")
+                .contains(&serde_json::json!(ADMIN_USERS_MANAGE_PERMISSION)),
+            "a Customer Administrator holds the permission, so a permission check alone would \
+             offer a write the route refuses"
+        );
+        assert_eq!(customer["capabilities"]["defineRoles"]["allowed"], false);
+        assert_eq!(
+            customer["capabilities"]["defineRoles"]["blocker"], "role",
+            "the published refusal names the identity gate, not the permission gate"
+        );
+
+        // Published gate and enforced gate agree: the session is refused exactly
+        // where it was told it would be.
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "POST",
+                "/api/v1/admin/roles",
+                &customer_cookie,
+                Some(&customer_csrf),
+                Some(&create_role_body(
+                    "tenant_helper",
+                    "customer",
+                    &["audit:view"],
+                )),
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn the_session_tier_follows_the_stored_role_level() {
+        let fixture = default_fixture();
+        fixture.store.seed_custom_role(
+            "TEST-DEPLOYMENT",
+            "platform-contractor",
+            "Platform contractor",
+            "system",
+            &["policies:view"],
+        );
+        fixture.store.seed_custom_role(
+            "TEST-DEPLOYMENT",
+            "tenant-ops",
+            "Tenant ops",
+            "customer",
+            &["policies:view"],
+        );
+        let mut session = system_session();
+
+        // The label the console shells itself around comes from the stored
+        // level, so a custom role is never mistaken for a tenant session.
+        session.roles = vec!["platform-contractor".to_string()];
+        assert_eq!(
+            fixture.state.session_tier(&session).await,
+            Some("system"),
+            "a custom system-level role is a System session"
+        );
+
+        session.roles = vec!["tenant-ops".to_string(), SUPPORT_ROLE.to_string()];
+        assert_eq!(
+            fixture.state.session_tier(&session).await,
+            Some("support"),
+            "the highest level carried wins, not the first listed role"
+        );
+
+        session.roles = vec!["tenant-ops".to_string()];
+        assert_eq!(
+            fixture.state.session_tier(&session).await,
+            Some("customer"),
+            "a custom customer-level role is a tenant session"
+        );
+
+        session.roles = vec!["role-never-created".to_string()];
+        assert_eq!(
+            fixture.state.session_tier(&session).await,
+            None,
+            "a role with no stored level publishes no tier rather than a guessed one"
         );
     }
 
@@ -9744,7 +10053,7 @@ mod tests {
         // the proxy-mode test above.
         let view = fixture
             .state
-            .platform_view(&session)
+            .platform_view(fixture.state.session_tier(&session).await)
             .await
             .expect("a system-tier actor sees the platform block");
         let body = serde_json::to_string(&view).expect("platform view serializes");

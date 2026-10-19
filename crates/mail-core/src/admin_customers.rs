@@ -27,6 +27,7 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::admin_audit::{source_ip_from, AuditEventRecord, AuditStore, PostgresAuditStore};
+use crate::admin_capabilities::{Blocker, WriteCapability};
 use crate::admin_rbac::{SUPPORT_ROLE, SYSTEM_ADMIN_ROLE};
 use crate::dns_txt::DnsTxtResolver;
 use crate::idempotency::{claim, complete, ClaimOutcome};
@@ -217,41 +218,6 @@ struct SourceIpGroupResponse {
 struct DeletedResponse {
     id: Uuid,
     deleted: bool,
-}
-
-/// Which gate of [`session_blocker`] / [`CUSTOMER_IDENTITY_ROLES`] refused a
-/// write. Published to the console so a withheld action can be *named* instead
-/// of surfacing as a button that only ever returns 403.
-#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
-#[serde(rename_all = "snake_case")]
-enum Blocker {
-    /// The session's roles do not grant the route permission.
-    Permission,
-    /// The actor's own customer is not active.
-    Lifecycle,
-    /// The session was issued for another deployment.
-    Deployment,
-    /// The permission is held, but no built-in role that may mint or retire a
-    /// customer identity backs it.
-    Role,
-}
-
-/// One server-resolved write capability. `blocker` is `None` exactly when
-/// `allowed` is true; the interactive step-up requirement is deliberately not
-/// modelled here because step-up is granted per request, not per session.
-#[derive(Serialize)]
-struct WriteCapability {
-    allowed: bool,
-    blocker: Option<Blocker>,
-}
-
-impl WriteCapability {
-    fn from_blocker(blocker: Option<Blocker>) -> Self {
-        WriteCapability {
-            allowed: blocker.is_none(),
-            blocker,
-        }
-    }
 }
 
 /// Published with the customer list and detail payloads. Every field is the
@@ -2511,6 +2477,43 @@ mod tests {
             body_value(response).await,
             error_body("NOT_FOUND", "Customer was not found")
         );
+    }
+
+    /// A Customer Admin now holds `admin:domains:manage`, so the only thing
+    /// standing between them and another tenant's domain list is the scope
+    /// check. It must refuse before any database work, and refuse as a
+    /// missing resource rather than as a permission gap.
+    #[tokio::test]
+    async fn domain_management_refuses_a_foreign_customer_and_reaches_their_own() {
+        let mut context = context();
+        context.actor.roles = vec![CUSTOMER_ADMIN_ROLE.to_string()];
+        let app = admin_customers_router(state());
+        let foreign = app
+            .clone()
+            .layer(Extension(context.clone()))
+            .oneshot(post(
+                "/api/v1/admin/customers/other-customer/domains",
+                Some("key-foreign-domain"),
+                r#"{"domain":"other.example.test","domain_type":"internal"}"#,
+            ))
+            .await
+            .expect("test response");
+        assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            body_value(foreign).await,
+            error_body("NOT_FOUND", "Customer was not found")
+        );
+
+        let own = app
+            .layer(Extension(context))
+            .oneshot(post(
+                "/api/v1/admin/customers/local-customer/domains",
+                Some("key-own-domain"),
+                r#"{"domain":"mail.example.test","domain_type":"internal"}"#,
+            ))
+            .await
+            .expect("test response");
+        assert_eq!(own.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]

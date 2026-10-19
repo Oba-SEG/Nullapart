@@ -74,6 +74,10 @@ Support cannot view message body, raw MIME or attachment content.
 
 Tenant-scoped. Customer RBAC roles may include owner, security admin, mail admin, DMARC admin and read-only admin.
 
+The builtin `customer_admin` role operates one tenant end to end: its own administrators, quarantine and release, policy revisions for the families published at customer level, its own domain onboarding and security posture, its own outbound sender approvals, and its own notification settings. Platform-only capabilities stay out of it: scanner fleet health, customer lifecycle and identity minting, model registration, connector remediation, cross-customer audit and customer entry.
+
+A tenant grant is bounded by the session's customer scope, never by the permission name. `in_scope()` refuses another tenant's `:customerId` with a 404, outbound writes bind `context.customer_id`, and an approved sender's domain must be a verified domain of the approving tenant.
+
 The owner controls which roles may view headers/content/attachments, release quarantine, remediate, edit policies, view audit data and view reports.
 
 ## Role definitions
@@ -83,7 +87,8 @@ Each deployment seeds the three builtin roles above and may additionally define 
 Builtin roles:
 
 - `system_admin`, `support` and `customer_admin` are seeded idempotently per deployment;
-- their keys, levels and permission sets are not mutable through the management API.
+- their keys, levels and permission sets are not mutable through the management API;
+- the compiled-in builtin catalog is the authority for what a builtin role holds. Effective permissions are read from `admin_role_permissions`, so each login reconciles those rows in both directions: grants the catalog added appear, grants the catalog dropped are retired. Without the second half, a permission revoked from a builtin role would keep working on an already-seeded deployment.
 
 Custom roles:
 
@@ -139,6 +144,22 @@ Administrative sessions require:
 - explicit logout/revocation;
 - session/device identity used in audit records;
 - reauthentication/step-up for sensitive actions where configured.
+
+### Session projection
+
+`GET /api/v1/auth/session` returns the server-resolved view the console renders
+from, and nothing more:
+
+- `roles` and `permissions` — the resolved membership and effective permission keys;
+- `tier` — `system`, `support` or `customer`, taken from the stored role level of the highest-ranked role, or `null` when no role carries a known level. The console labels and places surfaces from this and never re-derives a tier from builtin role names, which mislabels a session holding an equivalent custom role. Presentation only: every route still authorizes on permissions;
+- `platform` — installation facts, published only to a System-tier session;
+- `capabilities` — server-resolved write gates for surfaces that publish no list payload of their own. `defineRoles` mirrors the predicate the role-definition routes run (`admin:users:manage` **and** the builtin `system_admin` identity), so a customer administrator who holds the permission reads a stated lock instead of a button that can only be refused. The published verdict and the enforced one come from the same function.
+
+Write gates for surfaces that do publish a list keep their capabilities on that
+payload (`admin_customers`, `notification_api`), not on the session. All of them
+use the shared `Blocker`/`WriteCapability` shape in
+`crates/mail-core/src/admin_capabilities.rs`, mirrored by
+`frontend/src/api/capabilities.ts`.
 
 ## Customer entry (impersonation)
 

@@ -3,6 +3,7 @@
 //! Core mail processing logic for the SEG.
 
 pub mod admin_audit;
+pub mod admin_capabilities;
 pub mod admin_customers;
 pub mod admin_rbac;
 pub mod artifact_recovery;

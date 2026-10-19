@@ -4,16 +4,31 @@
 //! `NULLAPART_TEST_DATABASE_URL` pointing at it. Run explicitly with:
 //! `cargo test --test postgres_outbound_intelligence -- --ignored`.
 
+use axum::{
+    body::{to_bytes, Body},
+    extract::Extension,
+    http::{Request, StatusCode},
+};
 use chrono::Utc;
 use nullapart_mail_contracts::transaction::{CustomerId, DeploymentId};
+use nullapart_mail_contracts::ActorId;
+use nullapart_mail_core::admin_rbac::CUSTOMER_ADMIN_ROLE;
 use nullapart_mail_core::outbound_intelligence::{
     evaluate_outbound_intelligence, OutboundBehaviorMetrics, OutboundBehaviorMetricsLookup,
     OutboundDecisionOutcome, OutboundIntelligenceInput, OutboundPolicyThresholds,
     OutboundRecipientDomainMetrics, OutboundSourceContext, OutboundSourceKind,
     OutboundThreatSignals, PostgresOutboundIntelligenceStore,
 };
+use nullapart_mail_core::outbound_intelligence_api::{
+    outbound_intelligence_router, OutboundIntelligenceApiState,
+    OUTBOUND_INTELLIGENCE_MANAGE_PERMISSION, OUTBOUND_INTELLIGENCE_VIEW_PERMISSION,
+};
+use nullapart_policy::{
+    AuthenticationAssurance, ContextActor, CustomerLifecycle, RegionId, TenantContext,
+};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row, Transaction};
+use tower::ServiceExt;
 use uuid::Uuid;
 
 const REQUEST_ROLE: &str = "nullapart_local_request";
@@ -591,4 +606,160 @@ async fn postgres_store_loads_approved_sender_and_deduplicates_events() {
         suspension_row.get::<bool, _>("credential_rotation_recommended"),
         "source compromise events must recommend connector credential rotation"
     );
+}
+
+/// Sender approval is a tenant capability. The runtime lookup is already
+/// keyed to `customer_id`, so a foreign approval could not raise another
+/// tenant's limits, but it would still record a right the tenant does not
+/// own. The API therefore requires the sending domain to be a verified
+/// domain of the approving tenant.
+#[tokio::test]
+#[ignore = "requires migrated local PostgreSQL through 028_outbound_intelligence.sql"]
+async fn approved_sender_domain_must_be_verified_for_the_approving_tenant() {
+    let pool = connect().await;
+    ensure_request_role(&pool).await;
+    let fixture = seed(&pool).await;
+
+    let suffix = Uuid::new_v4().simple().to_string();
+    let own_verified = format!("verified-{suffix}.example.test");
+    let own_pending = format!("pending-{suffix}.example.test");
+    let foreign_verified = format!("foreign-{suffix}.example.test");
+    for (customer, domain, status) in [
+        (&fixture.customer_a, &own_verified, "verified"),
+        (&fixture.customer_a, &own_pending, "pending"),
+        (&fixture.customer_b, &foreign_verified, "verified"),
+    ] {
+        sqlx::query(
+            "INSERT INTO domains (customer_id, domain, verification_status) \
+             VALUES ($1, $2, $3)",
+        )
+        .bind(customer)
+        .bind(domain)
+        .bind(status)
+        .execute(&pool)
+        .await
+        .expect("the domain fixture must insert");
+    }
+
+    let state =
+        OutboundIntelligenceApiState::new(pool.clone(), DeploymentId::new(&fixture.deployment_a));
+    let app = outbound_intelligence_router(state).layer(Extension(approval_context(
+        &fixture.deployment_a,
+        &fixture.customer_a,
+    )));
+
+    for (case, domain) in [("pending", &own_pending), ("foreign", &foreign_verified)] {
+        let response = app
+            .clone()
+            .oneshot(approval_request(
+                &format!("approval-{case}-{}", fixture.customer_a),
+                &format!("bulk@{domain}"),
+                domain,
+            ))
+            .await
+            .expect("the refusal must answer");
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "a {case} domain must be refused"
+        );
+        let body: serde_json::Value = serde_json::from_slice(
+            &to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("the refusal body must read"),
+        )
+        .expect("the refusal must be JSON");
+        assert_eq!(body["code"], "DOMAIN_NOT_VERIFIED");
+    }
+
+    let approved_at = format!("bulk@{own_verified}");
+    let response = app
+        .oneshot(approval_request(
+            &format!("approval-own-{}", fixture.customer_a),
+            &approved_at,
+            &own_verified,
+        ))
+        .await
+        .expect("the own-domain approval must answer");
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "a verified own domain must be approvable"
+    );
+
+    let stored: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM approved_bulk_senders \
+         WHERE deployment_id = $1 AND customer_id = $2 AND sender_address = $3",
+    )
+    .bind(&fixture.deployment_a)
+    .bind(&fixture.customer_a)
+    .bind(&approved_at)
+    .fetch_one(&pool)
+    .await
+    .expect("the approval row must read");
+    assert_eq!(stored, 1, "the approval must persist for the owning tenant");
+
+    let foreign_rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM approved_bulk_senders \
+         WHERE sender_address LIKE '%@' || $1",
+    )
+    .bind(&foreign_verified)
+    .fetch_one(&pool)
+    .await
+    .expect("the refusal audit must read");
+    assert_eq!(
+        foreign_rows, 0,
+        "a refused approval must not leave a row behind"
+    );
+}
+
+fn approval_context(deployment: &str, customer: &str) -> TenantContext {
+    TenantContext {
+        deployment_id: DeploymentId::new(deployment),
+        region: RegionId::new("za"),
+        actor: ContextActor {
+            actor_id: ActorId::new(),
+            login: "tenant-operator@example.test".to_string(),
+            roles: vec![CUSTOMER_ADMIN_ROLE.to_string()],
+            authentication_assurance: AuthenticationAssurance::StepUp,
+        },
+        impersonation: None,
+        customer_id: CustomerId::new(customer),
+        customer_internal_key: 1,
+        customer_display_name: "Approving tenant".to_string(),
+        customer_lifecycle: CustomerLifecycle::Active,
+        permissions: vec![
+            OUTBOUND_INTELLIGENCE_VIEW_PERMISSION.to_string(),
+            OUTBOUND_INTELLIGENCE_MANAGE_PERMISSION.to_string(),
+        ],
+        config_revision: 1,
+        trace_id: "postgres-outbound-approval-trace".to_string(),
+        correlation_id: "postgres-outbound-approval-correlation".to_string(),
+        session_id: "postgres-outbound-approval-session".to_string(),
+        authenticated_at: Utc::now(),
+    }
+}
+
+fn approval_request(key: &str, sender_address: &str, sending_domain: &str) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri("/api/v1/outbound-intelligence/approved-senders")
+        .header("content-type", "application/json")
+        .header("x-idempotency-key", key)
+        .body(Body::from(
+            serde_json::json!({
+                "sender_address": sender_address,
+                "sending_domain": sending_domain,
+                "source_kind": "smtp_mta",
+                "source_id": "postfix-node-1",
+                "max_messages_per_minute": 25,
+                "max_messages_per_hour": 100,
+                "max_recipients_per_message": 50,
+                "max_unique_recipients_per_hour": 250,
+                "active": true,
+                "reason": "tenant-approved newsletter sender"
+            })
+            .to_string(),
+        ))
+        .expect("the approval request must build")
 }

@@ -20,7 +20,7 @@ use nullapart_mail_contracts::transaction::{CustomerId, DeploymentId};
 use nullapart_mail_core::admin_rbac::{
     AdminRbacStore, AuditEventDraft, AuditSubject, AuthenticateOutcome, CreateUserOutcome,
     NewRoleDefinition, NewSession, NewUser, PostgresAdminRbacStore, RoleDeleteOutcome, RolePatch,
-    RoleUpdateOutcome, SessionConfig,
+    RoleUpdateOutcome, SessionConfig, BUILTIN_ROLES,
 };
 use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
@@ -1087,6 +1087,76 @@ async fn runtime_role_holds_the_privileges_the_role_store_uses() {
             granted,
             "{RUNTIME_ROLE} must hold {privilege} on {table}; migration 038 grants it and \
              infrastructure/containers/provision-local-runtime-role.sh provisions it"
+        );
+    }
+}
+
+/// `BUILTIN_ROLES` is the authority for what a builtin role holds, but a
+/// session's effective permissions are read from `admin_role_permissions`.
+/// An additive-only seed would leave a permission that the catalog dropped
+/// still working on every already-seeded deployment, so the login path
+/// reconciles the stored grants against the catalog in both directions.
+#[tokio::test]
+#[ignore = "requires migrated local PostgreSQL through 038_custom_admin_roles.sql"]
+async fn login_reconciles_builtin_role_grants_with_the_catalog() {
+    let pool = connect().await;
+    ensure_request_role(&pool).await;
+    let fixture = seed(&pool).await;
+    let store = PostgresAdminRbacStore::new(pool.clone());
+    let identity = format!("{}@example.test", fixture.suffix);
+
+    let outcome = store
+        .authenticate_identity(
+            &fixture.deployment.0,
+            &identity,
+            Some(&fixture.customer_a.0),
+        )
+        .await
+        .expect("the first login must bootstrap");
+    assert!(
+        matches!(outcome, AuthenticateOutcome::Bootstrapped { .. }),
+        "expected a bootstrap outcome, got {:?}",
+        discriminant_name(&outcome)
+    );
+
+    // A deployment seeded by the previous catalog still carries this grant.
+    sqlx::query(
+        "INSERT INTO admin_role_permissions (role_id, permission) \
+         SELECT id, 'scanner:operations:view' FROM admin_roles \
+         WHERE deployment_id = $1 AND role_key = 'customer_admin'",
+    )
+    .bind(&fixture.deployment.0)
+    .execute(&pool)
+    .await
+    .expect("the stale builtin grant must be insertable");
+
+    store
+        .authenticate_identity(
+            &fixture.deployment.0,
+            &identity,
+            Some(&fixture.customer_a.0),
+        )
+        .await
+        .expect("a later login must reconcile the builtin grants");
+
+    for role in BUILTIN_ROLES.iter() {
+        let mut stored: Vec<String> = sqlx::query_scalar(
+            "SELECT permission FROM admin_role_permissions \
+             WHERE role_id = (SELECT id FROM admin_roles \
+                              WHERE deployment_id = $1 AND role_key = $2)",
+        )
+        .bind(&fixture.deployment.0)
+        .bind(role.key)
+        .fetch_all(&pool)
+        .await
+        .expect("the stored grants must read");
+        stored.sort();
+        let mut expected: Vec<String> = role.permissions.iter().map(|p| (*p).to_string()).collect();
+        expected.sort();
+        assert_eq!(
+            stored, expected,
+            "{} must hold exactly the catalog grants after a login",
+            role.key
         );
     }
 }
