@@ -156,9 +156,9 @@ struct DeliveryView {
     recipient_count: i32,
     attempts: i32,
     reason: Option<String>,
-    /// Postfix queue reference for a delivered notice. It is an identifier only:
-    /// the ledger never exposes recipient addresses or message content, and
-    /// support retains the same body-access prohibition as everywhere else.
+    /// The MTA's queue reference for a delivered notice. Published only to a
+    /// platform seat: a tenant sees that their alert mail was delivered, not
+    /// which queue on the mail server carried it.
     outbound_transaction_id: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
@@ -289,6 +289,7 @@ async fn get_notification_settings(
         &mut transaction,
         &state.0.deployment_id.0,
         &context.customer_id.0,
+        platform_placement(&context),
     )
     .await
     {
@@ -572,6 +573,7 @@ async fn load_deliveries(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     deployment_id: &str,
     customer_id: &str,
+    platform: bool,
 ) -> Result<Vec<DeliveryView>, Response> {
     let rows = sqlx::query(
         "SELECT notification_id::text AS notification_id, status, recipient_count, attempts, \
@@ -595,7 +597,9 @@ async fn load_deliveries(
             recipient_count: row.get("recipient_count"),
             attempts: row.get("attempts"),
             reason: row.get("reason"),
-            outbound_transaction_id: row.get("outbound_transaction_id"),
+            outbound_transaction_id: platform
+                .then(|| row.get("outbound_transaction_id"))
+                .flatten(),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         })

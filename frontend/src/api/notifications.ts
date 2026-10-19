@@ -46,8 +46,9 @@ export interface EffectiveNotificationSettings {
 
 /**
  * One row of the delivery ledger: the only answer to "was it sent".
- * `outbound_transaction_id` is a Postfix queue reference and an identifier only.
- * The ledger publishes no recipient addresses and no message content.
+ * `outbound_transaction_id` is the mail server's own queue reference, published
+ * only to a platform seat. The ledger publishes no recipient addresses and no
+ * message content.
  */
 export interface NotificationDelivery {
   notification_id: string;
