@@ -1,13 +1,16 @@
-"""Fetch and pin every approved Inline ML training source (decision 15).
+"""Fetch and pin every approved Inline ML training source.
 
 Each source is downloaded once, checksummed into data/fetch_manifest.json,
 and verified on every later run. The prepare step refuses sources without a
-pin. Licenses are permissive-only: MIT, CC-BY-4.0, CC0, Apache-2.0.
+pin.
 
-License strings below are SPDX identifiers declared by the operator for each
-approved source. They are review-time claims recorded in this pin file, not
-anything fetched or verified from the upstream host; a reviewer confirms each
-declaration against the upstream page before the source is approved.
+The permissive-only license gate from decision 15 was lifted by the owner on
+2026-10-17 (recorded in DATASET.md): every catalogued email corpus is fetched
+regardless of license so training coverage is complete. License strings below
+are SPDX identifiers declared by the operator for each source as provenance
+records. They are review-time claims recorded in this pin file, not anything
+fetched or verified from the upstream host; a reviewer confirms each
+declaration against the upstream page.
 """
 
 from __future__ import annotations
@@ -69,6 +72,64 @@ SOURCES = [
         "kind": "zenodo-record",
         "license": "CC-BY-4.0",
         "description": "Multiclass NLP social-engineering set incl. Malware label",
+    },
+    {
+        "name": "epvme",
+        "url": "https://codeload.github.com/sunknighteric/EPVME-Dataset/zip/refs/heads/main",
+        "kind": "github-zipball",
+        "license": "GPL-3.0-only",
+        "description": "EPVME protocol/UI attack EML corpus (49,136 malicious samples)",
+    },
+    {
+        "name": "wooyun-xss",
+        "url": "https://codeload.github.com/WhiteRabbitc/Wooyun-Email-XSS-Dataset/zip/refs/heads/master",
+        "kind": "github-zipball",
+        "license": "NOASSERTION",
+        "description": "Wooyun Email XSS malicious EML samples (168, no upstream license)",
+    },
+    {
+        "name": "bec-r-dube",
+        "url": "https://codeload.github.com/r-dube/bec/zip/refs/heads/main",
+        "kind": "github-zipball",
+        "license": "AGPL-3.0-only",
+        "description": "BEC-1/BEC-2 human-labeled business email compromise corpus",
+    },
+    {
+        "name": "bec-adversarial",
+        "url": (
+            "https://www.kaggle.com/api/v1/datasets/download/"
+            "yoadjei/adversarial-bec-email-dataset"
+        ),
+        "kind": "zip",
+        "license": "CC-BY-SA-4.0",
+        "description": "Adversarial BEC email dataset (4,211)",
+    },
+    {
+        "name": "phishing-email-dataset",
+        "url": (
+            "https://www.kaggle.com/api/v1/datasets/download/"
+            "naserabdullahalam/phishing-email-dataset"
+        ),
+        "kind": "zip",
+        "license": "CC-BY-SA-4.0",
+        "description": "Phish No More (Enron/Ling/CEAS/Nazario/Nigerian/SpamAssassin, 82.5k)",
+    },
+    {
+        "name": "seven-phishing",
+        "url": "https://huggingface.co/datasets/mamtakumar/seven-phishing-email-datasets",
+        "kind": "hf-tree",
+        "license": "NOASSERTION",
+        "description": "Seven phishing email datasets merged (HF license 'other', ~203k)",
+    },
+    {
+        "name": "curated-email-corpora",
+        "url": "https://zenodo.org/api/records/8339691",
+        "kind": "zenodo-record",
+        "license": "CC-BY-4.0",
+        "description": (
+            "Curated email corpora CSVs (Enron, SpamAssassin, TREC, CEAS, "
+            "Nazario, Ling, Nigerian)"
+        ),
     },
 ]
 
@@ -135,6 +196,63 @@ def fetch_zenodo_files(source: dict, dest_dir: Path) -> list[str]:
     return sorted(fetched)
 
 
+def fetch_github_zipball(source: dict, dest_dir: Path) -> list[str]:
+    zip_path = dest_dir / "archive.zip"
+    if not zip_path.exists():
+        download(source["url"], zip_path)
+    extracted_dir = dest_dir / "extracted"
+    extract_zip(zip_path, extracted_dir)
+    # Some repos ship their payload as .zip files inside the zipball (EPVME).
+    # Extract nested archives in place, depth-capped against archive bombs.
+    for _ in range(3):
+        nested = sorted(extracted_dir.rglob("*.zip"))
+        if not nested:
+            break
+        for nested_zip in nested:
+            extract_zip(nested_zip, nested_zip.parent)
+            nested_zip.unlink()
+    else:
+        raise RuntimeError(f"nested zip depth exceeded for {source['name']}")
+    members = sorted(
+        str(p.relative_to(extracted_dir))
+        for p in extracted_dir.rglob("*")
+        if p.is_file()
+    )
+    if not members:
+        raise RuntimeError(f"github zipball {source['name']} extracted no files")
+    return ["archive.zip"] + [f"archive.zip!{m}" for m in members]
+
+
+def fetch_hf_tree_files(source: dict, dest_dir: Path) -> list[str]:
+    dataset_id = "/".join(source["url"].rstrip("/").split("/")[-2:])
+    descriptor = dest_dir / "tree.json"
+    if not descriptor.exists():
+        download(
+            f"https://huggingface.co/api/datasets/{dataset_id}/tree/main"
+            "?recursive=true",
+            descriptor,
+        )
+    tree = json.loads(descriptor.read_text())
+    fetched = []
+    for entry in tree:
+        if entry.get("type") != "file":
+            continue
+        path = entry["path"]
+        if not path.endswith((".parquet", ".csv", ".jsonl")):
+            continue
+        out_path = dest_dir / path
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        if not out_path.exists():
+            download(
+                f"https://huggingface.co/datasets/{dataset_id}/resolve/main/{path}",
+                out_path,
+            )
+        fetched.append(path)
+    if not fetched:
+        raise RuntimeError(f"hf tree {source['name']} has no data files")
+    return sorted(fetched)
+
+
 def fetch_source(source: dict, manifest: dict) -> dict:
     dest_dir = RAW / source["name"]
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -142,6 +260,10 @@ def fetch_source(source: dict, manifest: dict) -> dict:
 
     if source["kind"] == "zenodo-record":
         files = fetch_zenodo_files(source, dest_dir)
+    elif source["kind"] == "github-zipball":
+        files = fetch_github_zipball(source, dest_dir)
+    elif source["kind"] == "hf-tree":
+        files = fetch_hf_tree_files(source, dest_dir)
     elif source["kind"] == "zip":
         zip_path = dest_dir / "archive.zip"
         if not zip_path.exists():

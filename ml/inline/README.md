@@ -6,7 +6,7 @@ multi-label threat classifier (13 canonical `FindingCategory` labels).
 The inline model is evidence for policy, not an autonomous mail-disposition
 engine.
 
-## Workflow (all executed on `.4`)
+## Workflow
 
 | Step | Script | Output |
 | --- | --- | --- |
@@ -20,17 +20,20 @@ engine.
 Honest results for this run (targets, per-class tables, synthetic
 disclosure, known misses): **[`MODEL-CARD.md`](MODEL-CARD.md)**.
 
-Environment: `mlvenv` venv at `/home/ob1/mlvenv` (Python 3.14), packages
-pinned in `requirements.txt`. Lint: `ruff check .` (config in
-`pyproject.toml`).
+Environment: `mlvenv` venv (Python 3.14), packages pinned in
+`requirements.txt`. Local runs use `~/mlvenv` on the Mac (MPS device);
+the `.4` host keeps its own copy at `/home/ob1/mlvenv`. Lint:
+`ruff check .` (config in `pyproject.toml`).
 
 ## Rules
 
-- Training data is permissive-only public corpora (MIT, CC-BY-4.0, CC0,
-  Apache-2.0) plus Nullapart-owned synthetic fixtures, exactly as
-  catalogued in `DATASET.md` (plan decision 15). Copyleft/ShareAlike/
-  unlicensed corpora are excluded. No customer or production message data
-  ever enters training.
+- Training data is public third-party corpora with per-source SPDX
+  license strings recorded as provenance, plus Nullapart-owned
+  synthetic fixtures, exactly as catalogued in `DATASET.md`. The
+  decision-15 permissive-only gate was lifted by the owner on
+  2026-10-17 (reversal recorded in `DATASET.md`); withdrawn and
+  URL-feed sources remain excluded on availability/fitness grounds.
+  No customer or production message data ever enters training.
 - All 13 labels are trained; per-class results are reported in
   `eval_report.json` — never a single headline number. Synthetic-supplied
   classes are disclosed with fixture counts in the model card.

@@ -107,7 +107,12 @@ def load_or_compute_probs(tag: str, rows: list[dict], args) -> np.ndarray:
     import torch
     from transformers import DistilBertForSequenceClassification, DistilBertTokenizerFast
 
-    device = torch.device("cpu")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
     tokenizer = DistilBertTokenizerFast.from_pretrained(args.model_name)
     model = DistilBertForSequenceClassification.from_pretrained(
         CHECKPOINTS / "model"

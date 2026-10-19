@@ -1,236 +1,159 @@
-# Model card — Nullapart Inline ML multi-label threat classifier (multilabel-v1)
+# MODEL-CARD — mail inline multi-label threat classification
 
-**Status:** trained, evaluated, exported (2026-10-01, workstation `.4`);
-thresholds re-selected on validation and evaluation corrected/re-run
-(2026-10-02 — all agreed targets met, §5). Phase 4 later registered,
-approved and activated `multilabel-v1/1` through the audited local model
-registry, wired the inline ML stage behind `inline_ml_classification`, and
-deployed the mounted int8 ONNX artifact on `.4` for local/dev evidence.
-The running stage now refuses to serve inference unless the configured
-model ID/version is the active approved registry row and the mounted ONNX
-SHA-256 matches that row, so the registry is a runtime gate instead of a
-diagnostic-only record. Model output is **evidence for policy** — never
-policy, never an autonomous disposition, never an implicit allow.
+Status: trained, evaluated, and exported on 2026-10-17 — local Apple Silicon Mac (PyTorch MPS),
+all 12 catalogued sources, license gate lifted by owner directive (see [DATASET.md](DATASET.md) header).
 
-Machine-readable sources for everything below:
-`checkpoints/multilabel-v1/eval_report.json` (2026-10-02 corrected run,
-`evaluate-v5.log`),
-`checkpoints/multilabel-v1/tune_sweep_report.json`,
-`checkpoints/multilabel-v1/export_report.json`,
-`data/processed/stats.json`,
-`data/synthetic/fixtures_stats.json`,
-`prepare-v2.log`, `train-v2.log`, `evaluate-v2.log` (superseded
-logits-space report kept as `eval_report_pre_sweep.json`), `export-v2.log`.
+Machine-readable sources of truth for this release:
 
-## 1. Model details
+- [data/fetch_manifest.json](data/fetch_manifest.json) — 12 pinned sources with digests, byte
+  sizes, and file counts for this run.
+- `run-logs/mac-fetch-20261017.log` — full fetch log (12 sources).
+- `run-logs/mac-prepare-20261017-all.log` — full prepare log (loader counts, dedup, splits).
+- `run-logs/mac-train-20261017.log` — full training log (3 epochs, MPS, best val macro-F1 0.9566).
+- `run-logs/mac-post-20261017.log` — evaluate → tune_sweep → threshold swap → evaluate → export
+  chain log (POST_DONE, all gates green).
+- `checkpoints/multilabel-v1/train_metrics.json` — training history and per-epoch validation.
+- `checkpoints/multilabel-v1/eval_report.json` — final evaluation with train-time and swept
+  thresholds, TF-IDF/LogReg baseline, CPU latency, and target verdicts.
+- `checkpoints/multilabel-v1/tune_sweep_report.json` — validation-only threshold sweep (S0–S3,
+  chosen scheme, per-scheme test deltas for transparency; test was never used for selection).
+- `checkpoints/multilabel-v1/export_report.json` — fp32/int8 ONNX sizes, CPU latency, parity.
 
-| Field | Value |
-| --- | --- |
-| Architecture | DistilBERT-class encoder (`distilbert-base-uncased`) + sigmoid 13-dim multi-label head |
-| Label space | all 13 canonical `FindingCategory` labels (`crates/mail-contracts/src/finding.rs`), ordered as in `eval_report.json` |
-| Input contract | `InlineMlRepresentation` v1 (`representation_version = 1`), composed text ≈ Subject / From / `Authentication-Results` / URLs / Attachment / body, bounded by `prepare_dataset.py` caps |
-| Sequence length | 128 tokens (batch 1 at inference) |
-| Training framework | PyTorch + HF Transformers (pinned in `requirements.txt`, venv `/home/ob1/mlvenv`) |
-| Checkpoint | `checkpoints/multilabel-v1/model/` (best by validation macro-F1, epoch 3 of 3) |
-| Thresholds | `checkpoints/multilabel-v1/thresholds.npy` — per-class operating thresholds selected on **validation only** by `tune_sweep.py` (2026-10-02; coarse grid 0.01–0.99, S1 scheme; clean-FPR constraint ≤ 1%, `global_scale 1.0`); original train-time thresholds kept at `thresholds_pre_sweep.npy` |
-| Export | `checkpoints/multilabel-v1/onnx/model.onnx` (fp32), `model_int8.onnx` (dynamic-quantized), opset 17 |
-| Training seed | 42 (dataset shuffle + model init) |
+## 1. Intended use
 
-## 2. Intended use
+Inline classification of inbound mail for Nullapart's security pipeline. The model emits one
+probability per threat label; a CPU-side scoring path consumes these probabilities for
+downstream policy decisions. It is trained only on labeled historical corpora and synthetic
+fixtures — it does not claim detection of novel zero-day content.
 
-Low-latency inline threat **evidence** for the Nullapart policy layer
-(`ml_threat_classification` family): per-class scores/threat bands become
-`SecurityFinding` evidence that policy evaluates. Failures, model absence
-or version mismatch must surface as explicit `Unknown`/`Error` evidence —
-never as `CLEAN` (plan decisions 3–5).
+## 2. Model details
 
-Out of scope: autonomous disposition, quarantine decisions without policy,
-any customer-facing claim of certification, any use as the sole gate on a
-message.
+- Architecture: `distilbert-base-uncased` encoder + 13-label multi-label classification head
+  (BCEWithLogits, per-label `pos_weight`).
+- Training device: Apple Silicon MPS (`device: mps` in `train_metrics.json`); evaluation export
+  path is CPU (ONNX Runtime).
+- Epochs 3, batch size 16, learning rate 3e-5, seed 42.
+- Best checkpoint: epoch 3, train loss 0.0214, val macro-F1 0.9566
+  (`best_val_metrics.json`, `model/`).
+- Thresholds: validation-only sweep chose scheme **S1 coarse**
+  (`thresholds.npy` = swept values; train-time values preserved as `thresholds_pre_sweep.npy`).
+  Chosen per-label thresholds: `[0.010, 0.780, 0.820, 0.940, 0.760, 0.010, 0.010, 0.010, 0.970,
+  0.010, 0.950, 0.010, 0.010]` (label order = `stats.json` label order).
 
 ## 3. Training data
 
-Permissive-only public corpora + Nullapart-owned synthetic fixtures
-(owner ruling, plan decision 15; full manifest, licenses, exclusions and
-checksums in `DATASET.md`). **No customer or production message data ever
-enters training.** Copyleft/ShareAlike/unlicensed sources excluded.
+Twelve sources pinned in `data/fetch_manifest.json` (sizes and digests there). License strings
+in the manifest are **provenance only** — the former permissive-only admission gate (Decision-15
+of the security foundation hardening work) was lifted by owner directive on 2026-10-17 so that
+all catalogued sources could be used for this training run. Sources still excluded: GT malware
+feed (owner withdrew it), and URL-only feeds (PhishTank, URLhaus, ISCX URL2016) which are not
+email corpora. Full source table, per-source label mappings, EML parsing counts, loader order,
+and the strengthened dedup key are documented in [DATASET.md](DATASET.md).
 
-Real sources: MeAJOR (Zenodo, CC-BY-4.0), angelfonsecar compilation (MIT),
-zero-day phishing (Kaggle, CC0), SPAM+Genuine (Kaggle, Apache-2.0),
-zenodo.15235123 (CC-BY-4.0, Malware/Scareware/Baiting/Pretexting seeds).
+Final splits (seed 42; 275,509 duplicate rows dropped at dedup):
 
-### Splits (ordered global normalized-text dedup, train → val → test)
+| Split | Rows | Clean | Multi-label | Synthetic-fixture |
+| --- | ---: | ---: | ---: | ---: |
+| train | 503,968 | 243,786 | 244,000 | 9,598 |
+| validation | 62,996 | 30,606 | 31,194 | 1,196 |
+| test | 62,996 | 30,465 | 31,325 | 1,206 |
 
-| Split | Rows | Clean rows | Multi-label rows | Synthetic rows |
-| --- | --- | --- | --- | --- |
-| train | 264,814 | 134,523 | 749 | 9,592 |
-| validation | 33,101 | 16,990 | 93 | 1,233 |
-| test | 33,103 | 16,785 | 77 | 1,175 |
+Per-label train counts (real + synthetic): Spam 158,543; Phishing 61,012; AuthFailure 25,089;
+Spoofing 24,648; BEC 8,072; SuspiciousContent 1,689; CredentialHarvest 969; MaliciousUrl 958;
+PolicyViolation 945; MaliciousAttachment 945; Reputation 940; Unknown 977; Malware 62.
 
-Dedup dropped 13,809 rows (`stats.json.dropped_rows`). Per-label and
-per-source counts per split: `data/processed/stats.json` (reproduced in
-§5 and `eval_report.json`).
+**Synthetic-only labels (disclosure):** CredentialHarvest, MaliciousUrl, MaliciousAttachment,
+PolicyViolation, Reputation, and Unknown appear only in the synthetic fixture set (12,000 rows,
+generated for this run) — no real labeled seeds exist for them. Perfect test-set scores for
+these classes reflect fixture separability, not field performance. Spoofing and AuthFailure
+now have large real seeds (EPVME); BEC and SuspiciousContent have small real seeds plus
+augmentation.
 
-### Synthetic fixtures — disclosed (plan decision 16)
+**Malware is rare** (62/8/7 train/val/test) — single-digit test support; treat its metrics as
+directional only.
 
-Generated by `synthetic_fixtures.py` (deterministic, seed 42,
-`--per-class 1200`, template-composed, Nullapart-owned, no customer
-content): **12,000 fixture rows** across the 10 fixture classes.
-Label counts (multi-label rows counted per label):
-`AuthFailure 1788`, `SuspiciousContent 1531`, and `1200` each for
-`BusinessEmailCompromise`, `CredentialHarvest`, `MaliciousAttachment`,
-`MaliciousUrl`, `PolicyViolation`, `Reputation`, `Spoofing`, `Unknown`.
+## 4. Training run (2026-10-17, local Mac)
 
-- **8 classes supplied *entirely* by synthetic fixtures** (no permissive
-  real source exists): `CredentialHarvest`, `MaliciousUrl`, `Spoofing`,
-  `AuthFailure`, `MaliciousAttachment`, `PolicyViolation`, `Reputation`,
-  `Unknown`. Their test metrics measure generalization over synthetic
-  template families, **not** over production-observed instances of those
-  threats.
-- **2 classes augmented over small real seeds:** `BusinessEmailCompromise`
-  (real seed: Pretexting rows, 78) and `SuspiciousContent` (real seed:
-  Scareware rows, 100).
-- Real-seed classes: `Malware` (624-row source, mapping table in
-  `DATASET.md`), `Phishing`, `Spam`.
+Validation trajectory (all epochs, train-time thresholds):
 
-Fixture uniqueness enforced at generation (unique-text ratio 1.0 ≥ 0.98
-floor); fixtures pass through the same global dedup as real rows.
+| Epoch | Val macro-F1 | Train loss |
+| ---: | ---: | ---: |
+| 1 | 0.9507 | 0.0961 |
+| 2 | 0.9520 | 0.0344 |
+| 3 | **0.9566** | 0.0214 |
 
-## 4. Training run
+Final val metrics with swept (S1 coarse) thresholds: macro-F1 0.9588, macro-AUC 0.9990,
+clean FPR 0.0027.
 
-| Field | Value |
-| --- | --- |
-| Command | `train.py` defaults: epochs 3, batch 16, lr 3e-5, seed 42 |
-| Data | `data/processed/{train,validation}.jsonl` (deduped splits above) |
-| Result | best validation **macro-F1 0.9775**, macro-AUC 0.9999, clean FPR 0.0042, train loss 0.0019 (epoch 3, `train-v2.log`, `best_val_metrics.json`) |
-| Selection | checkpoint with highest validation macro-F1 (`saved best (macro_f1 0.9775)`) |
-| Post-processing | per-class thresholds tuned on validation against clean-FPR ≤ 1% (train-time; superseded by the validation-only sweep recorded in §5) |
+## 5. Evaluation (final, swept thresholds; `eval_report.json`)
 
-## 5. Evaluation vs agreed targets (plan decision 16)
+| Metric | Validation | Test | Gate |
+| --- | ---: | ---: | --- |
+| Macro-F1 | 0.9588 | **0.9576** | ≥ 0.90 ✅ |
+| Macro-AUC | 0.9990 | 0.9995 | per-class ≥ 0.97 ✅ (no violations, no unscorable labels) |
+| Clean FPR | 0.0027 | 0.0031 | ≤ 0.01 ✅ |
+| vs TF-IDF/LogReg baseline (macro-F1) | 0.9089 | 0.8945 | model beats baseline by ≥ 0.02 ✅ (+0.0631) |
+| Torch-eager CPU latency (batch 1, seq 128, fp32) | — | p95 12.16 ms | informational |
+| Artifact (fp32 checkpoint) | — | 256.14 MB | informational |
 
-Measured by `evaluate.py` on the untouched test split (33,103 rows),
-against the one-vs-rest TF-IDF(50k)/LogReg baseline trained on the
-identical deduped splits (`eval_report.json`).
+Per-class test metrics (swept thresholds):
 
-Re-measured 2026-10-02 after two disclosed corrections:
+| Label | Support | Precision | Recall | F1 | AUC |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| AuthFailure | 3,153 | 0.9686 | 0.9575 | 0.9630 | 0.9995 |
+| BusinessEmailCompromise | 1,051 | 0.9264 | 0.9467 | 0.9365 | 0.9997 |
+| CredentialHarvest | 116 | 1.0000 | 1.0000 | 1.0000 | 1.0000 |
+| MaliciousAttachment | 111 | 1.0000 | 1.0000 | 1.0000 | 1.0000 |
+| MaliciousUrl | 138 | 1.0000 | 1.0000 | 1.0000 | 1.0000 |
+| Malware | 7 | 0.8571 | 0.8571 | 0.8571 | 1.0000 |
+| Phishing | 7,709 | 0.8827 | 0.9862 | 0.9316 | 0.9979 |
+| PolicyViolation | 122 | 1.0000 | 1.0000 | 1.0000 | 1.0000 |
+| Reputation | 135 | 1.0000 | 1.0000 | 1.0000 | 1.0000 |
+| Spam | 19,670 | 0.9876 | 0.9399 | 0.9632 | 0.9980 |
+| Spoofing | 3,085 | 0.9663 | 0.9579 | 0.9621 | 0.9995 |
+| SuspiciousContent | 237 | 0.9615 | 0.7384 | 0.8353 | 0.9987 |
+| Unknown | 101 | 1.0000 | 1.0000 | 1.0000 | 1.0000 |
 
-- **Threshold re-selection (tune-first):** `tune_sweep.py` re-selected
-  per-class thresholds on **validation only** across four schemes
-  (coarse 0.01–0.99 grid, fine, plateau); the pre-declared tie rule
-  chose the S1 coarse scheme (`tune_sweep_report.json`). Test data never
-  participated in selection.
-- **Evaluation defect fixed:** `evaluate.py` compared raw logits
-  against probability-space thresholds (training and the baseline
-  already used sigmoid probabilities). Fixed at the call site and
-  re-run; the superseded logits-space report is retained as
-  `eval_report_pre_sweep.json`.
+## 6. Export (`export_report.json`)
 
-All numbers below come from the corrected run.
+| Artifact | Size | p95 latency (CPU, batch 1, seq 128) |
+| --- | ---: | ---: |
+| fp32 ONNX (opset 17) | 255.53 MB | (informational) |
+| int8 dynamic-quantized ONNX | **64.2 MB** | **7.3 ms** (300 iterations) |
 
-| # | Target | Measured | Verdict |
-| --- | --- | --- | --- |
-| (a) | macro-F1 ≥ 0.90; per-class ROC-AUC ≥ 0.97 | macro-F1 **0.9862**; macro-AUC 1.0000; per-class AUC min 0.9997 (Spam); no unscorable classes | **PASS** |
-| (b) | ham/clean FPR ≤ 1% at operating threshold | **0.0042** (16,785 clean test rows) | **PASS** |
-| (c) | beats TF-IDF/LogReg baseline by ≥ +0.02 macro-F1 | baseline 0.9652 → delta **+0.0210** | **PASS** (margin 0.0010 disclosed, see §7) |
-| (d) | latency p95 ≤ 50 ms CPU (batch 1, seq 128, `.4` i7-4790); artifact ≤ 100 MB int8 | int8 ONNX p95 **41.01 ms** (300 iters); int8 artifact **64.2 MB** | **PASS** on the deployment path (fp32 torch-eager eval path p95 69.37 ms / checkpoint 255.53 MB does **not** meet it and is not the deployment path) |
+Gates (all ✅): int8 size ≤ 100 MB; int8 p95 ≤ 50 ms; fp32↔int8 parity mean abs diff ≤ 0.01
+(observed mean 0.00021, max 0.17806, argmax agreement 253/256 rows — see limitations).
 
-### Test-set per-class results (thresholds from validation)
+## 7. Honest limitations and risks
 
-| Class | Support | Precision | Recall | F1 | ROC-AUC | Predicted + |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Malware | 8 | 0.8889 | 1.0000 | 0.9412 | 1.0000 | 9 |
-| Phishing | 5,427 | 0.9884 | 0.9864 | 0.9874 | 0.9998 | 5,416 |
-| Spam | 9,689 | 0.9875 | 0.9913 | 0.9894 | 0.9997 | 9,727 |
-| Spoofing † | 103 | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 103 |
-| BusinessEmailCompromise ‡ | 129 | 0.9923 | 1.0000 | 0.9961 | 1.0000 | 130 |
-| CredentialHarvest † | 121 | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 121 |
-| MaliciousUrl † | 122 | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 122 |
-| MaliciousAttachment † | 120 | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 120 |
-| SuspiciousContent ‡ | 186 | 0.9936 | 0.8333 | 0.9064 | 0.9998 | 156 |
-| PolicyViolation † | 124 | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 124 |
-| AuthFailure † | 159 | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 159 |
-| Reputation † | 111 | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 111 |
-| Unknown † | 96 | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 96 |
+- Six labels (CredentialHarvest, MaliciousUrl, MaliciousAttachment, PolicyViolation, Reputation,
+  Unknown) are synthetic-only; their perfect scores overstate field capability.
+- Malware test support is 7 rows — metrics are not statistically meaningful.
+- SuspiciousContent recall is 0.7384 (hardest real class after Phishing/BEC); Phishing
+  precision is 0.8827 — some Spam→Phishing confusion remains.
+- Reformatted duplicates from `phishing_email.csv` partially escape exact dedup (documented in
+  DATASET.md); test contamination is possible but bounded by the strengthened dedup key.
+- int8 quantization flips the argmax on 3 of 256 parity rows (max abs diff 0.17806); the mean
+  diff is well inside the gate, but downstream consumers should not treat int8 outputs as
+  bit-identical to fp32.
+- The model is trained only on the listed corpora; novel threats and distribution shift are out
+  of scope. This card makes no compliance or certification claim.
 
-† synthetic-only class (§3) — metric is in-distribution over synthetic fixtures.
-‡ synthetic-augmented over a small real seed.
+## 8. Reproduction (local Mac)
 
-Baseline (TF-IDF 50k + LogReg, class-weighted, same splits): test
-macro-F1 0.9652, macro-AUC 0.9998, clean FPR 0.0082; validation macro-F1
-0.9536. Full per-class baseline table in `eval_report.json`.
-
-## 6. Export / runtime
-
-| Check | fp32 | int8 (deployment artifact) |
-| --- | --- | --- |
-| Size | 255.53 MB (+256.77 MB `.data`) | **64.2 MB** ≤ 100 MB |
-| CPU p95 (batch 1, seq 128, `.4`, 300 iters) | — | **41.01 ms** ≤ 50 ms (mean 35.56, p50 34.10) |
-| Parity vs torch-eager (256-row validation batch, batch-1 runs) | mean/max abs diff 0.0 | mean abs diff **0.00015** ≤ 0.01, max 0.00183, argmax agree |
-
-Dynamic quantization of the classic DistilBERT graph (see
-`export_onnx.py` header for the torch.onnx dynamo caveat). All export
-targets met (`export_report.json.targets_met`).
-
-## 7. Honest limitations
-
-- **Target (c) closed only after correction — thin margin disclosed:**
-  the original evaluation compared logits to probability thresholds and
-  reported +0.0155 (superseded, `eval_report_pre_sweep.json`). After the
-  defect fix and validation-only threshold re-selection the measured
-  delta is **+0.0210** against the +0.02 requirement — a margin of
-  0.0010 macro-F1. The target was not redefined and the baseline is
-  unchanged (0.9652); if data, seed or toolchain changes, re-run
-  `tune_sweep.py` + `evaluate.py` before relying on it.
-- **Synthetic external validity:** for the 8 synthetic-only classes the
-  test set is drawn from the same generator families as training. Scores
-  measure internal consistency; real-world precision on those threat
-  types is unmeasured until production feedback exists (increment 6 —
-  candidates only, never auto-retraining).
-- **SuspiciousContent threshold at grid edge:** at the selected 0.99
-  the class now *under*-predicts — precision 0.9936 / recall 0.8333
-  (156 predicted vs support 186: 31 misses, 1 false positive) instead
-  of the previous over-prediction (0.7209/1.0000 at 0.07). The greedy
-  validation sweep chose the top of the 0.01–0.99 grid; test
-  probabilities show an empty gap at [0.98, 0.99) so the operating point
-  is stable there, but this is the most conservative operating point in
-  the grid — policy must treat the score as evidence, and re-tune if
-  validation data changes.
-- **Threshold selection is data-dependent:** the 0.01–0.99 grid widened
-  the original 0.05–0.95 range during the validation-only re-selection;
-  eight classes moved to the 0.01 floor (BusinessEmailCompromise to
-  0.03) and SuspiciousContent to the 0.99 ceiling. Selection used
-  validation only; test was never searched.
-- **Malware support is 8 test rows:** F1/AUC are statistically fragile;
-  one mistake moves F1 by >0.1.
-- **Clean FPR is threshold-union based:** per-class thresholds were tuned
-  on validation for the ≤1% constraint; test FPR 0.0042 confirms no
-  overfit to validation, but thresholds are data-dependent and must be
-  re-validated if training data changes.
-- **Latency:** the ≤50 ms p95 target holds for the int8 ONNX path, which
-  is the only intended deployment path; the fp32 torch-eager evaluation
-  path (69.37 ms p95, 200 iters, corrected run) is an offline measurement
-  harness, not the runtime.
-- **Measurements are device-reproducible:** CPU vs GPU inference on `.4`
-  agrees to max abs diff 1.53e-05 across 256 validation rows (thresholds
-  chosen on CPU probabilities; `eval_report.json` generated on GPU when
-  available). No CUDA-specific numerics are relied on.
-- No customer-data evaluation, no external benchmark, no certification
-  claim — local harness evidence only (plan "Not claimed" section).
-
-## 8. Reproduction (all on `.4`)
+Environment: `/Users/ob/mlvenv` (uv venv, Python 3.14.6; torch MPS wheel). Run from `ml/inline/`
+with `~/mlvenv/bin/python`:
 
 ```bash
-cd ml/inline
-/home/ob1/mlvenv/bin/python synthetic_fixtures.py       # 12,000 fixtures (seed 42, deterministic)
-/home/ob1/mlvenv/bin/python prepare_dataset.py          # dedup + 80/10/10 splits -> data/processed/
-/home/ob1/mlvenv/bin/python train.py                    # 3 epochs -> checkpoints/multilabel-v1/
-/home/ob1/mlvenv/bin/python tune_sweep.py               # validation-only threshold selection -> thresholds.npy + tune_sweep_report.json
-/home/ob1/mlvenv/bin/python evaluate.py                 # eval_report.json (targets + baseline)
-/home/ob1/mlvenv/bin/python export_onnx.py              # onnx/ + export_report.json
+~/mlvenv/bin/python -u fetch_dataset.py > run-logs/mac-fetch.log 2>&1
+~/mlvenv/bin/python -u prepare_dataset.py > run-logs/mac-prepare.log 2>&1
+nohup ~/mlvenv/bin/python -u train.py > run-logs/mac-train.log 2>&1 < /dev/null &
+~/mlvenv/bin/python -u evaluate.py        # baseline + train-time thresholds
+~/mlvenv/bin/python -u tune_sweep.py --recompute-probs
+# swap chosen_thresholds into thresholds.npy (old → thresholds_pre_sweep.npy)
+~/mlvenv/bin/python -u evaluate.py        # final report with swept thresholds
+~/mlvenv/bin/python -u export_onnx.py     # CPU export + int8 quantization + parity
 ```
 
-Dataset fetch/pinning: `fetch_dataset.py` + `DATASET.md`. The artifact
-stays on `.4`; registration/activation/rollback is the audited registry
-API (increment 4), never a manual copy into a running service. The
-local/dev runtime consumes the explicit `NULLAPART_INLINE_ML_*` mounted
-artifact paths recorded in `compose.local.yml`.
+Lint gate: `~/mlvenv/bin/python -m ruff check .` in `ml/inline/` (config: `pyproject.toml`,
+line-length 100; no `ruff format`).
