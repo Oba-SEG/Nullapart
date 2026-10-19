@@ -122,6 +122,18 @@ async fn handle_durable_handoff(
             accepted_at: request.handoff_at,
             envelope_sender: request.envelope_sender.address().to_string(),
             recipients: tenant.recipients,
+            // Pre-queue milter evidence rides the authenticated handoff; it
+            // is carried into the scan only when it observed something
+            // (spam verdict, score or symbols). Absent evidence must not
+            // fabricate a clean rspamd row.
+            milter_observations: {
+                let observations = &request.milter_observations;
+                (observations.is_spam
+                    || observations.score > 0.0
+                    || !observations.actions.is_empty()
+                    || !observations.symbols.is_empty())
+                .then(|| observations.clone())
+            },
         };
         let outcome = state
             .pipeline

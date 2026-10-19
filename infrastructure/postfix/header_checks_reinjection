@@ -1,0 +1,19 @@
+# Nullapart reinjection header_checks — evidence boundary for the private
+# reinjection listener (10026).
+#
+# Reinjection deliberately runs with smtpd_milters disabled (loop prevention:
+# mailcore-filter must never re-run on reinjected mail). Because no Rspamd
+# milter strips evidence headers on this path, Postfix strips them here so a
+# message reinjected from Mail Core can never carry stale or forged spam
+# evidence into the queue. The after-queue mailcore-filter reads X-Rspamd-*
+# evidence only from messages that passed the public SMTP listener's Rspamd
+# milter strip+re-add chain.
+
+/^X-Spam: /                 IGNORE
+/^X-Spam-Score: /           IGNORE
+/^X-Spam-Status: /          IGNORE
+/^X-Spam-Action: /          IGNORE
+/^X-Spam-Flag: /            IGNORE
+/^X-Spam-Check: /           IGNORE
+/^X-Rspamd-/                IGNORE
+/^X-Nullapart-Spam-/        IGNORE

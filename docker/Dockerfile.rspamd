@@ -6,6 +6,8 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 COPY infrastructure/rspamd/rspamd.conf /etc/rspamd/rspamd.conf
+COPY infrastructure/rspamd/rspamd.conf.local /etc/rspamd/rspamd.conf.local
+COPY infrastructure/rspamd/lua.d/ /etc/rspamd/lua.d/
 COPY infrastructure/rspamd/local.d/ /etc/rspamd/local.d/
 
 EXPOSE 11332

@@ -401,6 +401,7 @@ mod tests {
             accepted_at: Utc::now(),
             envelope_sender: "sender@example.test".to_string(),
             recipients: vec!["recipient@example.test".to_string()],
+            milter_observations: None,
         };
         let artifact = Artifact {
             id: artifact_id.clone(),

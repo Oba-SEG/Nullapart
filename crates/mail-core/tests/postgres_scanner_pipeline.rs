@@ -101,6 +101,7 @@ fn context(fixture: &TenantFixture) -> TenantScanContext {
         accepted_at: Utc::now(),
         envelope_sender: "sender@example.test".to_string(),
         recipients: vec!["recipient@example.test".to_string()],
+        milter_observations: None,
     }
 }
 
@@ -474,6 +475,70 @@ async fn inline_ml_stage_merges_pass2_evidence_when_feature_enabled() {
         scoped_counts(&pool, &fixture).await,
         (1, 2, 0, 0, 0, "allow".to_string()),
         "pass-1 and pass-2 scanner rows persist without policy changes"
+    );
+
+    tokio::fs::remove_dir_all(root)
+        .await
+        .expect("artifact fixture cleanup");
+}
+
+#[tokio::test]
+#[ignore = "requires migrated local PostgreSQL through 014_policy_administration.sql and NULLAPART_TEST_DATABASE_URL"]
+async fn milter_spam_evidence_persists_rspamd_row_and_quarantines() {
+    let database_url = env::var("NULLAPART_TEST_DATABASE_URL")
+        .expect("NULLAPART_TEST_DATABASE_URL must target local test PostgreSQL");
+    let pool = PgPool::connect(&database_url)
+        .await
+        .expect("local PostgreSQL must connect");
+    let fixture = seed_tenant(&pool, "allow").await;
+    let root = env::temp_dir().join(format!(
+        "nullapart-pipeline-milter-spam-{}",
+        fixture.tenant_message_id.0
+    ));
+    let store = FilesystemArtifactStore::try_new(root.clone(), FilesystemArtifactRuntime::Test)
+        .await
+        .expect("filesystem store must initialize");
+    let pipeline = DurableScannerPipeline::new(store, scanner_fabric(), pool.clone());
+
+    let mut context = context(&fixture);
+    context.milter_observations = Some(nullapart_mail_core::handoff::MilterObservations {
+        score: 7.41,
+        actions: vec!["add header".to_string()],
+        is_spam: true,
+        dkim_result: Some("pass".to_string()),
+        spf_result: Some("fail".to_string()),
+        dmarc_result: Some("quarantine".to_string()),
+        symbols: vec!["SUBJ_ALL_CAPS".to_string(), "R_SPF_FAIL".to_string()],
+        latency_ms: 0,
+    });
+    let outcome = pipeline
+        .process_with_policy(
+            context,
+            benign_message(),
+            ContentType::new("message/rfc822"),
+            move |scan| {
+                nullapart_mail_core::phase2_handoff::local_finding_policy(
+                    scan,
+                    PolicyRevisionId::new(),
+                )
+            },
+        )
+        .await
+        .expect("durable workflow with milter evidence must complete");
+    assert_eq!(outcome.disposition, Disposition::Quarantine);
+    assert!(outcome.quarantine_created);
+
+    let rspamd_row = scanner_result_row(&pool, &fixture, "rspamd")
+        .await
+        .expect("rspamd evidence row must persist");
+    assert_eq!(rspamd_row.0, "threat");
+    assert!(!rspamd_row.1, "milter evidence is an optional scanner");
+
+    let findings = finding_rows(&pool, &fixture).await;
+    assert_eq!(
+        findings,
+        vec![("rspamd".to_string(), "spam".to_string())],
+        "spam finding persisted under the rspamd scanner type"
     );
 
     tokio::fs::remove_dir_all(root)

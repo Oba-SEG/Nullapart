@@ -148,6 +148,12 @@ pub fn process_handoff(
     if request.recipients.is_empty() {
         return Err(HandoffError::NoRecipients);
     }
+    // Milter evidence must satisfy the shared bounds even though the
+    // producer is our own after-queue filter; the contract is enforced at
+    // the trust boundary, not trusted wholesale.
+    if !crate::milter_evidence::validate_observations(&request.milter_observations) {
+        return Err(HandoffError::MalformedRequest);
+    }
 
     let decoded = STANDARD
         .decode(request.message_content.as_bytes())

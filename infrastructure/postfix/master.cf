@@ -3,6 +3,13 @@
 
 # ==============================================================================
 # Inbound SMTP listener (public, TCP 25)
+#
+# Spam-evidence integrity: Rspamd's milter (via lua.d/nullapart_evidence.lua)
+# strips client-supplied X-Spam*/X-Rspamd* headers before scoring and re-adds
+# its own evidence when the action is at least "add header". Postfix
+# header_checks intentionally stay disabled here (no_header_body_checks):
+# cleanup-stage header_checks run AFTER the milter, so they would strip
+# Rspamd's own evidence along with forgeries.
 # ==============================================================================
 smtp      inet  n       -       n       -       -       smtpd
   -o content_filter=mailcore:dummy
@@ -15,10 +22,13 @@ smtp      inet  n       -       n       -       -       smtpd
 # ==============================================================================
 # Reinjection listener (private Docker network only; never host-published)
 # Accepts only Mail Core reinjection. Loop prevention header checked.
+# Milters are disabled here, so evidence headers are stripped by Postfix
+# (header_checks_reinjection) instead of the Rspamd lua chain.
 # ==============================================================================
 10026 inet  n       -       n       -       -       smtpd
   -o content_filter=
   -o smtpd_milters=
+  -o smtpd_header_checks=regexp:/etc/postfix/header_checks_reinjection
   -o receive_override_options=no_unknown_recipient_checks
   -o smtpd_relay_restrictions=permit_mynetworks,reject
   -o smtpd_recipient_restrictions=permit_mynetworks,reject

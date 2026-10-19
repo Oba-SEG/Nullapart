@@ -37,6 +37,7 @@ COPY docker/mailcore-filter-wrapper.sh /usr/libexec/nullapart/mailcore-filter-wr
 COPY infrastructure/postfix/main.cf /etc/postfix/main.cf
 COPY infrastructure/postfix/master.cf /etc/postfix/master.cf
 COPY infrastructure/postfix/header_checks_nullapart /etc/postfix/header_checks_nullapart
+COPY infrastructure/postfix/header_checks_reinjection /etc/postfix/header_checks_reinjection
 
 # Entry script to start both postfix and syslog
 COPY docker/postfix-entrypoint.sh /entrypoint.sh

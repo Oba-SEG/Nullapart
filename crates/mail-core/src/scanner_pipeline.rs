@@ -190,6 +190,11 @@ pub struct TenantScanContext {
     pub envelope_sender: String,
     /// Trusted envelope recipients (RCPT TO) from server-side partitioning.
     pub recipients: Vec<String>,
+    /// Trusted pre-queue Rspamd/milter observations forwarded by the
+    /// after-queue filter over the HMAC-authenticated handoff channel.
+    /// Present only when the milter observed a spam verdict or score; the
+    /// evidence parser and bounds live in [`crate::milter_evidence`].
+    pub milter_observations: Option<crate::handoff::MilterObservations>,
 }
 
 impl TenantScanContext {
@@ -644,6 +649,7 @@ impl DurableScannerPipeline {
             },
             None => scan_result,
         };
+        let scan_result = crate::milter_evidence::merge_milter_evidence(scan_result, &context);
         tracing::info!(
             scanner_outcomes = scan_result.results.len(),
             findings = scan_result.findings.len(),

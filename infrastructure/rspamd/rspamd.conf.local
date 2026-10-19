@@ -1,0 +1,6 @@
+# Nullapart top-level Rspamd overrides (included from common.conf).
+#
+# `lua` accumulates with the packaged bootstrap script; both load. The
+# evidence-chain lua lives outside local.d because rspamd.conf only includes
+# named files from local.d, not a directory glob.
+lua = "/etc/rspamd/lua.d/nullapart_evidence.lua"

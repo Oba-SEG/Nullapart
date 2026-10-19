@@ -22,6 +22,7 @@ pub mod domain_security;
 pub mod handoff;
 pub mod idempotency;
 pub mod inline_ml;
+pub mod milter_evidence;
 pub mod model_registry;
 pub mod node;
 pub mod notification_api;

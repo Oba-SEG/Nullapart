@@ -82,6 +82,38 @@ Resource limits/timeouts produce explicit UNKNOWN/ERROR/SUSPICIOUS results accor
 
 Every scanner defines timeout, concurrency, required/optional state and failure semantics.
 
+## Pre-queue Rspamd/milter evidence
+
+Rspamd runs as a Postfix milter before the message is queued; Mail Core owns the durable scan and
+the final disposition afterwards. The after-queue `mailcore-filter` therefore has to carry the
+milter's verdict across the authenticated handoff without ever trusting an attacker-supplied
+header. The chain is owned by `crates/mail-core/src/milter_evidence.rs`:
+
+- `infrastructure/rspamd/lua.d/nullapart_evidence.lua` strips every inbound `X-Spam*`, `X-Rspamd*`
+  and Nullapart evidence header at prefilter, so the queued message can only carry headers this
+  deployment's Rspamd wrote;
+- at postfilter it re-adds bounded `X-Rspamd-Score`, `X-Rspamd-Action`, `X-Rspamd-Is-Spam` and
+  `X-Rspamd-Symbols` only when the default metric action is at least `add_header`
+  (`infrastructure/rspamd/local.d/actions.conf`, with `reject` and `greylist` deliberately
+  unreachable so disposition stays with Mail Core);
+- the public SMTP listener disables cleanup-stage `header_checks`
+  (`receive_override_options=no_header_body_checks`) because those run after the milter and would
+  strip Rspamd's own evidence along with forgeries;
+- the private reinjection listener runs with no milters, so `header_checks_reinjection` strips the
+  evidence names there instead: reinjected mail never carries stale or forged evidence;
+- `mailcore-filter` parses those headers with bounded limits (header scan bytes, score range,
+  symbol/action count and length), and `process_handoff` re-validates the observation bounds at the
+  trust boundary even though the producer is our own filter;
+- the pipeline records one `rspamd` scanner row of class `OPTIONAL_ENRICHMENT` (`required: false`)
+  whenever evidence was observed, plus a `Spam` finding when Rspamd's action was a spam action.
+  Absent or clean evidence adds no finding and can never change a disposition to clean;
+  SPF/DKIM/DMARC results are derived from symbol names with failure classes taking precedence over
+  passes.
+
+`local_networks` is restricted to loopback (`local.d/options.inc` + `local_networks.map`) so the
+packaged RFC1918/docker skip list cannot silently disable SPF/DKIM/DMARC checks inside the lab
+network, which would leave domain-authentication evidence permanently empty.
+
 ## Resource-exhaustion protection
 
 Email scanning is an adversarial workload. Every parser/scanner must have explicit hard limits.

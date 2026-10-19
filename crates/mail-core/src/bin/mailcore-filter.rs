@@ -14,9 +14,7 @@ use base64::Engine as _;
 use chrono::Utc;
 use nullapart_mail_contracts::hmac::sign_http;
 use nullapart_mail_contracts::transaction::{EnvelopeSender, Recipient};
-use nullapart_mail_core::handoff::{
-    AfterQueueHandoffRequest, HandoffConnection, MilterObservations,
-};
+use nullapart_mail_core::handoff::{AfterQueueHandoffRequest, HandoffConnection};
 use sha2::{Digest, Sha256};
 
 const EX_TEMPFAIL: i32 = 75;
@@ -178,18 +176,15 @@ async fn run() -> Result<(), String> {
             authenticated: args.sasl_username.is_some(),
             session_id: format!("postfix-{}", args.queue_id),
         },
-        // Rspamd evidence is intentionally not fabricated here. The bounded
-        // Milter integration must populate trusted observations explicitly.
-        milter_observations: MilterObservations {
-            score: 0.0,
-            actions: Vec::new(),
-            is_spam: false,
-            dkim_result: None,
-            spf_result: None,
-            dmarc_result: None,
-            symbols: Vec::new(),
-            latency_ms: 0,
-        },
+        // Bounded pre-queue Rspamd evidence parsed from the queued message.
+        // The headers are trustworthy because Rspamd's lua strip+re-add
+        // chain owns them at the milter stage (public SMTP path) and
+        // Postfix strips them on the private reinjection path; the handoff
+        // then carries them to Mail Core over the HMAC-authenticated
+        // channel (see crates/mail-core/src/milter_evidence.rs).
+        milter_observations: nullapart_mail_core::milter_evidence::parse_queued_evidence(
+            &raw_message,
+        ),
         message_content: STANDARD.encode(&raw_message),
         content_hash,
         trace_id: Some(uuid::Uuid::new_v4().to_string()),
