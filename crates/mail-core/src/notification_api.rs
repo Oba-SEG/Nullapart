@@ -156,6 +156,15 @@ struct DeliveryView {
     status: String,
     recipient_count: i32,
     attempts: i32,
+    /// Why this notice did not go out, as a key the console can put words to.
+    /// A customer answer carries this and no `reason`: the ledger note quotes
+    /// the sending machinery's own failure, which describes Nullapart rather
+    /// than the alert the tenant is waiting for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result: Option<&'static str>,
+    /// The delivery worker's own ledger note. Published only to a platform seat,
+    /// which triages the sending path and needs the failure text.
+    #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<String>,
     /// The MTA's queue reference for a delivered notice. The key is published
     /// only to a platform seat: a tenant sees that their alert mail was
@@ -164,6 +173,55 @@ struct DeliveryView {
     outbound_transaction_id: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+}
+
+/// The failure texts the delivery worker writes, each with the stable prefix it
+/// is matched on here. Kept next to the projection so a new reason is added in
+/// the place a reader of this function would look for it.
+///
+/// * `not submitted:` / `delivery state unresolved:` are followed by the
+///   outbound contract's or the SMTP path's own error, so they must never reach
+///   a customer answer verbatim.
+const CUSTOMER_RESULT_PREFIXES: [(&str, &str); 2] = [
+    ("not submitted", "send_refused"),
+    ("delivery state unresolved", "delivery_unconfirmed"),
+];
+
+/// Projects the ledger note onto what a tenant can act on: this notice was
+/// folded into another alert, changed before it could be retried, or could not
+/// be sent. A note the projection does not recognise is answered with a generic
+/// key rather than echoed, so an unread ledger line cannot become a customer
+/// message that quotes the sending machinery.
+fn customer_delivery_result(reason: Option<&str>) -> Option<&'static str> {
+    let reason = reason?;
+    match reason {
+        "digest_window" => Some("covered_by_earlier_alert"),
+        "coalesced_into_digest" => Some("included_with_another_alert"),
+        "content_changed_before_retry" => Some("changed_before_retry"),
+        other => CUSTOMER_RESULT_PREFIXES
+            .iter()
+            .find(|(prefix, _)| other.starts_with(prefix))
+            .map(|(_, key)| *key)
+            .or(Some("problem_recorded")),
+    }
+}
+
+/// One ledger row's internals, split across the placement line. A seat inside
+/// the platform reads the worker's own note and the queue reference; a customer
+/// reads a result key and neither of those fields at all.
+///
+/// This is the whole projection in one function so the route can call it from
+/// its SQL row mapping and a test can exercise the same split rather than a copy
+/// of it. Returns `(result, reason, outbound_transaction_id)`.
+fn split_delivery_note(
+    reason: Option<String>,
+    outbound_transaction_id: Option<String>,
+    platform: bool,
+) -> (Option<&'static str>, Option<String>, Option<String>) {
+    if platform {
+        return (None, reason, outbound_transaction_id);
+    }
+    (customer_delivery_result(reason.as_deref()), None, None)
 }
 
 #[derive(Debug, Deserialize)]
@@ -593,17 +651,23 @@ async fn load_deliveries(
     .map_err(|_| unavailable())?;
     Ok(rows
         .into_iter()
-        .map(|row| DeliveryView {
-            notification_id: row.get("notification_id"),
-            status: row.get("status"),
-            recipient_count: row.get("recipient_count"),
-            attempts: row.get("attempts"),
-            reason: row.get("reason"),
-            outbound_transaction_id: platform
-                .then(|| row.get("outbound_transaction_id"))
-                .flatten(),
-            created_at: row.get("created_at"),
-            updated_at: row.get("updated_at"),
+        .map(|row| {
+            let (result, reason, outbound_transaction_id) = split_delivery_note(
+                row.get("reason"),
+                row.get("outbound_transaction_id"),
+                platform,
+            );
+            DeliveryView {
+                notification_id: row.get("notification_id"),
+                status: row.get("status"),
+                recipient_count: row.get("recipient_count"),
+                attempts: row.get("attempts"),
+                result,
+                reason,
+                outbound_transaction_id,
+                created_at: row.get("created_at"),
+                updated_at: row.get("updated_at"),
+            }
         })
         .collect())
 }
@@ -807,6 +871,141 @@ mod tests {
             max_tokens,
             refill_rate_per_sec: 0.0,
             ..RateLimitConfig::default()
+        }
+    }
+
+    /// One ledger row as the answer for the seat reading it, built through the
+    /// same [`split_delivery_note`] the SQL row mapping uses. `load_deliveries`
+    /// supplies the other fields; the placement split is the contract pinned here.
+    fn delivery_view(reason: Option<&str>, platform: bool) -> DeliveryView {
+        let now = Utc::now();
+        let (result, reason, outbound_transaction_id) = split_delivery_note(
+            reason.map(str::to_string),
+            platform.then(|| "MTA-QUEUE-42".to_string()),
+            platform,
+        );
+        DeliveryView {
+            notification_id: "notice-1".to_string(),
+            status: "dead_lettered".to_string(),
+            recipient_count: 2,
+            attempts: 3,
+            result,
+            reason,
+            outbound_transaction_id,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    /// The split is the whole customer-versus-platform contract for a delivery
+    /// row. Pinning it here means a change to it fails this suite rather than only
+    /// the database run that a checkout cannot reach.
+    #[test]
+    fn the_placement_split_hands_the_note_only_to_the_platform() {
+        let note = Some("not submitted: outbound contract refused".to_string());
+        let reference = Some("MTA-QUEUE-42".to_string());
+
+        let (result, reason, outbound) =
+            split_delivery_note(note.clone(), reference.clone(), false);
+        assert_eq!(result, Some("send_refused"));
+        assert_eq!(reason, None, "a customer answer carries the note");
+        assert_eq!(
+            outbound, None,
+            "a customer answer carries the mail-server queue reference"
+        );
+
+        let (result, reason, outbound) = split_delivery_note(note, reference, true);
+        assert_eq!(result, None, "a platform answer is not reworded");
+        assert_eq!(
+            reason.as_deref(),
+            Some("not submitted: outbound contract refused")
+        );
+        assert_eq!(outbound.as_deref(), Some("MTA-QUEUE-42"));
+
+        let (result, reason, outbound) = split_delivery_note(None, None, false);
+        assert_eq!(
+            result, None,
+            "a delivered notice earns no sentence about a problem"
+        );
+        assert_eq!(reason, None);
+        assert_eq!(outbound, None);
+    }
+
+    /// The delivery worker's note quotes the sending path, so it is a fact about
+    /// Nullapart rather than about the alert a tenant is waiting for. A customer
+    /// answer carries a projected result and none of the note.
+    #[test]
+    fn a_customer_delivery_row_answers_with_a_result_and_no_ledger_note() {
+        let body = serde_json::to_value(delivery_view(
+            Some("delivery state unresolved: smtp submission refused"),
+            false,
+        ))
+        .expect("delivery view serializes");
+
+        assert_eq!(body["result"], serde_json::json!("delivery_unconfirmed"));
+        for forbidden in ["reason", "outbound_transaction_id", "smtp"] {
+            assert!(
+                !body.to_string().contains(forbidden),
+                "customer delivery row carried {forbidden}: {body}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_platform_delivery_row_keeps_the_ledger_note_it_triages_with() {
+        let body = serde_json::to_value(delivery_view(
+            Some("delivery state unresolved: smtp submission refused"),
+            true,
+        ))
+        .expect("delivery view serializes");
+
+        assert_eq!(
+            body["reason"],
+            serde_json::json!("delivery state unresolved: smtp submission refused")
+        );
+        assert_eq!(
+            body["outbound_transaction_id"],
+            serde_json::json!("MTA-QUEUE-42")
+        );
+        assert!(
+            body.get("result").is_none(),
+            "platform delivery row carried a result key: {body}"
+        );
+    }
+
+    /// A delivered row has no note, so a customer gets no result key either: the
+    /// answer is the absence of a problem, not a sentence about one.
+    #[test]
+    fn a_delivered_notice_is_answered_with_no_result_key_at_all() {
+        let body = serde_json::to_value(delivery_view(None, false)).expect("view serializes");
+        assert!(body.get("result").is_none(), "{body}");
+    }
+
+    #[test]
+    fn ledger_notes_project_onto_customer_results_and_unknown_prose_never_echoes() {
+        for (note, expected) in [
+            (Some("digest_window"), Some("covered_by_earlier_alert")),
+            (
+                Some("coalesced_into_digest"),
+                Some("included_with_another_alert"),
+            ),
+            (
+                Some("content_changed_before_retry"),
+                Some("changed_before_retry"),
+            ),
+            (
+                Some("not submitted: domain not verified"),
+                Some("send_refused"),
+            ),
+            (
+                Some("delivery state unresolved: AlreadySubmitted(tx-9)"),
+                Some("delivery_unconfirmed"),
+            ),
+            (Some("panic in worker at 0x7f00"), Some("problem_recorded")),
+            (Some(""), Some("problem_recorded")),
+            (None, None),
+        ] {
+            assert_eq!(customer_delivery_result(note), expected, "for {note:?}");
         }
     }
 

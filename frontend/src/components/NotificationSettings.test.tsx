@@ -27,6 +27,14 @@ const manageSession = buildSession([
 ]);
 const viewSession = buildSession(["domain-security:view", "notifications:view"]);
 const noViewSession = buildSession(["domain-security:view"]);
+/** A platform seat: same capabilities, but the console may show it the ledger
+ * note and the mail-server queue reference it triages with. */
+const platformSession = {
+  ...manageSession,
+  roles: ["system_admin"],
+  tier: "system",
+  customerId: null,
+};
 
 const storedSettings = {
   enabled: true,
@@ -282,42 +290,93 @@ describe("NotificationSettings writes", () => {
 });
 
 describe("NotificationSettings delivery ledger", () => {
-  it("names each notice, its outcome and the mail queue reference", async () => {
+  /**
+   * Deliberately answers with both shapes on one row: the server gives a tenant
+   * `result` and gives the platform `reason` and the queue reference, so a tenant
+   * page that receives platform keys anyway has to prove it renders its own
+   * wording rather than whatever arrived.
+   */
+  const bothShapes = [
+    {
+      notification_id: "notice-1",
+      status: "suppressed",
+      recipient_count: 0,
+      attempts: 1,
+      result: "covered_by_earlier_alert",
+      reason: "digest_window",
+      created_at: "2026-01-06T09:00:00Z",
+      updated_at: "2026-01-06T09:01:00Z",
+    },
+    {
+      notification_id: "notice-2",
+      status: "dead_lettered",
+      recipient_count: 0,
+      attempts: 3,
+      result: "send_refused",
+      reason: "not submitted: outbound contract refused (sender mx.internal.example.test)",
+      outbound_transaction_id: "4A2F1C9",
+      created_at: "2026-01-05T09:00:00Z",
+      updated_at: "2026-01-05T09:20:00Z",
+    },
+  ];
+
+  it("answers a tenant with what happened to their alert, not the sending machinery", async () => {
+    await openCard(manageSession, {
+      session: manageSession,
+      body: responseFor({ deliveries: bothShapes }),
+    });
+
+    const history = screen.getByRole("region", { name: "Delivery history" });
+    expect(within(history).getByText("SPF is not publishing")).toBeInTheDocument();
+    expect(within(history).getByText("Notice notice-2")).toBeInTheDocument();
+    expect(within(history).getByText("Not delivered")).toBeInTheDocument();
+    expect(within(history).getByText("Covered by an earlier alert")).toBeInTheDocument();
+    expect(within(history).getByText("The notice was never sent")).toBeInTheDocument();
+
+    // The worker's note quotes the outbound relay's own failure and the queue id
+    // names a mail-server queue. Neither belongs in a customer answer.
+    expect(history.textContent).not.toContain("mx.internal.example.test");
+    expect(history.textContent).not.toContain("not submitted");
+    expect(history.textContent).not.toContain("digest_window");
+    expect(history.textContent).not.toContain("Mail queue reference");
+  });
+
+  it("answers a tenant whose notice joined another alert", async () => {
     await openCard(manageSession, {
       session: manageSession,
       body: responseFor({
         deliveries: [
           {
             notification_id: "notice-1",
-            status: "sent",
-            recipient_count: 2,
+            status: "suppressed",
+            recipient_count: 0,
             attempts: 1,
-            reason: null,
-            outbound_transaction_id: "4A2F1C9",
+            result: "included_with_another_alert",
             created_at: "2026-01-06T09:00:00Z",
             updated_at: "2026-01-06T09:01:00Z",
-          },
-          {
-            notification_id: "notice-2",
-            status: "dead_lettered",
-            recipient_count: 0,
-            attempts: 3,
-            reason: "The outbound relay refused the connection.",
-            created_at: "2026-01-05T09:00:00Z",
-            updated_at: "2026-01-05T09:20:00Z",
           },
         ],
       }),
     });
 
     const history = screen.getByRole("region", { name: "Delivery history" });
-    expect(within(history).getByText("SPF is not publishing")).toBeInTheDocument();
+    expect(within(history).getByText("Suppressed")).toBeInTheDocument();
+    expect(within(history).getByText("Included with another alert")).toBeInTheDocument();
+  });
+
+  it("keeps the ledger note and queue reference for a platform seat", async () => {
+    await openCard(platformSession, {
+      session: platformSession,
+      body: responseFor({ deliveries: bothShapes }),
+    });
+
+    const history = screen.getByRole("region", { name: "Delivery history" });
     expect(within(history).getByText("Mail queue reference 4A2F1C9")).toBeInTheDocument();
-    expect(within(history).getByText("Notice notice-2")).toBeInTheDocument();
-    expect(within(history).getByText("Not delivered")).toBeInTheDocument();
     expect(
-      within(history).getByText("The outbound relay refused the connection."),
+      within(history).getByText(/outbound contract refused \(sender mx\.internal\.example\.test\)/),
     ).toBeInTheDocument();
+    expect(history.textContent).not.toContain("The notice was never sent");
+    expect(history.textContent).not.toContain("Covered by an earlier alert");
   });
 
   it("says nothing has been queued rather than implying a quiet inbox", async () => {

@@ -14,6 +14,7 @@ use nullapart_mail_contracts::{
     transaction::{CustomerId, DeploymentId},
     ActorId,
 };
+use nullapart_mail_core::admin_rbac::SYSTEM_ADMIN_ROLE;
 use nullapart_mail_core::notification_api::{
     notification_router, NotificationApiState, NOTIFICATIONS_MANAGE_PERMISSION,
     NOTIFICATIONS_VIEW_PERMISSION,
@@ -203,11 +204,19 @@ async fn get_settings(
     tenant: &Tenant,
     permissions: Vec<String>,
 ) -> (StatusCode, Value) {
+    get_settings_as(pool, deployment_id, context(tenant, permissions)).await
+}
+
+async fn get_settings_as(
+    pool: &PgPool,
+    deployment_id: &str,
+    context: TenantContext,
+) -> (StatusCode, Value) {
     let response = notification_router(NotificationApiState::new(
         pool.clone(),
         DeploymentId::new(deployment_id),
     ))
-    .layer(Extension(context(tenant, permissions)))
+    .layer(Extension(context))
     .oneshot(
         Request::get("/api/v1/notifications/settings")
             .body(Body::empty())
@@ -223,6 +232,15 @@ async fn get_settings(
         status,
         serde_json::from_slice(&bytes).expect("response must be JSON"),
     )
+}
+
+/// A platform seat aimed at the same tenant record. Placement, not permission,
+/// is what decides which of the ledger's two ways of answering a delivery row
+/// the response carries, so both seats need to reach the route.
+fn platform_context(tenant: &Tenant, permissions: Vec<String>) -> TenantContext {
+    let mut context = context(tenant, permissions);
+    context.actor.roles = vec![SYSTEM_ADMIN_ROLE.to_string()];
+    context
 }
 
 /// Read the settings table the way the mail-core runtime does: inside a
@@ -477,5 +495,80 @@ async fn a_session_from_another_deployment_cannot_reach_the_settings_row() {
             .expect("home settings row must still exist")["enabled"],
         true,
         "a foreign-deployment session must not flip the home tenant's settings"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires migrated local PostgreSQL through 042_tenant_notification_settings.sql"]
+async fn a_delivery_row_answers_a_tenant_with_a_result_and_the_platform_with_its_note() {
+    let pool = connect().await;
+    let deployment_id = seed_deployment(&pool, "delivery-note").await;
+    let tenant = seed_tenant(&pool, &deployment_id, "delivery-note").await;
+    let domain_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM domains WHERE customer_id = $1 LIMIT 1")
+            .bind(&tenant.customer_id)
+            .fetch_one(&pool)
+            .await
+            .expect("verified domain fixture must exist");
+    let notification_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO domain_security_notifications \
+             (deployment_id, customer_id, domain_id, notification_type, severity, title, detail) \
+         VALUES ($1, $2, $3, 'dmarc_failure_spike', 'warning', 'Alignment slipped', \
+                 'Three sources failed alignment.') \
+         RETURNING id",
+    )
+    .bind(&deployment_id)
+    .bind(&tenant.customer_id)
+    .bind(domain_id)
+    .fetch_one(&pool)
+    .await
+    .expect("notification fixture must insert");
+
+    // What the delivery worker actually writes: the outbound contract's own
+    // error, which names the sending path rather than the tenant's alert.
+    let note = "not submitted: outbound contract refused (sender mx.internal.example.test)";
+    sqlx::query(
+        "INSERT INTO notification_deliveries \
+             (deployment_id, customer_id, notification_id, idempotency_key, status, \
+              recipient_count, attempts, reason, content_sha256) \
+         VALUES ($1, $2, $3, $4, 'dead_lettered', 2, 3, $5, $6)",
+    )
+    .bind(&deployment_id)
+    .bind(&tenant.customer_id)
+    .bind(notification_id)
+    .bind(format!("delivery-note-{}", Uuid::new_v4().simple()))
+    .bind(note)
+    .bind("f".repeat(64))
+    .execute(&pool)
+    .await
+    .expect("delivery fixture must insert");
+
+    let (status, view) = get_settings(&pool, &deployment_id, &tenant, tenant_permissions()).await;
+    assert_eq!(status, StatusCode::OK);
+    let deliveries = &view["data"]["deliveries"];
+    assert_eq!(deliveries[0]["result"], json!("send_refused"));
+    for forbidden in [
+        "reason",
+        "outbound_transaction_id",
+        "mx.internal.example.test",
+    ] {
+        assert!(
+            !deliveries.to_string().contains(forbidden),
+            "a tenant delivery answer carried {forbidden}: {deliveries}"
+        );
+    }
+
+    let (status, view) = get_settings_as(
+        &pool,
+        &deployment_id,
+        platform_context(&tenant, tenant_permissions()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let row = &view["data"]["deliveries"][0];
+    assert_eq!(row["reason"], json!(note));
+    assert!(
+        row.get("result").is_none(),
+        "a platform delivery answer carried a result key: {row}"
     );
 }

@@ -721,14 +721,29 @@ const PAYLOADS: Array<[string, unknown]> = [
       deliveries: [
         {
           notification_id: "notice-1",
-          status: "sent",
-          recipient_count: 1,
+          status: "suppressed",
+          recipient_count: 0,
           attempts: 1,
-          reason: null,
-          // The mail server's queue reference is a platform key: the customer
-          // answer carries no such field at all.
+          // A customer answer carries the result key and no ledger note.
+          result: "covered_by_earlier_alert",
           created_at: "2026-01-06T09:00:00Z",
           updated_at: "2026-01-06T09:01:00Z",
+        },
+        {
+          notification_id: "notice-2",
+          status: "dead_lettered",
+          recipient_count: 0,
+          attempts: 3,
+          // Deliberately answered with the platform's own shape: this is the
+          // delivery worker's ledger note verbatim (one of the three suppression
+          // and dead-letter keys it writes) plus the mail-server queue reference.
+          // A tenant page that received these anyway still has to render its own
+          // wording, so a projection regression surfaces here as a machine key
+          // on the page rather than passing quietly.
+          reason: "content_changed_before_retry",
+          outbound_transaction_id: "4A2F1C9",
+          created_at: "2026-01-05T09:00:00Z",
+          updated_at: "2026-01-05T09:20:00Z",
         },
       ],
       capabilities: {
@@ -961,6 +976,12 @@ const SURFACES: Surface[] = [
     path: "/domain-security",
     entry: "/domain-security",
     component: DomainSecurity,
+    // The alert-mail card reads a second endpoint that settles after the domain
+    // list, so waiting on one of its own labels is what puts the delivery ledger
+    // in the tree before the scan runs. It is a label the ledger paints in either
+    // placement, so a broken placement still reaches the scan instead of failing
+    // as a missing-text timeout.
+    ready: "Not delivered",
   },
   {
     name: "Outbound",

@@ -17,7 +17,7 @@ import {
   type NotificationSettingsInput,
 } from "../api/notifications";
 import type { ApiError } from "../api/client";
-import { hasPermission, loadSession } from "../auth/session";
+import { hasPermission, isTenantTier, loadSession } from "../auth/session";
 import { StatusPill } from "./StatusPill";
 import { StepUpPrompt } from "./StepUpPrompt";
 import { Hint } from "./primitives/Hint";
@@ -45,6 +45,22 @@ const DELIVERY_TONES: Record<DeliveryStatus, StatusTone> = {
   dead_lettered: "threat",
 };
 
+/**
+ * What a tenant can do with a delivery row that did not go out. The server's
+ * customer answer carries one of these keys and never the worker's own note,
+ * which quotes the sending path. A key this table does not know is answered
+ * with the general line rather than echoed, so an unread code cannot become a
+ * sentence about Nullapart's machinery.
+ */
+const DELIVERY_RESULT_LABELS: Record<string, string> = {
+  covered_by_earlier_alert: "Covered by an earlier alert",
+  included_with_another_alert: "Included with another alert",
+  changed_before_retry: "The alert changed before it could be retried",
+  send_refused: "The notice was never sent",
+  delivery_unconfirmed: "Delivery could not be confirmed",
+  problem_recorded: "A delivery problem was recorded",
+};
+
 function errorMessage(error: unknown): string {
   if (typeof error === "object" && error !== null && "message" in error) {
     return String((error as ApiError).message);
@@ -69,11 +85,15 @@ function sameDraft(left: NotificationDraft, right: NotificationDraft): boolean {
 }
 
 function deliveryLabel(status: string): string {
-  return DELIVERY_LABELS[status as DeliveryStatus] ?? status;
+  return DELIVERY_LABELS[status as DeliveryStatus] ?? "Recorded";
 }
 
 function deliveryTone(status: string): StatusTone {
   return DELIVERY_TONES[status as DeliveryStatus] ?? "muted";
+}
+
+function deliveryResultLabel(result: string): string {
+  return DELIVERY_RESULT_LABELS[result] ?? DELIVERY_RESULT_LABELS.problem_recorded;
 }
 
 interface NotificationSettingsProps {
@@ -101,6 +121,7 @@ export function NotificationSettings({ titlesById = {} }: NotificationSettingsPr
     queryFn: ({ signal }) => loadSession(signal),
   });
   const current = session.data ?? null;
+  const tenant = isTenantTier(current);
   const canView = hasPermission(current, "notifications:view");
   const settings = useQuery({
     queryKey: ["notifications", "settings"],
@@ -352,6 +373,7 @@ export function NotificationSettings({ titlesById = {} }: NotificationSettingsPr
               <DeliveryRow
                 delivery={delivery}
                 title={titlesById[delivery.notification_id]}
+                tenant={tenant}
                 key={delivery.notification_id}
               />
             ))}
@@ -362,7 +384,25 @@ export function NotificationSettings({ titlesById = {} }: NotificationSettingsPr
   );
 }
 
-function DeliveryRow({ delivery, title }: { delivery: NotificationDelivery; title?: string }) {
+function DeliveryRow({
+  delivery,
+  title,
+  tenant,
+}: {
+  delivery: NotificationDelivery;
+  title?: string;
+  tenant: boolean;
+}) {
+  // A customer answer carries `result`, a platform answer carries `reason`. The
+  // page branches on placement rather than on which key arrived, so a server
+  // regression that starts sending the note to a tenant shows up as this page
+  // going quiet rather than as the sending machinery's failure text in the card.
+  const note = tenant
+    ? delivery.result === undefined
+      ? null
+      : deliveryResultLabel(delivery.result)
+    : (delivery.reason ?? null);
+
   return (
     <div className="notification-delivery">
       <StatusPill tone={deliveryTone(delivery.status)} label={deliveryLabel(delivery.status)} />
@@ -373,8 +413,8 @@ function DeliveryRow({ delivery, title }: { delivery: NotificationDelivery; titl
           {delivery.attempts} attempt{delivery.attempts === 1 ? "" : "s"} ·{" "}
           {formatTimestamp(delivery.updated_at)}
         </span>
-        {delivery.reason ? <small>{delivery.reason}</small> : null}
-        {delivery.outbound_transaction_id ? (
+        {note ? <small>{note}</small> : null}
+        {!tenant && delivery.outbound_transaction_id ? (
           <small className="notification-delivery-ref">
             Mail queue reference {delivery.outbound_transaction_id}
           </small>
@@ -390,8 +430,9 @@ function severityFloorLabel(value: string): string {
 
 function digestWindowSentence(minutes: number): string {
   if (minutes === 0) return "mailed as each finding opens";
-  if (minutes < 60) return `coalesced over ${minutes} minutes`;
-  if (minutes === 60) return "coalesced over an hour";
-  if (minutes < 1440) return `coalesced over ${Math.round(minutes / 60)} hours`;
-  return "coalesced over a day";
+  if (minutes < 60) return `one mail per domain and finding type every ${minutes} minutes`;
+  if (minutes === 60) return "one mail per domain and finding type an hour";
+  if (minutes < 1440)
+    return `one mail per domain and finding type every ${Math.round(minutes / 60)} hours`;
+  return "one mail per domain and finding type a day";
 }

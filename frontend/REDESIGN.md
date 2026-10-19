@@ -1101,8 +1101,74 @@ read is unchanged here and its `postgres_quarantine_detail` test stays
 `scanner_results` exists only on the detail answer, so the list projection had
 nothing to withhold. `/api/v1/scanner-operations` sits behind
 `scanner:operations:view`, a permission no role in the catalog grants, and is
-outside this slice. The remaining named leak is the internal failure prose in
-`GET /notifications/settings` delivery rows.
+outside this slice. The remaining named leak was the internal failure prose in
+`GET /notifications/settings` delivery rows, closed by the nineteenth pass below.
+
+## Landed in the nineteenth pass (a delivery row answers with a result, not the worker's own note)
+
+The last named leak from the same list of four was
+`GET /notifications/settings`. Its delivery ledger carried the text the delivery
+worker writes when a notice does not go out, and that text quotes the sending
+machinery: `not submitted: outbound contract refused (sender ...)`, `delivery
+state unresolved: <SMTP answer>`. A tenant reading their own alert history was
+being handed a failure report about Nullapart's mail path, plus the mail server's
+queue reference.
+
+- **The projection is read-time, not a schema change.** The worker keeps writing
+  its real ledger note and nothing was migrated. `split_delivery_note` in
+  `crates/mail-core/src/notification_api.rs` sits between the SQL row and the
+  response and decides per placement: a platform seat gets `reason` and
+  `outbound_transaction_id` exactly as stored, a customer gets `result` and
+  neither other key. Additive key again, for the same reason as the three passes
+  before it.
+- **Six note shapes fold onto six customer answers.** The three suppression and
+  dead-letter keys (`digest_window`, `coalesced_into_digest`,
+  `content_changed_before_retry`) become `covered_by_earlier_alert`,
+  `included_with_another_alert`, `changed_before_retry`. The two failure prefixes
+  are matched on their stable prefix because the rest of the line is the sending
+  path's own prose. Anything the projection does not recognise answers
+  `problem_recorded` rather than echoing, so a new worker failure text cannot
+  reach a customer as a sentence about the machinery. A `None` note stays `None`:
+  a delivered notice earns no wording about a problem.
+- **The split is pinned in one function so the test cannot drift from the route.**
+  An earlier draft of this slice had the unit tests rebuild the same `then_some`
+  expression the SQL mapping used, which proves nothing once the route changes.
+  `load_deliveries` now calls `split_delivery_note` and so do the tests. Proven
+  red by forcing the platform arm: the customer row test and the new split test
+  both failed before the file was restored.
+- **The console branches on placement, not on which key arrived.** `DeliveryRow`
+  in `frontend/src/components/NotificationSettings.tsx` takes `tenant` (from
+  `isTenantTier`) and renders `deliveryResultLabel(result)` for a customer or
+  `reason` for a platform seat. An unknown result key answers the general line,
+  the same fail-closed rule as the quarantine labels. An unknown status now
+  answers "Recorded" instead of printing `dead_lettered` raw.
+- **"Coalesced over an hour" was the worker's word, not the tenant's.** The
+  effective-settings sentence now reads "one mail per domain and finding type an
+  hour", which is what the setting actually does.
+- **Two fixtures deliberately answer with the platform's shape.**
+  `NotificationSettings.test.tsx` gives both ledger rows both key sets, so the
+  tenant test asserts the note, the internal hostname and `Mail queue reference`
+  are absent from the rendered history while the platform test asserts they are
+  present. The `Domain security` guard surface carries a row whose `reason` is
+  `content_changed_before_retry` with its queue reference set, and now waits on
+  `Not delivered` — a label the ledger paints in either placement — so a broken
+  branch reaches the scan instead of failing as a missing-text timeout. Proven red
+  by forcing `tenant={false}`: the surface reported `"MTA queue identifier"` and
+  `"machine key"` hits before the page was restored.
+
+**Gates**: `cargo fmt --all`, `cargo test -p nullapart-mail-core --lib` 651
+passed (1 ignored), `cargo clippy -p nullapart-mail-core --all-targets -- -D
+warnings` clean, `cargo test --test postgres_notification_settings --no-run`
+links.
+
+**What this does not prove.** `load_deliveries` takes a `sqlx::Transaction`, so
+unlike the quarantine route there is no in-memory double that can answer it. The
+handler's `platform_placement(&context)` call and the SQL column read are covered
+only by `a_delivery_row_answers_a_tenant_with_a_result_and_the_platform_with_its_note`,
+which is `#[ignore]`d and compile-verified, not run, for the same broken local
+database tunnel. A checkout that can reach a migrated Postgres runs it. The
+projection is pinned by the unit tests above, so what stays unproven is the
+wiring rather than the wording.
 
 ## Deploy incident: never `rsync --delete` to `.4`
 

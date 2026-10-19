@@ -55,7 +55,12 @@ export interface NotificationDelivery {
   status: DeliveryStatus;
   recipient_count: number;
   attempts: number;
-  reason: string | null;
+  /** Why this notice did not go out, in keys the console puts words to. The
+   * platform answer omits it. */
+  result?: string;
+  /** The delivery worker's own note, which quotes the sending path. The
+   * customer answer omits the key. */
+  reason?: string;
   outbound_transaction_id?: string;
   created_at: string;
   updated_at: string;
