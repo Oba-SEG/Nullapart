@@ -214,6 +214,38 @@ describe("MessageDetail", () => {
     expect(await screen.findByRole("button", { name: "View message content" })).toBeTruthy();
   });
 
+  /**
+   * A customer answer names the check under `check` and leaves `scanner_type`
+   * out; a platform answer does the reverse. Both reach the same label, so the
+   * console renders the analysis without repeating the field or key that carried
+   * it.
+   */
+  it("names a finding's check from the customer field name", async () => {
+    stubFetch({
+      session: contentSession,
+      detail: {
+        ...traceTransaction,
+        findings: [
+          {
+            id: "finding-1",
+            severity: "high",
+            category: "malware",
+            description: "high malware evidence was recorded for this message.",
+            check: "malware_analysis",
+            false_positive: false,
+            created_at: "2026-09-30T12:00:03Z",
+          },
+        ],
+      },
+    });
+    renderAt("/messages/tx-2002");
+
+    expect(await screen.findByText("tx-2002")).toBeTruthy();
+    expect(screen.getByText(/Malware analysis/)).toBeTruthy();
+    expect(screen.queryByText(/malware_analysis/)).toBeNull();
+    expect(screen.queryByText(/scanner/)).toBeNull();
+  });
+
   it("shows a Message not found state when the transaction is not visible", async () => {
     stubFetch({
       session: supportSession,

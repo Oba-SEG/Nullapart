@@ -347,7 +347,16 @@ struct TraceFindingResponse {
     severity: String,
     category: String,
     description: String,
-    scanner_type: String,
+    /// Which analysis recorded the finding, named for the customer's check.
+    /// Emitted only for a customer placement, and only under this name:
+    /// `scanner_type` says the finding came out of the platform's scanner fleet,
+    /// which is a fact about the machinery rather than the message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    check: Option<String>,
+    /// The same projected source under the platform's own field name, kept for
+    /// existing consumers of the trace contract. Absent for a customer placement.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scanner_type: Option<String>,
     false_positive: bool,
     created_at: DateTime<Utc>,
 }
@@ -360,6 +369,7 @@ impl TraceFindingResponse {
         scanner_type: String,
         false_positive: bool,
         created_at: DateTime<Utc>,
+        platform: bool,
     ) -> Self {
         // The stored description is scanner-authored prose: rule symbols, engine
         // names, model identifiers, thresholds and raw scores. It is not
@@ -368,14 +378,15 @@ impl TraceFindingResponse {
         // the sentence from what a customer can act on: how serious, about what,
         // and which analysis recorded it.
         let description = generic_customer_safe_finding_description(&severity, &category);
-        let scanner_type = customer_safe_finding_source(&scanner_type).to_string();
+        let source = customer_safe_finding_source(&scanner_type).to_string();
 
         Self {
             id,
             severity,
             category,
             description,
-            scanner_type,
+            check: (!platform).then_some(source.clone()),
+            scanner_type: platform.then_some(source),
             false_positive,
             created_at,
         }
@@ -1133,6 +1144,7 @@ async fn session_transaction_detail(
                 row.get("scanner_type"),
                 row.get("false_positive"),
                 row.get("created_at"),
+                platform,
             )
         })
         .collect();
@@ -1975,7 +1987,9 @@ mod tests {
     /// description at all, so scanner prose (model identifiers, thresholds, raw
     /// scores, rule symbols) cannot reach a customer trace. This asserts the shape
     /// rather than a vocabulary list: a future field carrying raw evidence fails
-    /// here instead of leaking.
+    /// here instead of leaking. The field name is part of the shape: a customer
+    /// answer that still keys the source `scanner_type` has told them the platform
+    /// runs a scanner fleet, even with a clean value in it.
     #[test]
     fn inline_ml_findings_are_projected_as_customer_safe_threat_analysis() {
         let finding = TraceFindingResponse::project_customer_safe(
@@ -1985,9 +1999,10 @@ mod tests {
             "inline_ml".to_string(),
             false,
             Utc::now(),
+            false,
         );
 
-        assert_eq!(finding.scanner_type, "threat_analysis");
+        assert_eq!(finding.check.as_deref(), Some("threat_analysis"));
         assert_eq!(
             finding.description,
             "high phishing evidence was recorded for this message."
@@ -2001,6 +2016,7 @@ mod tests {
             "score",
             "details",
             "indicators",
+            "scanner",
         ] {
             assert!(
                 !body.contains(forbidden),
@@ -2018,9 +2034,10 @@ mod tests {
             "urlanalysis".to_string(),
             false,
             Utc::now(),
+            false,
         );
 
-        assert_eq!(finding.scanner_type, "link_analysis");
+        assert_eq!(finding.check.as_deref(), Some("link_analysis"));
         assert_eq!(
             finding.description,
             "high malware evidence was recorded for this message."
@@ -2037,15 +2054,43 @@ mod tests {
             "custom".to_string(),
             false,
             Utc::now(),
+            false,
         );
 
-        assert_eq!(static_rule_finding.scanner_type, "security_analysis");
+        assert_eq!(
+            static_rule_finding.check.as_deref(),
+            Some("security_analysis")
+        );
         assert_eq!(
             static_rule_finding.description,
             "critical malware evidence was recorded for this message."
         );
         let body = serde_json::to_string(&static_rule_finding).expect("finding must serialize");
         assert!(!body.contains("Static malware rule"));
+    }
+
+    /// A platform read keeps the key the trace contract already published. The
+    /// value was never the engine name here, so nothing is gained by renaming the
+    /// platform's field, and an existing consumer would break.
+    #[test]
+    fn a_platform_finding_keeps_the_scanner_type_key_and_drops_the_customer_one() {
+        let finding = TraceFindingResponse::project_customer_safe(
+            Uuid::new_v4(),
+            "high".to_string(),
+            "malware".to_string(),
+            "clamav".to_string(),
+            false,
+            Utc::now(),
+            true,
+        );
+
+        assert_eq!(finding.scanner_type.as_deref(), Some("malware_analysis"));
+        let body = serde_json::to_string(&finding).expect("finding must serialize");
+        assert!(
+            body.contains("\"scanner_type\":\"malware_analysis\""),
+            "{body}"
+        );
+        assert!(!body.contains("\"check\""), "{body}");
     }
 
     #[test]

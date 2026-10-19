@@ -119,12 +119,19 @@ function orderedStages(stages: TraceFlowStage[]): TraceFlowStage[] {
   );
 }
 
+/** The analysis that recorded a finding, whichever naming the answer used. */
+function findingSource(finding: TraceFinding): string | undefined {
+  return finding.check ?? finding.scanner_type;
+}
+
 function isThreatAnalysisFinding(finding: TraceFinding): boolean {
-  return finding.scanner_type === "threat_analysis";
+  return findingSource(finding) === "threat_analysis";
 }
 
 function sourceLabel(finding: TraceFinding): string {
-  return FINDING_SOURCE_LABELS[finding.scanner_type] ?? "Security analysis";
+  const source = findingSource(finding);
+  if (source === undefined) return "Security analysis";
+  return FINDING_SOURCE_LABELS[source] ?? "Security analysis";
 }
 
 function threatAnalysisSummary(findings: TraceFinding[]): TraceFinding[] {

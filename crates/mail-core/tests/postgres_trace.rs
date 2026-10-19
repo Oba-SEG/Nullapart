@@ -782,6 +782,15 @@ async fn session_detail_withholds_platform_machinery_from_the_customer_read() {
     let tenant_message_id =
         insert_instance(&pool, &transaction_id, &fixture.customer_a, "allow").await;
     insert_attempt(&pool, tenant_message_id.clone(), Some(250)).await;
+    insert_finding(
+        &pool,
+        tenant_message_id.clone(),
+        &transaction_id,
+        artifact_id,
+        &fixture.deployment,
+        &fixture.customer_a,
+    )
+    .await;
     sqlx::query("UPDATE smtp_transactions SET postfix_queue_ids = $2::text[] WHERE id = $1")
         .bind(transaction_id.0)
         .bind(vec!["AA1B2C3D".to_string()])
@@ -828,6 +837,11 @@ async fn session_detail_withholds_platform_machinery_from_the_customer_read() {
         json!("250"),
         "and keeps what the attempt did"
     );
+    // The stored row keys its source `scanner_type`, and the value the customer
+    // reads is a check name. Both halves have to change: a clean value under the
+    // platform's field name still tells them the platform runs a scanner fleet.
+    assert_eq!(data["findings"][0]["check"], json!("security_analysis"));
+    assert!(data["findings"][0].get("scanner_type").is_none(), "{data}");
 
     let response = mail_trace_router(state.clone())
         .layer(Extension(admin_context(
@@ -852,6 +866,11 @@ async fn session_detail_withholds_platform_machinery_from_the_customer_read() {
         data["delivery_attempts"][0]["postfix_queue_id"],
         json!("EE4F5G6H")
     );
+    assert_eq!(
+        data["findings"][0]["scanner_type"],
+        json!("security_analysis")
+    );
+    assert!(data["findings"][0].get("check").is_none(), "{data}");
 
     let _ = std::fs::remove_dir_all(&root);
 }

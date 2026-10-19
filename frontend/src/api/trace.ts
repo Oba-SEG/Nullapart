@@ -74,7 +74,10 @@ export interface TraceFinding {
   severity: string;
   category: string;
   description: string;
-  scanner_type: string;
+  /** Which analysis recorded the finding, in the customer's naming. The platform answer omits the key. */
+  check?: string;
+  /** The same source under the platform's field name. The customer answer omits the key. */
+  scanner_type?: string;
   false_positive: boolean;
   created_at: string;
 }

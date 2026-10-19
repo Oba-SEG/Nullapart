@@ -346,7 +346,29 @@ const tenantTrace = {
       postfix_queue_id: null,
     },
   ],
-  findings: [],
+  findings: [
+    {
+      id: "finding-1",
+      severity: "high",
+      category: "malware",
+      description: "high malware evidence was recorded for this message.",
+      check: "malware_analysis",
+      false_positive: false,
+      created_at: "2026-01-06T09:49:57Z",
+    },
+    {
+      id: "finding-2",
+      severity: "medium",
+      category: "phishing",
+      description: "medium phishing evidence was recorded for this message.",
+      // A platform answer read by a tenant seat: the field name and the stored
+      // scanner key both stay on purpose, so a projection regression fails here
+      // instead of printing a machine key to an operator.
+      scanner_type: "inline_ml",
+      false_positive: false,
+      created_at: "2026-01-06T09:49:58Z",
+    },
+  ],
   flow_stages: [
     { stage: "received", at: "2026-01-06T09:49:55Z" },
     { stage: "delivered", at: "2026-01-06T09:50:02Z" },
@@ -958,6 +980,7 @@ const SURFACES: Surface[] = [
     path: "/messages/$messageId",
     entry: "/messages/0f9d0a6b-1111-2222-3333-444455556666",
     component: MessageDetail,
+    ready: "high malware evidence was recorded for this message.",
   },
   { name: "Audit log", path: "/audit-log", entry: "/audit-log", component: AuditLog },
   {

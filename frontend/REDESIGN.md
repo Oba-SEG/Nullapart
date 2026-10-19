@@ -988,6 +988,56 @@ The live wire sweep on `.4` and migration `044` are still outstanding (task 81).
 `scanner_type` on the trace wire, the quarantine checks' capability keys and the
 notification delivery failure prose are unchanged.
 
+## Landed in the seventeenth pass (a customer gets a check, not a scanner)
+
+Of the four answers the fifteenth pass named, this closes the trace route. The
+value behind `scanner_type` was already humanised; the key was not.
+
+- **One additive key, not a rename.** `crates/mail-core/src/trace.rs` now emits
+  `check` for a customer placement and `scanner_type` for a platform one, each
+  carrying the same projected source. A rename would have broken every existing
+  consumer of the trace contract, and `docs/27-API-VERSIONING-FEATURE-FLAGS.md`
+  asks for additive keys with conditional omission instead. `project_customer_safe`
+  takes the caller's placement and returns whichever field belongs to it, so
+  neither name ever appears in the other's answer.
+- **Why the platform keeps its name for it.** `scanner_type` is a fact about the
+  fleet that produced the evidence, which is what a platform operator triages
+  with. A customer chooses evidence by what was looked at, so their answer says
+  `check: "malware_analysis"` and nothing about a scanner. The two tests in
+  `postgres_trace.rs` assert both shapes on the same stored row: the customer
+  answer has `check` and no `scanner_type`, the `system_admin` answer has
+  `scanner_type` and no `check`.
+- **The console reads whichever name arrived.** `frontend/src/api/trace.ts` marks
+  both optional, and `MessageDetail.tsx:123` resolves a finding's source through
+  one helper that reads `check` then `scanner_type`, falling back to "Security
+  analysis" for any key the naming layer does not know. A stored value that
+  reaches the browser unprojected renders as a capability, not a machine token.
+- **The guard had never rendered a finding at all.** Its trace fixture carried
+  `findings: []`, so the whole naming-layer path for security evidence was
+  untested for a tenant seat. It now has two rows: one with the customer key, and
+  one answering as a platform would (`scanner_type: "inline_ml"`, on purpose, the
+  way the other fixtures keep platform keys). The sweep waits for a
+  data-derived label before scanning, so it cannot pass on a loading state.
+  Verified by making it look harder: returning the raw source from `sourceLabel`
+  turned the Message trace surface red with two `machine key` hits before the
+  page was restored.
+- **A heading I dropped last pass.** The `rsync --delete` incident section lost
+  its title when the sixteenth pass was inserted above it. Restored here.
+
+**Gates**: `cargo fmt --all`, `cargo test -p nullapart-mail-core --lib` 642
+passed (1 ignored), `cargo clippy -p nullapart-mail-core --all-targets -- -D
+warnings` clean, `cargo test --test postgres_trace --no-run` links.
+`pnpm check-all` green (308 tests, 34 files).
+
+**What this does not prove.** The `postgres_trace` assertions are `#[ignore]`d DB
+tests and compile-verify only: the local tunnel to the test database has been
+broken since the RBAC pass. The live wire sweep on `.4` and migration `044` are
+still outstanding (task 81). Two of the four answers remain: the quarantine
+checks' capability keys, status and duration, and the internal failure prose in
+`GET /notifications/settings` delivery rows.
+
+## Deploy incident: never `rsync --delete` to `.4`
+
 A previous sync used `rsync --delete` while deploying frontend changes. It was
 wrong: the task was UI-only, the flag was unnecessary, and `ml/inline/checkpoints/multilabel-v1/{model,onnx}`
 is remote-only data that the local tree does not contain. Those ONNX artifacts
