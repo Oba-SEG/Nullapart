@@ -67,7 +67,8 @@ export interface NotificationCapabilities {
 }
 
 export interface NotificationSettingsResponse {
-  deployment_id: string;
+  /** Platform log reference; the customer projection leaves it out. */
+  deployment_id: string | null;
   generated_at: string;
   /** Absent until this tenant has saved a row, so the console can show the
    * effective values as platform defaults rather than as somebody's choice. */

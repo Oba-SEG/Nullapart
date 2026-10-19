@@ -77,7 +77,9 @@ struct ApiErrorBody {
 
 #[derive(Debug, Serialize)]
 struct OutboundIntelligenceResponse {
-    deployment_id: String,
+    /// Which installation answered. Published only to a platform seat; a
+    /// customer's own sending picture does not name the machine behind it.
+    deployment_id: Option<String>,
     generated_at: DateTime<Utc>,
     summary: OutboundIntelligenceSummary,
     approved_senders: Vec<ApprovedBulkSenderView>,
@@ -351,7 +353,8 @@ async fn get_outbound_intelligence(
         StatusCode::OK,
         Json(ApiEnvelope {
             data: OutboundIntelligenceResponse {
-                deployment_id: state.0.deployment_id.0.clone(),
+                deployment_id: platform_placement(&context)
+                    .then(|| state.0.deployment_id.0.clone()),
                 generated_at: Utc::now(),
                 summary,
                 approved_senders,

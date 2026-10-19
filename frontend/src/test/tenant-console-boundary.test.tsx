@@ -360,7 +360,7 @@ const PAYLOADS: Array<[string, unknown]> = [
   [
     "/domain-security",
     {
-      deployment_id: "LOCAL-TEST",
+      deployment_id: null,
       generated_at: "2026-01-06T10:00:00Z",
       summary: {
         domains_total: 1,
@@ -380,7 +380,7 @@ const PAYLOADS: Array<[string, unknown]> = [
   [
     "/outbound-intelligence",
     {
-      deployment_id: "LOCAL-TEST",
+      deployment_id: null,
       generated_at: "2026-01-06T10:00:00Z",
       summary: {
         messages_1h: 0,

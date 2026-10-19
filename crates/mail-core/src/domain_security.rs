@@ -26,6 +26,7 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::admin_audit::{source_ip_from, AuditEventRecord, PostgresAuditStore};
+use crate::admin_rbac::platform_placement;
 use crate::idempotency::{claim, complete, ClaimOutcome};
 
 pub const DOMAIN_SECURITY_VIEW_PERMISSION: &str = "domain-security:view";
@@ -120,7 +121,9 @@ struct ApiErrorBody {
 
 #[derive(Debug, Serialize)]
 struct DomainSecurityResponse {
-    deployment_id: String,
+    /// Which installation answered. Published only to a platform seat: a
+    /// customer console sees its own domains, not the machine that holds them.
+    deployment_id: Option<String>,
     generated_at: DateTime<Utc>,
     summary: DomainSecuritySummary,
     domains: Vec<DomainSecurityDomain>,
@@ -525,7 +528,8 @@ async fn get_domain_security(
         StatusCode::OK,
         Json(ApiEnvelope {
             data: DomainSecurityResponse {
-                deployment_id: state.0.deployment_id.0.clone(),
+                deployment_id: platform_placement(&context)
+                    .then(|| state.0.deployment_id.0.clone()),
                 generated_at: Utc::now(),
                 summary,
                 domains,

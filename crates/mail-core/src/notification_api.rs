@@ -36,6 +36,7 @@ use sqlx::{PgPool, Row};
 
 use crate::admin_audit::{source_ip_from, AuditEventRecord, PostgresAuditStore};
 use crate::admin_capabilities::{Blocker, WriteCapability};
+use crate::admin_rbac::platform_placement;
 use crate::idempotency::{claim, complete, ClaimOutcome};
 
 pub const NOTIFICATIONS_VIEW_PERMISSION: &str = "notifications:view";
@@ -111,7 +112,9 @@ struct NotificationCapabilities {
 
 #[derive(Debug, Serialize)]
 struct NotificationSettingsResponse {
-    deployment_id: String,
+    /// Which installation answered. Published only to a platform seat; the
+    /// tenant's own alert settings do not need the machine reference.
+    deployment_id: Option<String>,
     generated_at: DateTime<Utc>,
     /// `None` until the tenant has saved a row: the platform default is then
     /// whatever the column defaults say, and the console shows it as such
@@ -298,7 +301,7 @@ async fn get_notification_settings(
     }
 
     let response = NotificationSettingsResponse {
-        deployment_id: state.0.deployment_id.0.clone(),
+        deployment_id: platform_placement(&context).then(|| state.0.deployment_id.0.clone()),
         generated_at: Utc::now(),
         capabilities: NotificationCapabilities {
             update_settings: WriteCapability::from_blocker(session_blocker(
