@@ -68,6 +68,7 @@ import {
   familyDescription,
   familyDisplayName,
   reasonCodeLabel,
+  revisionPublisher,
   summarizeRuleCondition,
   tenantLevelBucket,
 } from "../lib/labels";
@@ -711,7 +712,7 @@ export function PolicyFamilyDetail() {
                   <tr key={revision.revision_number}>
                     <td>#{revision.revision_number}</td>
                     <td>{OVERRIDE_SCOPE_LABELS[revision.scope_level]}</td>
-                    <td>{revision.published_by_name}</td>
+                    <td>{revisionPublisher(revision.published_by_name) ?? "Not recorded"}</td>
                     <td>{new Date(revision.published_at).toLocaleString()}</td>
                     <td>
                       {revision.revision_number === activeRevisionNumber ? (

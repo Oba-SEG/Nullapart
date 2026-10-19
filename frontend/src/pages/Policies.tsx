@@ -21,6 +21,7 @@ import {
   TENANT_LEVEL_LABELS,
   familyDescription,
   familyDisplayName,
+  revisionPublisher,
   tenantLevelBucket,
   type TenantLevelBucket,
 } from "../lib/labels";
@@ -71,7 +72,12 @@ function activeRevisionLabel(active: RevisionSummary): string {
   const publishedAt = new Date(active.published_at);
   // The server resolves the publisher's name for the seat reading the list: a
   // customer sees their own administrator and "Your provider" for anyone else.
-  return `#${active.revision_number} · by ${active.published_by_name} · ${publishedAt.toLocaleString()}`;
+  // Without a name the clause is dropped rather than falling back to the row key.
+  const publisher = revisionPublisher(active.published_by_name);
+  const parts = [`#${active.revision_number}`];
+  if (publisher !== null) parts.push(`by ${publisher}`);
+  parts.push(publishedAt.toLocaleString());
+  return parts.join(" · ");
 }
 
 export function Policies() {

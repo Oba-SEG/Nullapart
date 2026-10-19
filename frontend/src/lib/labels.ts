@@ -406,6 +406,17 @@ export function auditActionLabel(action: string): string {
 }
 
 /**
+ * The publisher of a policy revision, once the server has resolved the name for
+ * the seat reading it. A service that predates that field publishes only the
+ * stored row key, and a key is not something a customer can act on, so the
+ * history says the publisher is not recorded instead of printing it.
+ */
+export function revisionPublisher(name: string | null | undefined): string | null {
+  const trimmed = typeof name === "string" ? name.trim() : "";
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
  * The policy families by the name the policy console gives them. A change
  * history row carries the storage key, not the name, so a customer reading
  * their own history needs the same words the policy list uses. The catalog is

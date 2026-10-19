@@ -144,6 +144,10 @@ const PLATFORM_LANGUAGE: Array<{ term: string; pattern: RegExp }> = [
     pattern:
       /\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?|urn:uuid:[0-9a-f-]{36}|\b[0-9a-f]{24,}\b/i,
   },
+  // A value that never arrived. A console that prints the word is rendering a
+  // field the service did not publish, which is what happened when the UI was
+  // rebuilt ahead of the API that names a revision's publisher.
+  { term: "missing value", pattern: /\b(?:undefined|NaN)\b/ },
 ];
 
 /** The tenant's own organisation record, with no domains or groups set yet.

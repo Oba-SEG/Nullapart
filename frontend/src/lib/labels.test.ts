@@ -5,6 +5,7 @@ import {
   auditDetailValueLabel,
   familyDisplayName,
   policyFamilyLabel,
+  revisionPublisher,
   tenantResourceReference,
 } from "./labels";
 
@@ -86,6 +87,21 @@ describe("tenantResourceReference", () => {
     expect(tenantResourceReference("customer", "CZA-1")).toBe("CZA-1");
     expect(tenantResourceReference("message", "msg-2026-01-06-001")).toBe("msg-2026-01-06-001");
     expect(tenantResourceReference("session", null)).toBeNull();
+  });
+});
+
+describe("revision publisher naming", () => {
+  it("keeps the name the server resolved for the reading seat", () => {
+    expect(revisionPublisher("Tenant Admin")).toBe("Tenant Admin");
+    expect(revisionPublisher(" Your provider ")).toBe("Your provider");
+  });
+
+  it("returns nothing when the service published only a row key", () => {
+    // The console drops the publisher clause rather than printing the stored
+    // `published_by` identifier.
+    expect(revisionPublisher(undefined)).toBeNull();
+    expect(revisionPublisher(null)).toBeNull();
+    expect(revisionPublisher("   ")).toBeNull();
   });
 });
 

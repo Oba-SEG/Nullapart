@@ -422,6 +422,34 @@ describe("Policies", () => {
     expect(screen.getByRole("link", { name: "Feature overrides" })).toBeTruthy();
   });
 
+  /**
+   * A service that predates the publisher-name field still stores the actor's
+   * row key. The list drops the clause rather than printing the word for a
+   * missing value or a key nobody can act on.
+   */
+  it("drops the publisher clause when the service names no publisher", async () => {
+    stubFetch({
+      session: customerAdminSession,
+      families: [
+        {
+          ...customerFamily,
+          active_revision: {
+            revision_number: 3,
+            published_by: "8f14e45f-ea41-4334-b632-f1bc9c9c9e21",
+            published_at: "2026-01-05T10:00:00Z",
+            scope_level: "tenant",
+          },
+        },
+      ],
+    });
+    renderAt("/policies");
+    await screen.findByRole("link", { name: "Attachment handling" });
+
+    const row = rowFor("Attachment handling");
+    expect(within(row).getByText(/^#3 ·/)).toBeTruthy();
+    expect(row.textContent ?? "").not.toMatch(/undefined|8f14e45f|by /);
+  });
+
   it("filters families by management level", async () => {
     stubFetch({
       session: adminSession,

@@ -98,8 +98,10 @@ export interface RevisionSummary {
   revision_number: number;
   published_by: string;
   /** The publisher's name for the seat reading the history. A customer read
-   * resolves a publisher outside their own organisation to the provider. */
-  published_by_name: string;
+   * resolves a publisher outside their own organisation to the provider. A
+   * service that predates the field leaves it out, and the row key it stores is
+   * never printed. */
+  published_by_name?: string | null;
   published_at: string;
   scope_level: RevisionScope;
 }
