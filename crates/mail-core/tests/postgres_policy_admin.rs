@@ -907,8 +907,9 @@ async fn feature_overrides_follow_the_three_level_scope_model() {
     let feature_id = fixture.suffix.clone();
 
     sqlx::query(
-        "INSERT INTO feature_definitions (feature_id, description, default_value) \
-         VALUES ($1, 'Local policy administration fixture', 'disabled') \
+        "INSERT INTO feature_definitions (feature_id, display_name, description, default_value) \
+         VALUES ($1, 'Local policy administration fixture', \
+                 'Seeded by the local policy administration test', 'disabled') \
          ON CONFLICT (feature_id) DO NOTHING",
     )
     .bind(&feature_id)

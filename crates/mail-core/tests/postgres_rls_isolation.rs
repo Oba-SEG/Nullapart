@@ -475,8 +475,10 @@ async fn rls_feature_overrides_cannot_self_escalate() {
     let override_id = Uuid::new_v4();
 
     sqlx::query(
-        "INSERT INTO feature_definitions (feature_id, description, default_value) \
-         VALUES ($1, 'Local RLS fixture feature', 'disabled') ON CONFLICT (feature_id) DO NOTHING",
+        "INSERT INTO feature_definitions (feature_id, display_name, description, default_value) \
+         VALUES ($1, 'Local RLS fixture feature', \
+                 'Seeded by the local RLS isolation test', 'disabled') \
+         ON CONFLICT (feature_id) DO NOTHING",
     )
     .bind(&feature_id)
     .execute(&pool)
