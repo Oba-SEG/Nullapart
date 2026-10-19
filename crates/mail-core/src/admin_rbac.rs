@@ -47,6 +47,7 @@
 //!     `admin_users.customer_id` binding (platform users with no binding
 //!     keep the deployment template tenant); customer entry overrides both.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -468,6 +469,11 @@ fn rank_for_level(role_level: &str) -> u8 {
     }
 }
 
+/// The top of the ladder, used wherever a rule must ask whether a caller can
+/// already see everything. Kept in step with [`rank_for_level`]'s `"system"`
+/// arm, which cannot be read at compile time.
+const SYSTEM_RANK: u8 = 3;
+
 /// Whether every listed permission is in the server-side catalog. Used by
 /// role-definition validation to reject payloads referencing unknown keys.
 fn permissions_in_catalog(permissions: &[String]) -> bool {
@@ -603,6 +609,12 @@ pub struct AdminUserRecord {
     pub customer_id: Option<String>,
     pub lifecycle: String,
     pub roles: Vec<String>,
+    /// Published only on an answer from which role keys were left out, and then
+    /// only as `true`: the account holds something above the reading session's
+    /// own level, which the console can say without naming a level or a key.
+    /// An answer that withholds nothing omits the key entirely.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub roles_outside_reach: Option<bool>,
 }
 
 /// Resolved server-side session; carries no bearer/workload credential.
@@ -1260,6 +1272,7 @@ impl MemoryUser {
             customer_id: self.customer_id.clone(),
             lifecycle: self.lifecycle.clone(),
             roles: self.roles.clone(),
+            roles_outside_reach: None,
         }
     }
 }
@@ -2600,6 +2613,7 @@ impl PostgresAdminRbacStore {
             customer_id: row.get("customer_id"),
             lifecycle: row.get("lifecycle"),
             roles: Vec::new(),
+            roles_outside_reach: None,
         }
     }
 
@@ -4878,6 +4892,74 @@ async fn grantor_rank(state: &AdminRbacState, session: &ActiveSession) -> u8 {
     rank
 }
 
+/// The role keys a reading session may be shown, and what to say about the rest.
+///
+/// An account's role membership is the reader's business only up to the
+/// reader's own level: naming `system_admin` beside a customer's administrator
+/// tells that customer the shape of a ladder they can neither hold, grant nor
+/// revoke. The ceiling here is the rank the grant and revoke paths already
+/// enforce, and levels come from the deployment's role rows, so a custom
+/// system-level role is hidden exactly like the builtin System Administrator.
+struct VisibleRoles {
+    ceiling: u8,
+    ranks: HashMap<String, u8>,
+}
+
+impl VisibleRoles {
+    /// `None` for a session at the top of the ladder, whose answer is the
+    /// stored one, unchanged. Only a caller below the top needs the directory.
+    async fn for_caller(state: &AdminRbacState, session: &ActiveSession) -> Option<Self> {
+        let ceiling = grantor_rank(state, session).await;
+        if ceiling >= SYSTEM_RANK {
+            return None;
+        }
+        let ranks = match state
+            .0
+            .store
+            .list_role_definitions(&state.0.deployment_id.0)
+            .await
+        {
+            Ok(roles) => roles
+                .iter()
+                .map(|role| (role.role_key.clone(), rank_for_level(&role.role_level)))
+                .collect(),
+            // An unreadable directory resolves nothing beyond the builtin
+            // catalog, so every other key is withheld rather than named.
+            Err(_) => HashMap::new(),
+        };
+        Some(Self { ceiling, ranks })
+    }
+
+    /// Splits an account's keys into those this caller may be shown and whether
+    /// anything had to be left out. A key whose level cannot be resolved is
+    /// left out: an unreadable role is not a licence to name it.
+    fn split(&self, roles: &[String]) -> (Vec<String>, bool) {
+        let mut visible: Vec<String> = Vec::with_capacity(roles.len());
+        let mut withheld = false;
+        for role in roles {
+            let rank = self.ranks.get(role).copied().or_else(|| {
+                BUILTIN_ROLES
+                    .iter()
+                    .find(|builtin| builtin.key == role)
+                    .map(|builtin| rank_for_level(builtin.role_level))
+            });
+            if rank.is_some_and(|rank| rank <= self.ceiling) {
+                visible.push(role.clone());
+            } else {
+                withheld = true;
+            }
+        }
+        (visible, withheld)
+    }
+
+    fn project(&self, mut user: AdminUserRecord) -> AdminUserRecord {
+        let (roles, withheld) = self.split(&user.roles);
+        user.roles = roles;
+        user.roles_outside_reach = withheld.then_some(true);
+        user
+    }
+}
+
 /// Subset rule for custom (non-builtin) roles: the granting session must
 /// already hold every permission the role would bestow, so a role can never
 /// become a path to create upward privileges. Builtin roles keep only the
@@ -5770,7 +5852,17 @@ async fn list_users(
         .list_users(&state.0.deployment_id.0, customer_filter)
         .await
     {
-        Ok(users) => (StatusCode::OK, Json(ApiEnvelope { data: users })).into_response(),
+        Ok(users) => {
+            let visibility = VisibleRoles::for_caller(&state, &session).await;
+            let data: Vec<AdminUserRecord> = match visibility {
+                None => users,
+                Some(visibility) => users
+                    .into_iter()
+                    .map(|user| visibility.project(user))
+                    .collect(),
+            };
+            (StatusCode::OK, Json(ApiEnvelope { data })).into_response()
+        },
         Err(_) => unavailable(),
     }
 }
@@ -5812,7 +5904,12 @@ async fn get_user(
         .await
     {
         Ok(Some(user)) if can_manage_target(&context, user.customer_id.as_deref()) => {
-            (StatusCode::OK, Json(ApiEnvelope { data: user })).into_response()
+            let visibility = VisibleRoles::for_caller(&state, &session).await;
+            let data = match visibility {
+                None => user,
+                Some(visibility) => visibility.project(user),
+            };
+            (StatusCode::OK, Json(ApiEnvelope { data })).into_response()
         },
         Ok(Some(_)) => {
             denied(
@@ -6021,6 +6118,36 @@ struct RoleBody {
 struct RoleMutationResponse {
     changed: bool,
     roles: Vec<String>,
+    /// As on a directory row: published only when the answer had to leave role
+    /// keys out for this caller.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    roles_outside_reach: Option<bool>,
+}
+
+/// Answers a role mutation with only the keys the reading session may be shown.
+/// A customer who removes one role from an account that also holds a platform
+/// role would otherwise have that role named back at them in the confirmation
+/// of a change they were right to make.
+async fn role_mutation_answer(
+    state: &AdminRbacState,
+    session: &ActiveSession,
+    mutation: RoleMutation,
+) -> Response {
+    let (roles, withheld) = match VisibleRoles::for_caller(state, session).await {
+        None => (mutation.roles, false),
+        Some(visibility) => visibility.split(&mutation.roles),
+    };
+    (
+        StatusCode::OK,
+        Json(ApiEnvelope {
+            data: RoleMutationResponse {
+                changed: mutation.changed,
+                roles,
+                roles_outside_reach: withheld.then_some(true),
+            },
+        }),
+    )
+        .into_response()
 }
 
 async fn grant_role(
@@ -6156,16 +6283,7 @@ async fn grant_role(
         )
         .await
     {
-        Ok(mutation) => (
-            StatusCode::OK,
-            Json(ApiEnvelope {
-                data: RoleMutationResponse {
-                    changed: mutation.changed,
-                    roles: mutation.roles,
-                },
-            }),
-        )
-            .into_response(),
+        Ok(mutation) => role_mutation_answer(&state, &session, mutation).await,
         // The store refuses unknown roles with RoleNotFound instead of
         // silently reporting an unchanged grant (concurrent role deletion).
         Err(AdminRbacError::RoleNotFound) => api_error(
@@ -6293,16 +6411,7 @@ async fn revoke_role(
         .revoke_role(&state.0.deployment_id.0, user_id, &role_key, draft)
         .await
     {
-        Ok(mutation) => (
-            StatusCode::OK,
-            Json(ApiEnvelope {
-                data: RoleMutationResponse {
-                    changed: mutation.changed,
-                    roles: mutation.roles,
-                },
-            }),
-        )
-            .into_response(),
+        Ok(mutation) => role_mutation_answer(&state, &session, mutation).await,
         Err(AdminRbacError::RoleNotFound) => api_error(
             StatusCode::BAD_REQUEST,
             "INVALID_REQUEST",
@@ -8080,6 +8189,110 @@ mod tests {
         assert!(body.contains("mine@example.test"));
         assert!(!body.contains("theirs@example.test"));
         assert!(!body.contains("stranger"));
+    }
+
+    /// A platform role recorded against a customer-bound account is data these
+    /// deployments actually hold, so the tenant's directory read has to
+    /// classify it rather than name it. The reader is told its own administrators
+    /// hold something it cannot reach, and never sees which rung that is; the
+    /// platform read of the same rows still names them.
+    #[tokio::test]
+    async fn a_tenant_directory_answer_names_no_role_above_the_reader() {
+        let fixture = default_fixture();
+        let app = app(&fixture);
+        let (admin_cookie, admin_csrf) = admin_session(&app).await;
+        fixture.store.seed_user(
+            "TEST-DEPLOYMENT",
+            "peer@example.test",
+            "Peer",
+            Some("test-customer"),
+            "active",
+            &[CUSTOMER_ADMIN_ROLE, SUPPORT_ROLE],
+        );
+        let (cookie, _) = customer_admin_session(&fixture, &app, "reader@example.test").await;
+
+        let rows = data_of(
+            &read_body(
+                app.clone()
+                    .oneshot(role_request(
+                        "GET",
+                        "/api/v1/admin/users",
+                        &cookie,
+                        None,
+                        None,
+                    ))
+                    .await
+                    .expect("request runs"),
+            )
+            .await,
+        );
+        let users = rows.as_array().expect("user rows");
+        let peer = users
+            .iter()
+            .find(|row| row["login"] == "peer@example.test")
+            .expect("the peer is listed");
+        assert_eq!(peer["roles"], serde_json::json!([CUSTOMER_ADMIN_ROLE]));
+        assert_eq!(peer["rolesOutsideReach"], true);
+        // The caller's own row withholds nothing, so the key is absent rather
+        // than answered `false`: an absent slot is the claim being tested.
+        let reader = users
+            .iter()
+            .find(|row| row["login"] == "reader@example.test")
+            .expect("the caller is listed");
+        assert_eq!(reader["roles"], serde_json::json!([CUSTOMER_ADMIN_ROLE]));
+        assert!(reader.get("rolesOutsideReach").is_none());
+
+        let body = read_body(
+            app.clone()
+                .oneshot(role_request(
+                    "GET",
+                    "/api/v1/admin/users",
+                    &admin_cookie,
+                    Some(&admin_csrf),
+                    None,
+                ))
+                .await
+                .expect("request runs"),
+        )
+        .await;
+        assert!(body.contains(SUPPORT_ROLE), "{body}");
+        assert!(!body.contains("rolesOutsideReach"), "{body}");
+    }
+
+    /// The confirmation of a change a tenant is entitled to make echoes the
+    /// account's remaining roles, so it withholds on the same rule as the list:
+    /// revoking a customer role must not print a platform role in the answer.
+    #[tokio::test]
+    async fn a_role_confirmation_echoes_only_what_the_caller_may_see() {
+        let fixture = default_fixture();
+        let app = app(&fixture);
+        let peer = fixture.store.seed_user(
+            "TEST-DEPLOYMENT",
+            "peer@example.test",
+            "Peer",
+            Some("test-customer"),
+            "active",
+            &[CUSTOMER_ADMIN_ROLE, SUPPORT_ROLE],
+        );
+        let (cookie, csrf) = customer_admin_session(&fixture, &app, "reader@example.test").await;
+
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "DELETE",
+                &format!("/api/v1/admin/users/{peer}/roles/{CUSTOMER_ADMIN_ROLE}"),
+                &cookie,
+                Some(&csrf),
+                None,
+            ))
+            .await
+            .expect("request runs");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = read_body(response).await;
+        assert_eq!(data_of(&body)["changed"], true);
+        assert_eq!(data_of(&body)["roles"], serde_json::json!([]));
+        assert_eq!(data_of(&body)["rolesOutsideReach"], true);
+        assert!(!body.contains(SUPPORT_ROLE), "{body}");
     }
 
     fn impersonation_request(
