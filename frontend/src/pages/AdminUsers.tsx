@@ -74,7 +74,7 @@ function toRoleView(role: RoleDefinition, sessionPermissions: string[], rank: nu
     key: role.roleKey,
     label: role.displayName,
     level: role.roleLevel,
-    description: role.description ?? "Custom role.",
+    description: role.description ?? (role.builtin ? "Built-in role." : "Custom role."),
     builtin: role.builtin,
     grantable: !aboveOwnLevel && withinHeld,
     grantReason: aboveOwnLevel ? ABOVE_LEVEL_GRANT : withinHeld ? null : PERMISSIONS_NOT_HELD,

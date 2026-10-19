@@ -689,7 +689,7 @@ export function DeepAi() {
       <WorkspaceHeader
         eyebrow="Model governance"
         title="Regional Deep AI"
-        description={`Versioned skills, scoped artifact grants, validated findings and training governance for ${data.deployment_id}.`}
+        description="Versioned skills, scoped artifact grants, validated findings and training governance for this deployment."
         scope="Regional AI controls"
         actions={
           <StatusPill

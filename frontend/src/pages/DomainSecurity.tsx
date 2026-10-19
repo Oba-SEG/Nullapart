@@ -318,7 +318,7 @@ export function DomainSecurity() {
       <WorkspaceHeader
         eyebrow="Trust & identity"
         title="Domain security"
-        description={`DMARC reporting, sending sources, external report receiving and BIMI logo readiness for ${data.deployment_id}.`}
+        description="DMARC reporting, sending sources, external report receiving and BIMI logo readiness for the domains in this scope."
         scope="Domain configuration"
         actions={
           <button

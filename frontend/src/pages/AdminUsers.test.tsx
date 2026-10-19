@@ -119,6 +119,7 @@ function stubFetch(
   permissions: string[] = session.permissions,
   sessionOverrides: Record<string, unknown> = {},
   usersOverride: unknown[] = users,
+  rolesOverride: unknown[] = serverRoles,
 ) {
   const effectiveSession = { ...session, ...sessionOverrides };
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -128,7 +129,7 @@ function stubFetch(
       return ok({ data: { ...effectiveSession, permissions } });
     }
     if (method === "GET" && url.includes("/admin/roles")) {
-      return ok({ data: serverRoles });
+      return ok({ data: rolesOverride });
     }
     if (method === "GET" && url.includes("/admin/users")) {
       return ok({ data: usersOverride });
@@ -322,5 +323,36 @@ describe("AdminUsers", () => {
       "Only a session at this role's level can grant it.",
     );
     expect(screen.getByRole("checkbox", { name: /^Customer admin/ })).toBeEnabled();
+  });
+
+  it("describes a role with no published description by its origin", async () => {
+    stubFetch(session.permissions, {}, users, [
+      ...serverRoles.map((role) => ({ ...role, description: null })),
+      {
+        roleKey: "tenant_triage",
+        displayName: "Triage",
+        description: null,
+        roleLevel: "customer",
+        builtin: false,
+        permissions: [],
+        userCount: 0,
+      },
+    ]);
+    renderPage();
+
+    fireEvent.click((await screen.findAllByRole("button", { name: "Manage roles" }))[0]!);
+
+    const builtinOption = (
+      await screen.findByRole("checkbox", {
+        name: /Customer admin/,
+      })
+    ).closest("label")!;
+    const customOption = (
+      await screen.findByRole("checkbox", {
+        name: /Triage/,
+      })
+    ).closest("label")!;
+    expect(within(builtinOption).getByText("Built-in role.")).toBeTruthy();
+    expect(within(customOption).getByText("Custom role.")).toBeTruthy();
   });
 });
