@@ -2,7 +2,7 @@
 
 **Status:** implementation record.
 
-**Last verified:** 2026-10-15.
+**Last verified:** 2026-10-19.
 
 ## Purpose
 
@@ -13,13 +13,16 @@ authorization or the phase plans.
 
 ## Visual direction
 
-Nullapart uses a midnight command surface with acid-lime as the primary
-operator signal and cyan as a successful/healthy supporting signal. The
-reference artwork establishes the atmosphere; it does not override the
-administrative UI requirements:
+Nullapart uses a light-first, flat enterprise security-console register. The
+dark navigation rail and login brief carry the approved light wordmark; the
+working canvas uses cool neutrals, hairline boundaries and a restrained blue
+action/focus accent. Brand lime remains a logo/status-art asset, not an action
+or health signal. The reference artwork establishes the atmosphere; it does
+not override the administrative UI requirements:
 
-- cards use soft raised and inset depth, plus a visible border;
-- focus, status and text retain explicit contrast independent of shadows;
+- cards use a clear one-pixel boundary and spacing, not raised or inset depth;
+- focus, status and text retain explicit contrast independent of colour or
+  elevation;
 - tables remain compact and readable for operator workloads;
 - status/severity colours are semantic tokens, not decorative status;
 - the light theme preserves the same hierarchy without turning the application
@@ -27,8 +30,9 @@ administrative UI requirements:
 - reduced-motion preference disables nonessential transition duration.
 
 The implementation lives in `frontend/src/styles/tokens.css`,
-`frontend/src/styles/global.css`, and the existing component/page styles. The
-application shell supplies a keyboard-visible skip link to `#main-content`.
+`frontend/src/styles/global.css`, and the existing component/page styles.
+`DESIGN.md` is the visual implementation authority. The application shell
+supplies a keyboard-visible skip link to `#main-content`.
 
 ## Asset inventory and provenance
 
