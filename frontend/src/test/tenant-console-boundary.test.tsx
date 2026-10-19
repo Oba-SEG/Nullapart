@@ -99,6 +99,20 @@ const PLATFORM_LANGUAGE: Array<{ term: string; pattern: RegExp }> = [
   { term: "support role key", pattern: /support[-_](agent|viewer)/i },
   { term: "model registry", pattern: /\bmodel registry\b/i },
   { term: "deep ai", pattern: /\bdeep ai\b/i },
+  // Which engine answers a check is a fact about the running platform. A
+  // customer is told what the check found, never that a model, a classifier or
+  // a named weights file produced it — this is the class the whole sweep exists
+  // for, so it gets its own tripwire rather than relying on the projection.
+  { term: "model word", pattern: /\bmodels?\b/i },
+  {
+    term: "engine or artifact name",
+    pattern: /\b(?:qwen|llama|mistral|bert|yolo|onnx|safetensors|pytorch|torch|transformers)\b/i,
+  },
+  {
+    term: "inference machinery",
+    pattern: /\b(?:classifier|classification model|inference|embedding|tokenizer|neural)\b/i,
+  },
+  { term: "parameter count", pattern: /\b\d+(?:\.\d+)?b\b/i },
   // The platform's own name for an administrator entering a customer. The
   // `impersonation` policy family is about inbound sender impersonation, which
   // is a tenant's own protection, so the bare word is not a leak.
@@ -736,6 +750,48 @@ const PAYLOADS: Array<[string, unknown]> = [
   ["/policies", { families: policyFamilies, caller_tier: "customer" }],
 ];
 
+/**
+ * One string each term is supposed to catch. The list is keyed by `term`, so a
+ * term added without a sample — or a sample whose term has been renamed — fails
+ * the completeness test below, and a term whose pattern no longer matches its
+ * own sample fails with it. This exists because a guard term whose shape is
+ * wrong is indistinguishable from a clean console: the audit fixtures used to be
+ * keyed `event-tenant`, which no opaque-identifier pattern can ever match.
+ */
+const TERM_SAMPLES: Array<[string, string]> = [
+  ["platform", "The platform keeps the archive signing key."],
+  ["deployment", "This deployment runs the milter on one node."],
+  ["installation", "The installation seal is current."],
+  ["system administrator", "Only a system administrator may publish this."],
+  ["system level", "Managed at the system level."],
+  ["support level", "A support level edit is required."],
+  ["needs a higher level", "Needs System to change."],
+  ["system_admin key", "Granted to system_admin only."],
+  ["support role key", "Held by support_agent seats."],
+  ["model registry", "Approve it in the model registry first."],
+  ["deep ai", "Deep AI analysis produced this finding."],
+  ["customer entry", "Reached through customer entry."],
+  ["cross-customer", "A cross-customer read is refused."],
+  ["outbox", "12 rows are waiting in the outbox."],
+  ["dead letters", "Moved to dead letters after nine tries."],
+  ["scanner", "The scanner node did not answer."],
+  ["fleet", "Fleet health is nominal."],
+  ["emergency stop", "Emergency stop is engaged for this family."],
+  ["MTA name", "Postfix accepted the envelope."],
+  ["MTA queue identifier", "Held with queue id 4A2F1B8C3D."],
+  ["content dedup hash", "Matched by content hash."],
+  ["log correlation id", "Quote trace_id when you contact us."],
+  ["permission key", "This needs quarantine:release."],
+  ["surrogate row key", "Filed under internal key 118."],
+  ["machine key", "Family ml_threat_classification."],
+  ["opaque row key", "Record 9c4279a2-0d8e-455a-94c4-7c496786df12 was updated."],
+  ["missing value", "Published by undefined on Tuesday."],
+  ["model word", "The model flagged the link."],
+  ["engine or artifact name", "Weighted by qwen and served from an ONNX file."],
+  ["inference machinery", "A classifier scored the body text."],
+  ["parameter count", "The 27B weights were loaded at boot."],
+];
+
 function stubTenantFetch() {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
@@ -954,6 +1010,25 @@ describe("tenant console boundary", () => {
       }
     },
   );
+
+  /**
+   * A term that cannot match anything is indistinguishable from a clean console,
+   * which is how the opaque-key blind spot survived a green suite. Each term has
+   * to name a leak it actually catches, and no term may join the list without
+   * one.
+   */
+  it("has a sample and a working pattern for every platform term", () => {
+    const sampleFor = new Map(TERM_SAMPLES);
+    const terms = new Set(PLATFORM_LANGUAGE.map(({ term }) => term));
+
+    expect([...terms].filter((term) => !sampleFor.has(term))).toEqual([]);
+    expect([...sampleFor.keys()].filter((term) => !terms.has(term))).toEqual([]);
+
+    const dead = PLATFORM_LANGUAGE.filter(
+      ({ term, pattern }) => !pattern.test(sampleFor.get(term)!),
+    ).map(({ term }) => term);
+    expect(dead, "these terms do not match the leak they name").toEqual([]);
+  });
 
   /**
    * The scans above only mean something if the server rows actually reached the

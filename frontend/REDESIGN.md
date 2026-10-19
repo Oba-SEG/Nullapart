@@ -693,6 +693,18 @@ stays on the wire and is never merely printed.**
   detail dialog, where an operator quotes the event they are disputing — was
   untested. The fixtures now carry real UUIDs, and the event id is a third named
   customer handle shared by the row and its detail payload.
+- **Engine identity has its own tripwire, and the guard must prove it works.**
+  The suite had `model registry` and `deep ai` but nothing for the word _model_,
+  a weights file, a parameter count or a classifier, so a payload that named the
+  engine would have passed on a wording accident rather than on a rule. Four
+  terms now cover the class the whole sweep exists for. They join with
+  `TERM_SAMPLES`: one leak string per term, and a test that fails if a term has
+  no sample, if a sample names a removed term, or if a pattern no longer matches
+  the string it is supposed to catch. Verified by breaking one on purpose. All
+  11 tenant surfaces in the boundary suite stay clean under the widened set,
+  which is the evidence that the projection, not the copy, is what keeps engine
+  names off them. The live sweep below predates these four terms, so re-run it
+  against the next frontend build rather than reading it as cover for them.
 - **Live re-audit**: 11 tenant routes on `.4` as a fresh `customer` session,
   scanned with the guard's own terms. Ten are clean. The only hit is
   `Transaction d43552d2-…` on an audit row whose resource type is `transaction`,
@@ -702,8 +714,8 @@ stays on the wire and is never merely printed.**
   carries a `customer_id`, so the resolution treats it as the customer's own
   administrator and prints its account name. That is the same decision already
   made about `actor_login` below, not a leak fixed by the projection.
-- **Gates**: `pnpm check-all` green (295 tests, 34 files) with the new publisher,
-  check-outcome and boundary cases.
+- **Gates**: `pnpm check-all` green (296 tests, 34 files) with the new publisher,
+  check-outcome, boundary and term-validity cases.
 
 **Not changed, and why.** `connectors_remediation` keeps its family name and the
 outbound "Source kind" option list keeps its words: both are surfaces a tenant
@@ -812,6 +824,9 @@ write history. Both are described under "Landed in the fifth pass".
 - Which vocabulary a page uses is decided by placement, not permission: an
   operator seated inside a customer entry is answered as that customer. The
   permission still decides whether they get the data at all.
+- Every guard term carries a sample of the leak it catches, and a test fails if
+  a term has no sample or its pattern no longer matches it. A tripwire that
+  cannot fire is indistinguishable from a clean console.
 - An additive response field needs a render fallback. A service that has not
   been rebuilt yet omits the field, and `undefined` reaching a customer screen
   is the incident; the guard trips on `undefined`/`NaN` so the class cannot
