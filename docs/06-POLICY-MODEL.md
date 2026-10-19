@@ -41,6 +41,33 @@ Each setting declares:
 
 Customer settings cannot weaken System-enforced minimum security bounds.
 
+## Who publishes each family
+
+Management level decides who may author and publish a revision for a scope. It
+does not decide whether a delivery stage reads the result; the rule profile
+below reports that.
+
+Customer-managed families (a tenant administrator publishes these for their own
+tenant):
+
+- `attachments`;
+- `connectors_remediation`;
+- `inbound_routing`;
+- `notifications`;
+- `outbound_routing`;
+- `quarantine`;
+- `spam_filtering` (security floor remains enforced).
+
+`spam_filtering` carries `security_floor = true` through the move, so a tenant
+threshold revision cannot disable the platform floor. The remaining 17 families
+are Support or System level.
+
+The authoritative list is `POLICY_FAMILY_MANAGEMENT_LEVELS` in
+`crates/mail-core/src/policy_admin.rs`, which the offline tier gate reads before
+touching the database; an ignored test asserts it still mirrors the seeded
+`policy_families` rows, and migration `041_customer_policy_levels.sql` records
+the customer-level move.
+
 ## Rule profile per family
 
 A published rule set only changes mail where a runtime stage reads it, so the

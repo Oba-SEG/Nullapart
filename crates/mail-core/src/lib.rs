@@ -24,6 +24,8 @@ pub mod idempotency;
 pub mod inline_ml;
 pub mod model_registry;
 pub mod node;
+pub mod notification_api;
+pub mod notification_delivery;
 pub mod notification_stationery;
 pub mod oidc;
 pub mod operations_api;

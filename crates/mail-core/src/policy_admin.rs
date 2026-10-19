@@ -105,14 +105,14 @@ pub const POLICY_FAMILY_MANAGEMENT_LEVELS: [(&str, &str); 24] = [
     ("inbound_routing", "customer"),
     ("malware", "system"),
     ("ml_threat_classification", "support"),
-    ("notifications", "support"),
+    ("notifications", "customer"),
     ("outbound_abuse", "support"),
     ("outbound_routing", "customer"),
-    ("quarantine", "support"),
+    ("quarantine", "customer"),
     ("recipient_controls", "support"),
     ("retention", "support"),
     ("sender_reputation", "support"),
-    ("spam_filtering", "support"),
+    ("spam_filtering", "customer"),
     ("transport_security", "system"),
     ("url_security", "system"),
     ("vip_protection", "support"),
@@ -2408,10 +2408,22 @@ mod tests {
 
         let mut customer_admin = context();
         customer_admin.actor.roles = vec![CUSTOMER_ADMIN_ROLE.to_string()];
+        let own_family = app
+            .clone()
+            .layer(Extension(customer_admin.clone()))
+            .oneshot(get("/api/v1/policies/quarantine"))
+            .await
+            .expect("test response");
+        assert_eq!(
+            own_family.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "quarantine is customer-managed, so a tenant read must reach the store"
+        );
+
         let support_family = app
             .clone()
             .layer(Extension(customer_admin))
-            .oneshot(get("/api/v1/policies/quarantine"))
+            .oneshot(get("/api/v1/policies/bulk_sending"))
             .await
             .expect("test response");
         assert_eq!(support_family.status(), StatusCode::FORBIDDEN);
@@ -2743,9 +2755,17 @@ mod tests {
             "the catalog must mirror every seeded policy family"
         );
         assert_eq!(family_tier("malware"), Some(2));
-        assert_eq!(family_tier("quarantine"), Some(1));
+        assert_eq!(family_tier("quarantine"), Some(0));
         assert_eq!(family_tier("attachments"), Some(0));
         assert_eq!(family_tier("not_a_family"), None);
+        assert_eq!(
+            POLICY_FAMILY_MANAGEMENT_LEVELS
+                .iter()
+                .filter(|(_, level)| *level == "customer")
+                .count(),
+            7,
+            "a tenant administrator publishes exactly these families for their own tenant"
+        );
     }
 
     #[tokio::test]
