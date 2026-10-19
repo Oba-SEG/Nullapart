@@ -1,6 +1,16 @@
-FROM rust:1.96-slim-bookworm AS mailcore-builder
+# Nullapart Postfix — MTA with after-queue Mail Core filter.
+#
+# builder and runtime stages run on Debian trixie (glibc 2.41, libstdc++ 14)
+# with g++, for the same reason as Dockerfile.mailcore (recorded in
+# docs/26-PACKAGE-COMPATIBILITY.md): mailcore-filter links the mail-core
+# library, and the ort/tokenizers toolchain in that library needs glibc >=
+# 2.38 (__isoc23_*), a GCC-14 libstdc++, and a C++ compiler — bookworm
+# (glibc 2.36, libstdc++ 12) can neither link nor run it. The builder keeps
+# the cargo target cache id shared with Dockerfile.mailcore, so the toolchain
+# must stay identical across both images for that cache to remain valid.
+FROM rust:1.96-slim-trixie AS mailcore-builder
 
-RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y pkg-config libssl-dev g++ && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
@@ -10,8 +20,7 @@ RUN --mount=type=cache,id=nullapart-cargo-registry-v2,target=/usr/local/cargo/re
     cp /src/target/release/mailcore-filter /tmp/mailcore-filter && \
     strip /tmp/mailcore-filter
 
-# Nullapart Postfix — MTA with milter integration
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
