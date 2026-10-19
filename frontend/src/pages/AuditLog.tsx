@@ -3,9 +3,9 @@ import { Download, ScrollText } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { api, type ApiError } from "../api/client";
-import { loadSession } from "../auth/session";
+import { isTenantTier, loadSession } from "../auth/session";
 import { StepUpPrompt } from "../components/StepUpPrompt";
-import { ControlRail } from "../components/ControlRail";
+import { ControlRail, type ControlSignal } from "../components/ControlRail";
 import { WorkspaceHeader } from "../components/WorkspaceHeader";
 import { WorkflowGuide } from "../components/WorkflowGuide";
 import { Button } from "../components/primitives/Button";
@@ -15,7 +15,7 @@ import { Input } from "../components/primitives/Input";
 import { Select } from "../components/primitives/Select";
 import "./AuditLog.css";
 
-import { auditActionLabel, roleLevelLabel } from "../lib/labels";
+import { actorRoleLabels, auditActionLabel } from "../lib/labels";
 import { notify } from "../lib/notify";
 import { checkpointStatusLabel, resultLabel } from "../lib/status";
 import { humanizeToken } from "../lib/text";
@@ -103,6 +103,10 @@ export function AuditLog() {
     staleTime: 60_000,
   });
   const canExport = session.data?.permissions?.includes("audit:export") ?? false;
+  // The integrity checkpoint describes the whole append-only ledger of this
+  // installation, not the events inside a customer scope, so the tenant console
+  // neither reads nor advertises it.
+  const tenant = isTenantTier(session.data ?? null);
 
   const page = useQuery({
     queryKey: ["audit-events", filters],
@@ -112,6 +116,9 @@ export function AuditLog() {
   const checkpoint = useQuery({
     queryKey: ["audit-checkpoint-status"],
     queryFn: ({ signal }) => api.get<AuditCheckpointStatus>("/audit/checkpoint-status", signal),
+    // Gated on the resolved session, not just the tier: a pending query reads
+    // as "not a tenant" and would issue a platform read from a tenant console.
+    enabled: session.isSuccess && !tenant,
   });
 
   const detail = useQuery({
@@ -168,6 +175,41 @@ export function AuditLog() {
     }
   }
 
+  const signals: ControlSignal[] = [
+    {
+      label: "Records",
+      value: page.isSuccess ? events.length : page.isError ? "Unavailable" : "Loading",
+      detail: page.isSuccess
+        ? "Audit events loaded under the current filters."
+        : "The count appears once the events load.",
+    },
+    ...(tenant
+      ? []
+      : [
+          {
+            label: "Checkpoint",
+            value: checkpoint.isSuccess
+              ? checkpointStatusLabel(checkpoint.data.state)
+              : checkpoint.isError
+                ? "Unavailable"
+                : "Loading",
+            detail: checkpoint.isSuccess
+              ? "Integrity checkpoint state for this installation."
+              : "Checkpoint status appears once the data loads.",
+            tone: (checkpoint.isSuccess
+              ? checkpoint.data.state === "current"
+                ? "healthy"
+                : "attention"
+              : "neutral") as ControlSignal["tone"],
+          },
+        ]),
+    {
+      label: "Export",
+      value: canExport ? "Allowed" : "Restricted",
+      detail: "CSV export needs its own permission and is recorded in the log.",
+    },
+  ];
+
   return (
     <div className="audit-page">
       <WorkspaceHeader
@@ -188,36 +230,7 @@ export function AuditLog() {
       <ControlRail
         title="Evidence queue"
         summary="Filters narrow the records in view. Export is a separate action and needs re-authentication."
-        signals={[
-          {
-            label: "Records",
-            value: page.isSuccess ? events.length : page.isError ? "Unavailable" : "Loading",
-            detail: page.isSuccess
-              ? "Audit events loaded under the current filters."
-              : "The count appears once the events load.",
-          },
-          {
-            label: "Checkpoint",
-            value: checkpoint.isSuccess
-              ? checkpointStatusLabel(checkpoint.data.state)
-              : checkpoint.isError
-                ? "Unavailable"
-                : "Loading",
-            detail: checkpoint.isSuccess
-              ? "Integrity checkpoint state for this installation."
-              : "Checkpoint status appears once the data loads.",
-            tone: checkpoint.isSuccess
-              ? checkpoint.data.state === "current"
-                ? "healthy"
-                : "attention"
-              : "neutral",
-          },
-          {
-            label: "Export",
-            value: canExport ? "Allowed" : "Restricted",
-            detail: "CSV export needs its own permission and is recorded in the log.",
-          },
-        ]}
+        signals={signals}
       />
 
       <WorkflowGuide
@@ -243,51 +256,53 @@ export function AuditLog() {
         <p className="audit-hint">Exports are limited, recorded and require re-authentication.</p>
       )}
 
-      <section className="card audit-checkpoint" aria-label="Audit checkpoint status">
-        <div>
-          <h2>Checkpoint status</h2>
-          {checkpoint.isPending && <p role="status">Loading checkpoint status…</p>}
-          {checkpoint.isError && (
-            <p className="audit-state error" role="alert">
-              {errorMessage(checkpoint.error)}
-            </p>
-          )}
-          {checkpoint.isSuccess && (
-            <>
-              <p className={`audit-checkpoint-state audit-checkpoint-${checkpoint.data.state}`}>
-                {checkpointStatusLabel(checkpoint.data.state)}
+      {tenant ? null : (
+        <section className="card audit-checkpoint" aria-label="Audit checkpoint status">
+          <div>
+            <h2>Checkpoint status</h2>
+            {checkpoint.isPending && <p role="status">Loading checkpoint status…</p>}
+            {checkpoint.isError && (
+              <p className="audit-state error" role="alert">
+                {errorMessage(checkpoint.error)}
               </p>
-              <p className="audit-meta">
-                {checkpoint.data.last_checkpoint_at
-                  ? `Last checkpoint ${new Date(
-                      checkpoint.data.last_checkpoint_at,
-                    ).toLocaleString()}`
-                  : "No checkpoint has been recorded for this installation yet."}
-              </p>
-            </>
+            )}
+            {checkpoint.isSuccess && (
+              <>
+                <p className={`audit-checkpoint-state audit-checkpoint-${checkpoint.data.state}`}>
+                  {checkpointStatusLabel(checkpoint.data.state)}
+                </p>
+                <p className="audit-meta">
+                  {checkpoint.data.last_checkpoint_at
+                    ? `Last checkpoint ${new Date(
+                        checkpoint.data.last_checkpoint_at,
+                      ).toLocaleString()}`
+                    : "No checkpoint has been recorded for this installation yet."}
+                </p>
+              </>
+            )}
+          </div>
+          {checkpoint.data?.root_hash && (
+            <dl className="audit-checkpoint-detail">
+              <div>
+                <dt>Sequence</dt>
+                <dd>{checkpoint.data.checkpoint_sequence}</dd>
+              </div>
+              <div>
+                <dt>Events covered</dt>
+                <dd>{checkpoint.data.event_count}</dd>
+              </div>
+              <div>
+                <dt>Root hash</dt>
+                <dd className="audit-hash">{checkpoint.data.root_hash}</dd>
+              </div>
+              <div>
+                <dt>Signer</dt>
+                <dd>{checkpoint.data.signer_key_id}</dd>
+              </div>
+            </dl>
           )}
-        </div>
-        {checkpoint.data?.root_hash && (
-          <dl className="audit-checkpoint-detail">
-            <div>
-              <dt>Sequence</dt>
-              <dd>{checkpoint.data.checkpoint_sequence}</dd>
-            </div>
-            <div>
-              <dt>Events covered</dt>
-              <dd>{checkpoint.data.event_count}</dd>
-            </div>
-            <div>
-              <dt>Root hash</dt>
-              <dd className="audit-hash">{checkpoint.data.root_hash}</dd>
-            </div>
-            <div>
-              <dt>Signer</dt>
-              <dd>{checkpoint.data.signer_key_id}</dd>
-            </div>
-          </dl>
-        )}
-      </section>
+        </section>
+      )}
 
       <section className="audit-controls" aria-label="Audit filters">
         <Input
@@ -371,7 +386,7 @@ export function AuditLog() {
                   <td>
                     {event.actor_login}
                     <span className="audit-meta">
-                      {event.actor_roles.map(roleLevelLabel).join(", ")}
+                      {actorRoleLabels(event.actor_roles, tenant).join(", ")}
                     </span>
                     {event.impersonated_subject && (
                       <span className="audit-meta">Acted as {event.impersonated_subject}</span>
@@ -382,7 +397,9 @@ export function AuditLog() {
                   </td>
                   <td>
                     {auditActionLabel(event.action)}
-                    <span className="audit-meta">{event.customer_id ?? "Platform"}</span>
+                    <span className="audit-meta">
+                      {event.customer_id ?? (tenant ? "—" : "Platform")}
+                    </span>
                   </td>
                   <td>
                     {humanizeToken(event.resource_type)}
@@ -411,8 +428,9 @@ export function AuditLog() {
 
       <aside className="audit-state">
         <ScrollText size={20} aria-hidden="true" />
-        Reading and exporting are recorded too. Support accounts see only their own activity unless
-        a cross-customer permission is granted.
+        {tenant
+          ? "Reading and exporting are recorded too. Every event here belongs to your customer."
+          : "Reading and exporting are recorded too. Support accounts see only their own activity unless a cross-customer permission is granted."}
       </aside>
 
       <Dialog open={selected !== null} onClose={() => setSelected(null)} title="Audit event detail">
@@ -431,7 +449,8 @@ export function AuditLog() {
             <div>
               <dt>Actor</dt>
               <dd>
-                {detail.data.actor_login} ({detail.data.actor_roles.join(", ")})
+                {detail.data.actor_login} (
+                {actorRoleLabels(detail.data.actor_roles, tenant).join(", ")})
               </dd>
             </div>
             <div>

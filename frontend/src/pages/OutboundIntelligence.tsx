@@ -12,7 +12,7 @@ import { useRef, useState } from "react";
 
 import { api, type ApiError } from "../api/client";
 import { expiryError, expiryToRfc3339 } from "../api/policies";
-import { hasPermission, loadSession } from "../auth/session";
+import { hasPermission, isTenantTier, loadSession } from "../auth/session";
 import { StatusPill } from "../components/StatusPill";
 import { ControlRail } from "../components/ControlRail";
 import { Hint } from "../components/primitives/Hint";
@@ -267,6 +267,7 @@ export function OutboundIntelligence() {
     refetchInterval: 60_000,
   });
   const canManage = hasPermission(session.data ?? null, "outbound-intelligence:manage");
+  const tenant = isTenantTier(session.data ?? null);
   const saveApproval = useMutation({
     mutationFn: (request: ApprovedBulkSenderRequest) =>
       api.post<ApprovedSenderWriteResult>(
@@ -409,7 +410,11 @@ export function OutboundIntelligence() {
       <WorkspaceHeader
         eyebrow="Outbound protection"
         title="Outbound intelligence"
-        description="Review sender, source, campaign and containment controls for this installation."
+        description={
+          tenant
+            ? "Review the senders, source ranges, campaigns and containment controls for your customer."
+            : "Review sender, source, campaign and containment controls for this installation."
+        }
         scope="Outbound enforcement controls"
         actions={
           <button
@@ -859,7 +864,11 @@ export function OutboundIntelligence() {
                 />
                 Active approval
               </label>
-              <Hint label="Approving a sender raises the limits applied to mail leaving this installation.">
+              <Hint
+                label={`Approving a sender raises the limits applied to mail leaving ${
+                  tenant ? "your customer" : "this installation"
+                }.`}
+              >
                 <button type="submit" className="btn btn-primary" disabled={saveApproval.isPending}>
                   {editingApproval ? "Update approval" : "Save approval"}
                 </button>
@@ -938,9 +947,9 @@ export function OutboundIntelligence() {
         <div>
           <h2 id="notification-heading">Notification and incident state</h2>
           <p>
-            When a sender is compromised or outbound is stopped, related events are grouped before
-            an incident is raised. The open events above are what the customer can see and what
-            Support and System follow up on.
+            {tenant
+              ? "When a sender is compromised or outbound is stopped, related events are grouped before an incident is raised. The open events above are what your customer sees and what your provider follows up on."
+              : "When a sender is compromised or outbound is stopped, related events are grouped before an incident is raised. The open events above are what the customer can see and what Support and System follow up on."}
           </p>
         </div>
         {data.summary.open_security_events > 0 ? (

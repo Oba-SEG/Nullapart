@@ -15,7 +15,13 @@ import { StepUpPrompt } from "../components/StepUpPrompt";
 import { WorkspaceHeader } from "../components/WorkspaceHeader";
 import { WorkflowGuide } from "../components/WorkflowGuide";
 import { ControlRail } from "../components/ControlRail";
-import { HINTS, MANAGEMENT_LEVEL_LABELS } from "../lib/labels";
+import {
+  HINTS,
+  MANAGEMENT_LEVEL_LABELS,
+  TENANT_LEVEL_LABELS,
+  tenantLevelBucket,
+  type TenantLevelBucket,
+} from "../lib/labels";
 import "./Policies.css";
 
 type LevelFilter = "all" | ManagementLevel;
@@ -25,6 +31,21 @@ const LEVEL_FILTERS: LevelFilter[] = ["all", ...MANAGEMENT_LEVELS];
 const LEVEL_LABELS: Record<LevelFilter, string> = {
   all: "All levels",
   ...MANAGEMENT_LEVEL_LABELS,
+};
+
+/**
+ * A customer console does not administer a level ladder it cannot reach, so the
+ * three published levels are two buckets for a tenant: families their own roles
+ * can change, and families their provider changes.
+ */
+type TenantBucketFilter = "all" | TenantLevelBucket;
+
+const TENANT_BUCKET_FILTERS: TenantBucketFilter[] = ["all", "yours", "provider"];
+
+const TENANT_BUCKET_LABELS: Record<TenantBucketFilter, string> = {
+  all: "All families",
+  yours: TENANT_LEVEL_LABELS.yours,
+  provider: TENANT_LEVEL_LABELS.provider,
 };
 
 function errorCode(error: unknown): string {
@@ -51,6 +72,7 @@ function activeRevisionLabel(active: RevisionSummary): string {
 
 export function Policies() {
   const [level, setLevel] = useState<LevelFilter>("all");
+  const [tenantBucket, setTenantBucket] = useState<TenantBucketFilter>("all");
   const [onlyEditable, setOnlyEditable] = useState(false);
 
   const policies = useQuery({
@@ -64,12 +86,14 @@ export function Policies() {
   const callerTier = policies.data?.caller_tier ?? null;
   const allRows = policies.data?.families ?? [];
   const isEditable = (managementLevel: ManagementLevel) => tierAllows(callerTier, managementLevel);
+  const tenantTier = callerTier === "customer";
   const editableCount = allRows.filter((family) => isEditable(family.management_level)).length;
-  const rows = allRows.filter(
-    (family) =>
-      (level === "all" || family.management_level === level) &&
-      (!onlyEditable || isEditable(family.management_level)),
-  );
+  const rows = allRows.filter((family) => {
+    if (onlyEditable && !isEditable(family.management_level)) return false;
+    return tenantTier
+      ? tenantBucket === "all" || tenantLevelBucket(family.management_level) === tenantBucket
+      : level === "all" || family.management_level === level;
+  });
   const policiesAvailable = policies.isSuccess;
   const policiesState = policies.isError ? "Unavailable" : "Loading";
 
@@ -78,39 +102,62 @@ export function Policies() {
       <WorkspaceHeader
         eyebrow="Configuration governance"
         title="Policies"
-        description="Open a policy family to read its revisions and publish a new one. Each family says which management level may change it, and your level decides whether the editor opens."
+        description={
+          tenantTier
+            ? "Open a family marked Yours to change to read its revisions and publish a new one. Families your provider changes are listed by name so you know who to ask, but they do not open here."
+            : "Open a policy family to read its revisions and publish a new one. Each family says which management level may change it, and your level decides whether the editor opens."
+        }
         scope={
           policiesAvailable
             ? `${editableCount} of ${allRows.length} families open for editing`
             : "Versioned policy controls"
         }
         actions={
-          <Link to="/policies/features" className="btn btn-primary">
-            Feature overrides
-          </Link>
+          // Feature overrides are a deployment-configuration surface. A tenant
+          // console does not offer it, so the entry is hidden for the customer
+          // level the server published.
+          tenantTier ? null : (
+            <Link to="/policies/features" className="btn btn-primary">
+              Feature overrides
+            </Link>
+          )
         }
       />
 
       <ControlRail
         title="Policy release queue"
-        summary="Filter by the level you administer, or show only the families your roles can change. Opening a family you cannot change shows why."
+        summary={
+          tenantTier
+            ? "Filter by what your roles can change. Families marked Needs your provider are named here so you can ask about them; they do not open in this console."
+            : "Filter by the level you administer, or show only the families your roles can change. Opening a family you cannot change shows why."
+        }
         signals={[
           {
             label: "In view",
             value: policiesAvailable ? rows.length : policiesState,
-            detail: policiesAvailable
-              ? `${LEVEL_LABELS[level]} policy families currently shown.`
-              : "The policy queue has not returned yet.",
+            detail: !policiesAvailable
+              ? "The policy queue has not returned yet."
+              : tenantTier
+                ? tenantBucket === "all"
+                  ? "Every policy family your provider publishes."
+                  : tenantBucket === "yours"
+                    ? "Families your own roles can change."
+                    : "Families your provider changes."
+                : `${LEVEL_LABELS[level]} policy families currently shown.`,
           },
           {
-            label: "Your level",
+            label: tenantTier ? "Your scope" : "Your level",
             value: policiesAvailable
               ? callerTier === null
                 ? "None"
-                : MANAGEMENT_LEVEL_LABELS[callerTier]
+                : tenantTier
+                  ? "Your organisation"
+                  : MANAGEMENT_LEVEL_LABELS[callerTier]
               : policiesState,
             detail: policiesAvailable
-              ? HINTS.callerTier
+              ? tenantTier
+                ? "You change what belongs to your own organisation. Your provider changes the rest."
+                : HINTS.callerTier
               : "Your level is shown once the policy list returns.",
           },
           {
@@ -158,18 +205,34 @@ export function Policies() {
       />
 
       <div className="policies-filters">
-        <div className="policies-filters" role="group" aria-label="Filter by management level">
-          {LEVEL_FILTERS.map((value) => (
-            <button
-              key={value}
-              type="button"
-              className={`policies-chip${level === value ? " policies-chip-active" : ""}`}
-              aria-pressed={level === value}
-              onClick={() => setLevel(value)}
-            >
-              {LEVEL_LABELS[value]}
-            </button>
-          ))}
+        <div
+          className="policies-filters"
+          role="group"
+          aria-label={tenantTier ? "Filter by what you can change" : "Filter by management level"}
+        >
+          {tenantTier
+            ? TENANT_BUCKET_FILTERS.map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={`policies-chip${tenantBucket === value ? " policies-chip-active" : ""}`}
+                  aria-pressed={tenantBucket === value}
+                  onClick={() => setTenantBucket(value)}
+                >
+                  {TENANT_BUCKET_LABELS[value]}
+                </button>
+              ))
+            : LEVEL_FILTERS.map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={`policies-chip${level === value ? " policies-chip-active" : ""}`}
+                  aria-pressed={level === value}
+                  onClick={() => setLevel(value)}
+                >
+                  {LEVEL_LABELS[value]}
+                </button>
+              ))}
         </div>
         {policiesAvailable && allRows.length > 0 ? (
           <button
@@ -196,29 +259,46 @@ export function Policies() {
       ) : null}
       {policies.isSuccess && allRows.length === 0 ? (
         <div className="policies-state">
-          No policy families are available in this deployment yet. They appear here once the
-          platform publishes them.
+          {tenantTier
+            ? "No policy family is open to your organisation yet. Ask your provider if you expect one here."
+            : "No policy families are available in this deployment yet. They appear here once the platform publishes them."}
         </div>
       ) : null}
       {policies.isSuccess && allRows.length > 0 && rows.length === 0 ? (
         <div className="policies-state">
           {onlyEditable
-            ? "None of these families open for editing at your level. Clear the filter to read them."
-            : "No policy family matches this management level."}
+            ? tenantTier
+              ? "None of these families are yours to change. Clear the filter to read them."
+              : "None of these families open for editing at your level. Clear the filter to read them."
+            : tenantTier
+              ? "No policy family matches this filter. Clear it to read the rest."
+              : "No policy family matches this management level."}
         </div>
       ) : null}
 
       {rows.length > 0 ? (
         <div className="card policies-table-wrap">
           <table className="policies-table">
-            <caption className="sr-only">Policy families in this deployment</caption>
+            <caption className="sr-only">
+              {tenantTier
+                ? "Policy families for your organisation"
+                : "Policy families in this deployment"}
+            </caption>
             <thead>
               <tr>
                 <th scope="col">Family</th>
                 <th scope="col">What it governs</th>
                 <th scope="col">
-                  <Hint label="The management level allowed to change this family. Your level has to reach it.">
-                    <span className="hint-term">Changeable at</span>
+                  <Hint
+                    label={
+                      tenantTier
+                        ? "Whether your own roles can publish a new revision of this family, or your provider has to."
+                        : "The management level allowed to change this family. Your level has to reach it."
+                    }
+                  >
+                    <span className="hint-term">
+                      {tenantTier ? "Who can change it" : "Changeable at"}
+                    </span>
                   </Hint>
                 </th>
                 <th scope="col">Revision in force</th>
@@ -232,19 +312,42 @@ export function Policies() {
                   <tr key={family.family_key}>
                     <td>
                       <div className="policies-name">
-                        <Link
-                          to="/policies/$familyKey"
-                          params={{ familyKey: family.family_key }}
-                          aria-label={family.display_name}
-                        >
-                          {family.display_name}
-                        </Link>
+                        {/* A tenant link into a provider family always 403s and
+                            writes a Denied row into that tenant's own audit log,
+                            so the name is information rather than a dead end. */}
+                        {tenantTier && !editable ? (
+                          <span>{family.display_name}</span>
+                        ) : (
+                          <Link
+                            to="/policies/$familyKey"
+                            params={{ familyKey: family.family_key }}
+                            aria-label={family.display_name}
+                          >
+                            {family.display_name}
+                          </Link>
+                        )}
                         <code className="policies-key">{family.family_key}</code>
                       </div>
                     </td>
                     <td className="policies-description">{family.description}</td>
                     <td>
-                      {editable ? (
+                      {tenantTier ? (
+                        editable ? (
+                          <Hint label="Your own roles can publish a new revision of this family for your organisation.">
+                            <span
+                              className={`policies-badge policies-level-${family.management_level} hint-term`}
+                            >
+                              {TENANT_LEVEL_LABELS.yours}
+                            </span>
+                          </Hint>
+                        ) : (
+                          <Hint label="Your provider changes this family. Ask them if it needs to change for your organisation.">
+                            <span className="policies-lock hint-term">
+                              {TENANT_LEVEL_LABELS.provider}
+                            </span>
+                          </Hint>
+                        )
+                      ) : editable ? (
                         <span
                           className={`policies-badge policies-level-${family.management_level}`}
                         >

@@ -13,7 +13,11 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { FeatureOverrides } from "./FeatureOverrides";
 
-function sessionFor(roles: string[], permissions = ["policies:manage"]) {
+function sessionFor(
+  roles: string[],
+  permissions = ["policies:manage"],
+  tier: string | null = null,
+) {
   return {
     authenticated: true,
     userId: "actor-1",
@@ -21,6 +25,7 @@ function sessionFor(roles: string[], permissions = ["policies:manage"]) {
     roles,
     permissions,
     customerId: "CZA-1",
+    tier,
     expiresAt: "2099-01-01T00:00:00Z",
     csrfToken: "csrf-token",
     impersonation: null,
@@ -331,6 +336,20 @@ describe("FeatureOverrides", () => {
     // Every row says so, and the page says why once above the table.
     expect(screen.getAllByText("Read-only")).toHaveLength(2);
     expect(screen.getByText(/your role cannot manage policy settings/i)).toBeTruthy();
+  });
+
+  it("keeps the deployment rollout catalog out of a customer console", async () => {
+    const fetchMock = stubFetch(sessionFor(["customer_admin"], ["policies:view"], "customer"));
+    renderAt("/features-overrides");
+
+    expect(await screen.findByText(/nothing here is open to your customer/i)).toBeTruthy();
+    // The platform surfaces are not merely hidden behind a spinner.
+    expect(screen.queryByText("Outbound bulk sender guardrails")).toBeNull();
+    expect(screen.queryByText("Emergency stops")).toBeNull();
+    expect(screen.queryByText(/deployment/i)).toBeNull();
+    // Nothing is fetched, because a read the tenant console will not show is
+    // still a platform read made with the tenant's session.
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/features"))).toBe(false);
   });
 
   it("writes a typed value at the level the session was given", async () => {

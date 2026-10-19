@@ -5,7 +5,7 @@ import { useId, useState } from "react";
 
 import { api, type ApiError } from "../api/client";
 import { capabilityLock, type CustomerCapabilities } from "../api/capabilities";
-import { hasPermission, loadSession } from "../auth/session";
+import { hasPermission, isTenantTier, loadSession } from "../auth/session";
 import { StepUpPrompt } from "../components/StepUpPrompt";
 import { ControlRail } from "../components/ControlRail";
 import { WorkflowGuide } from "../components/WorkflowGuide";
@@ -379,7 +379,11 @@ export function CustomerRecord({
               </div>
               <div>
                 <dt>
-                  <Hint label="The sending region assigned to this customer. It is set by the platform.">
+                  <Hint
+                    label={`The sending region assigned to ${
+                      ownRecord ? "your customer" : "this customer"
+                    }. ${ownRecord ? "Your provider" : "The platform"} sets it.`}
+                  >
                     <span className="hint-term">Region</span>
                   </Hint>
                 </dt>
@@ -387,7 +391,13 @@ export function CustomerRecord({
               </div>
               <div>
                 <dt>
-                  <Hint label="The position assigned to this customer within its region. It is set by the platform.">
+                  <Hint
+                    label={`The position assigned to ${
+                      ownRecord ? "your customer" : "this customer"
+                    } within its region. ${
+                      ownRecord ? "Your provider" : "The platform"
+                    } assigns it.`}
+                  >
                     <span className="hint-term">Sequence</span>
                   </Hint>
                 </dt>
@@ -411,7 +421,7 @@ export function CustomerRecord({
           title={ownRecord ? "Your organisation" : "Customer status"}
           summary={
             ownRecord
-              ? "The record your customer administrator sees. Platform-only controls state why they are withheld."
+              ? "Your own customer record. Controls your provider keeps say why they are withheld."
               : "The current record decides which lifecycle and configuration actions are still relevant."
           }
           signals={[
@@ -452,7 +462,7 @@ export function CustomerRecord({
           title={ownRecord ? "Set your customer up" : "Manage the customer"}
           description={
             ownRecord
-              ? "Verify the domains your customer sends from and list the addresses allowed to send as them. Anything marked platform-only needs your provider."
+              ? "Verify the domains your customer sends from and list the addresses allowed to send as them. Anything your provider has to change says so here."
               : "Set the lifecycle and sending configuration here before you rely on customer-specific policies or connectors."
           }
           steps={
@@ -899,9 +909,20 @@ export function CustomerRecord({
 
 /**
  * The route form of the record: a customer opened out of the directory, with
- * the back link and the platform's own framing.
+ * the back link and the platform's own framing. A customer session that names
+ * its own organisation here is reading its own record, not a directory row, so
+ * it gets the owner framing the `/customers` route uses. The server still
+ * decides whether the read is allowed.
  */
 export function CustomerDetail() {
   const { customerId = "" } = useParams({ from: "/customers/$customerId" });
-  return <CustomerRecord customerId={customerId} />;
+  const session = useQuery({
+    queryKey: ["session"],
+    queryFn: ({ signal }) => loadSession(signal),
+    staleTime: 60_000,
+    retry: false,
+  });
+  const current = session.data ?? null;
+  const ownRecord = isTenantTier(current) && current?.customerId === customerId;
+  return <CustomerRecord customerId={customerId} ownRecord={ownRecord} />;
 }

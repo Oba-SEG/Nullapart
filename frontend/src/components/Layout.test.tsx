@@ -71,8 +71,6 @@ const tenantSession: Session = {
     "trace:view",
     "quarantine:view",
     "admin:customers:view",
-    "deep-ai:view",
-    "connectors:view",
     "audit:view",
     "policies:view",
     "admin:users:manage",
@@ -156,6 +154,8 @@ describe("Layout", () => {
     expect(screen.queryByText("Runtime status")).toBeNull();
     expect(screen.queryByText("Scanner nodes")).toBeNull();
     expect(screen.queryByText("Models")).toBeNull();
+    expect(screen.queryByText("Deep AI")).toBeNull();
+    expect(screen.queryByText("Connectors")).toBeNull();
     expect(screen.queryByText("Customers")).toBeNull();
     expect(screen.queryByText("Administration")).toBeNull();
     expect(nav.textContent).not.toContain("Platform settings");
@@ -170,6 +170,8 @@ describe("Layout", () => {
     expect(screen.getByText("Runtime status")).toBeTruthy();
     expect(screen.getByText("Scanner nodes")).toBeTruthy();
     expect(screen.getByText("Models")).toBeTruthy();
+    expect(screen.getByText("Deep AI")).toBeTruthy();
+    expect(screen.getByText("Connectors")).toBeTruthy();
     expect(screen.getByText("Customers")).toBeTruthy();
     expect(screen.getByText("Administration")).toBeTruthy();
     expect(screen.getByText("Admin users")).toBeTruthy();

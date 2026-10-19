@@ -14,7 +14,7 @@ import { Dialog } from "../components/primitives/Dialog";
 import { Hint } from "../components/primitives/Hint";
 import { Input } from "../components/primitives/Input";
 import { randomUuid } from "../lib/ids";
-import { lifecycleLabel, roleLevelLabel } from "../lib/labels";
+import { lifecycleLabel, PROVIDER_ROLE_LEVEL_LABEL, roleLevelLabel } from "../lib/labels";
 import { notify } from "../lib/notify";
 import { humanizeToken } from "../lib/text";
 import "./AdminUsers.css";
@@ -39,6 +39,7 @@ interface RoleView {
   key: string;
   label: string;
   level: string;
+  levelLabel: string;
   description: string;
   builtin: boolean;
   grantable: boolean;
@@ -66,31 +67,54 @@ function callerRank(session: Session | null): number {
 const ABOVE_LEVEL_GRANT = "Only a session at this role's level can grant it.";
 const ABOVE_LEVEL_REVOKE = "Only a session at this role's level can remove it.";
 const PERMISSIONS_NOT_HELD = "Contains permissions you do not hold.";
+const PROVIDER_ROLE_LABEL = "Provider-level role";
+const PROVIDER_ABOVE_GRANT = "Your provider assigns this role, so you cannot grant it.";
+const PROVIDER_ABOVE_REVOKE = "Your provider assigns this role, so you cannot remove it.";
 
-function toRoleView(role: RoleDefinition, sessionPermissions: string[], rank: number): RoleView {
+function toRoleView(
+  role: RoleDefinition,
+  sessionPermissions: string[],
+  rank: number,
+  tenant: boolean,
+): RoleView {
   const aboveOwnLevel = rankForLevel(role.roleLevel) > rank;
   const withinHeld = role.builtin || rolePermissionsWithin(role, sessionPermissions);
+  // A role above a tenant's own level belongs to the provider, not to this
+  // customer, and its platform name is not something the tenant administers.
+  // The lock is the server's; these are the words this console can honestly use.
+  const beyondTenant = tenant && aboveOwnLevel;
   return {
     key: role.roleKey,
-    label: role.displayName,
+    label: beyondTenant ? PROVIDER_ROLE_LABEL : role.displayName,
     level: role.roleLevel,
-    description: role.description ?? (role.builtin ? "Built-in role." : "Custom role."),
+    levelLabel: beyondTenant ? PROVIDER_ROLE_LEVEL_LABEL : roleLevelLabel(role.roleLevel),
+    description: beyondTenant
+      ? "A role above your customer's own level. Your provider assigns and removes it."
+      : (role.description ?? (role.builtin ? "Built-in role." : "Custom role.")),
     builtin: role.builtin,
     grantable: !aboveOwnLevel && withinHeld,
-    grantReason: aboveOwnLevel ? ABOVE_LEVEL_GRANT : withinHeld ? null : PERMISSIONS_NOT_HELD,
+    grantReason: beyondTenant
+      ? PROVIDER_ABOVE_GRANT
+      : aboveOwnLevel
+        ? ABOVE_LEVEL_GRANT
+        : withinHeld
+          ? null
+          : PERMISSIONS_NOT_HELD,
     revocable: !aboveOwnLevel,
-    revokeReason: aboveOwnLevel ? ABOVE_LEVEL_REVOKE : null,
+    revokeReason: beyondTenant ? PROVIDER_ABOVE_REVOKE : aboveOwnLevel ? ABOVE_LEVEL_REVOKE : null,
   };
 }
 
 /** Keys present in the directory but absent from the role service render without a documented description. */
-function unknownRoleView(key: string): RoleView {
+function unknownRoleView(key: string, tenant: boolean): RoleView {
   return {
     key,
-    label: humanizeToken(key),
+    label: tenant ? "A role you cannot manage" : humanizeToken(key),
     level: "custom",
-    description:
-      "This role is not in the role list. Its permissions are checked before any change is saved.",
+    levelLabel: tenant ? PROVIDER_ROLE_LEVEL_LABEL : roleLevelLabel("custom"),
+    description: tenant
+      ? "This role is not in your role list, so its permissions cannot be checked here. The server verifies it before any change is saved."
+      : "This role is not in the role list. Its permissions are checked before any change is saved.",
     builtin: false,
     grantable: false,
     grantReason: "This role is not in the role list, so its permissions cannot be checked.",
@@ -149,13 +173,15 @@ export function AdminUsers() {
   const grantorRank = callerRank(current);
   const roleViews = useMemo(
     () =>
-      (roleDirectory.data ?? []).map((role) => toRoleView(role, sessionPermissions, grantorRank)),
-    [roleDirectory.data, sessionPermissions, grantorRank],
+      (roleDirectory.data ?? []).map((role) =>
+        toRoleView(role, sessionPermissions, grantorRank, tenant),
+      ),
+    [roleDirectory.data, sessionPermissions, grantorRank, tenant],
   );
   const rolesByKey = useMemo(() => new Map(roleViews.map((role) => [role.key, role])), [roleViews]);
   const viewFor = useMemo(
-    () => (key: string) => rolesByKey.get(key) ?? unknownRoleView(key),
-    [rolesByKey],
+    () => (key: string) => rolesByKey.get(key) ?? unknownRoleView(key, tenant),
+    [rolesByKey, tenant],
   );
 
   const filtered = useMemo(() => {
@@ -508,13 +534,20 @@ function CreateAdministratorDialog({
         )}
         <fieldset className="admin-users-role-picker">
           <legend>
-            <Hint label="You can only grant roles at or below your own level whose permissions you already hold. Roles you cannot grant appear dimmed.">
+            <Hint
+              label={
+                tenant
+                  ? "You can only grant roles inside your organisation whose permissions you already hold. Roles you cannot grant appear dimmed."
+                  : "You can only grant roles at or below your own level whose permissions you already hold. Roles you cannot grant appear dimmed."
+              }
+            >
               <span className="hint-term">Roles</span>
             </Hint>
           </legend>
           <p className="admin-users-form-hint">
-            You can only grant roles at or below your own level whose permissions you already hold.
-            Each grant is recorded.
+            {tenant
+              ? "You can only grant roles inside your organisation whose permissions you already hold. Each grant is recorded."
+              : "You can only grant roles at or below your own level whose permissions you already hold. Each grant is recorded."}
           </p>
           <RolePickerState loading={rolesLoading} error={rolesError} />
           {!rolesLoading && !rolesError
@@ -535,7 +568,7 @@ function CreateAdministratorDialog({
                   />
                   <span>
                     <strong>{role.label}</strong>
-                    <em>{roleLevelLabel(role.level)}</em>
+                    <em>{role.levelLabel}</em>
                     <span>{role.description}</span>
                   </span>
                 </label>
@@ -587,13 +620,13 @@ function ManageRolesDialog({
   const availableRoles = useMemo(() => {
     const known = new Map(roles.map((role) => [role.key, role]));
     for (const key of draft) {
-      if (!known.has(key)) known.set(key, unknownRoleView(key));
+      if (!known.has(key)) known.set(key, unknownRoleView(key, tenant));
     }
     for (const key of target.roles) {
-      if (!known.has(key)) known.set(key, unknownRoleView(key));
+      if (!known.has(key)) known.set(key, unknownRoleView(key, tenant));
     }
     return [...known.values()];
-  }, [roles, target.roles, draft]);
+  }, [roles, target.roles, draft, tenant]);
 
   const grants = draft.filter((key) => !target.roles.includes(key));
   const revokes = target.roles.filter((key) => !draft.includes(key));
@@ -638,7 +671,9 @@ function ManageRolesDialog({
             ? tenant
               ? " in your organisation"
               : ` in customer ${target.customerId}`
-            : " on the platform"}
+            : tenant
+              ? " outside your organisation"
+              : " on the platform"}
         </p>
         <fieldset className="admin-users-role-picker">
           <legend>
@@ -672,7 +707,7 @@ function ManageRolesDialog({
                     />
                     <span>
                       <strong>{role.label}</strong>
-                      <em>{roleLevelLabel(role.level)}</em>
+                      <em>{role.levelLabel}</em>
                       <span>{role.description}</span>
                     </span>
                   </label>

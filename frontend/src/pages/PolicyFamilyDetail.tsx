@@ -65,6 +65,8 @@ import {
   OVERRIDE_SCOPE_LABELS,
   POLICY_DISPOSITION_LABELS,
   SCANNER_LABELS,
+  TENANT_LEVEL_LABELS,
+  tenantLevelBucket,
 } from "../lib/labels";
 import "./PolicyFamilyDetail.css";
 
@@ -414,6 +416,7 @@ export function PolicyFamilyDetail() {
   // The tier comes from the server with the family, never re-derived from role
   // names here, so a custom role reaches the same conclusion in UI and API.
   const callerTier = detail.data?.caller_tier ?? null;
+  const tenantTier = callerTier === "customer";
   // Every threshold field, predicate note and enforcement sentence below comes
   // from this server-published profile, so the form cannot offer a field the
   // delivery path would ignore.
@@ -553,11 +556,15 @@ export function PolicyFamilyDetail() {
   // The tier in these sentences comes from the server, so the reason an
   // operator reads is the same reason the API applied.
   const lockReason = family
-    ? canManage
-      ? callerTier === null
-        ? `This family changes at ${MANAGEMENT_LEVEL_LABELS[family.management_level]} level. Your roles do not carry a policy level, so nothing here can be published.`
-        : `This family changes at ${MANAGEMENT_LEVEL_LABELS[family.management_level]} level. Your roles reach ${MANAGEMENT_LEVEL_LABELS[callerTier]} level, so publishing is not available here.`
-      : "You can read this family, but your role cannot publish policy changes. Ask a system administrator if it needs new rules."
+    ? tenantTier
+      ? canManage
+        ? "This family is changed by your provider, not by your organisation. Ask them if it needs new rules."
+        : "You can read this family, but your role cannot publish policy changes. Ask your provider if it needs new rules."
+      : canManage
+        ? callerTier === null
+          ? `This family changes at ${MANAGEMENT_LEVEL_LABELS[family.management_level]} level. Your roles do not carry a policy level, so nothing here can be published.`
+          : `This family changes at ${MANAGEMENT_LEVEL_LABELS[family.management_level]} level. Your roles reach ${MANAGEMENT_LEVEL_LABELS[callerTier]} level, so publishing is not available here.`
+        : "You can read this family, but your role cannot publish policy changes. Ask a system administrator if it needs new rules."
     : "";
 
   return (
@@ -588,7 +595,9 @@ export function PolicyFamilyDetail() {
               <span
                 className={`policy-detail-badge policy-detail-level-${family.management_level}`}
               >
-                {MANAGEMENT_LEVEL_LABELS[family.management_level]}
+                {tenantTier
+                  ? TENANT_LEVEL_LABELS[tenantLevelBucket(family.management_level)]
+                  : MANAGEMENT_LEVEL_LABELS[family.management_level]}
               </span>
               {family.security_floor ? (
                 <Hint label={HINTS.securityFloor}>
@@ -612,10 +621,15 @@ export function PolicyFamilyDetail() {
           summary="Policy work is always versioned. The active revision and your access level decide what you can do next."
           signals={[
             {
-              label: "Your level",
-              value: callerTier === null ? "None" : MANAGEMENT_LEVEL_LABELS[callerTier],
-              detail:
-                callerTier === null
+              label: tenantTier ? "Your access" : "Your level",
+              value: tenantTier
+                ? "Your organisation"
+                : callerTier === null
+                  ? "None"
+                  : MANAGEMENT_LEVEL_LABELS[callerTier],
+              detail: tenantTier
+                ? "You publish the families marked Yours to change. Your provider publishes the ones marked Needs your provider."
+                : callerTier === null
                   ? "Your roles do not include a policy level, so nothing here can be published."
                   : `You can publish families that need the ${MANAGEMENT_LEVEL_LABELS[callerTier]} level or lower.`,
               tone: callerTier === null ? "attention" : "neutral",

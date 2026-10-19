@@ -191,7 +191,11 @@ export function Dashboard() {
   const unverifiedDomains = domainSummary
     ? Math.max(0, domainSummary.domains_total - domainSummary.verified_domains)
     : null;
-  const workspaceTitle = systemTier ? "System overview" : "Security overview";
+  const workspaceTitle = systemTier
+    ? "System overview"
+    : tenantTier
+      ? "Overview"
+      : "Security overview";
 
   const outboxStale =
     outbox !== undefined &&
@@ -240,7 +244,9 @@ export function Dashboard() {
   if (unverifiedDomains !== null && unverifiedDomains > 0) {
     attentionItems.push({
       label: `${unverifiedDomains} domain${unverifiedDomains === 1 ? "" : "s"} still unverified`,
-      detail: "Verification proves the domain belongs to this customer before mail flows on it.",
+      detail: tenantTier
+        ? "Verification proves a domain belongs to your customer before mail flows on it."
+        : "Verification proves the domain belongs to this customer before mail flows on it.",
       to: "/customers",
       tone: "review",
     });
@@ -312,7 +318,7 @@ export function Dashboard() {
           icon: SlidersHorizontal,
           label: tenantTier ? "Manage your mail controls" : "Manage policy",
           detail: tenantTier
-            ? "Adjust the families your customer owns; platform floors stay locked"
+            ? "Adjust the families your customer owns; security floors stay locked"
             : "Adjust mail controls for a customer without disabling security floors",
         }
       : null,
@@ -503,7 +509,7 @@ export function Dashboard() {
           systemTier
             ? "Review this installation, manage its security posture, and open a customer only through the Customer entry workflow."
             : tenantTier
-              ? "Review mail security for your customer. Platform runtime health is managed by your provider."
+              ? "Review mail security for your customer. Runtime health is operated by your provider."
               : "Review mail-security signals and use the controls allowed for this workspace."
         }
         scope={systemTier ? "All customers" : tenantTier ? "Your customer" : "Customer workspace"}
@@ -739,8 +745,8 @@ export function Dashboard() {
           </div>
           {tenantTier ? (
             <p className="dashboard-empty">
-              Platform runtime health, scanner nodes and model registries are operated by your
-              provider. Nothing on this page changes mail flow.
+              Nothing on this page changes mail flow. The mail infrastructure behind it is operated
+              by your provider.
             </p>
           ) : null}
         </section>

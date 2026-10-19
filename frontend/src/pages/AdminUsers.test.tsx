@@ -316,12 +316,19 @@ describe("AdminUsers", () => {
     const manageButtons = await screen.findAllByRole("button", { name: "Manage roles" });
     fireEvent.click(manageButtons[0]!);
 
-    const systemRole = await screen.findByRole("checkbox", { name: /System admin/ });
-    expect(systemRole).toBeDisabled();
-    expect(systemRole).toHaveAttribute(
-      "title",
-      "Only a session at this role's level can grant it.",
-    );
+    // The grant is the server's refusal; the name is this console's. A tenant
+    // reads "Provider-level role", never the platform role's own name or key,
+    // and every role above the tenant collapses into that one honest label.
+    const providerRoles = await screen.findAllByRole("checkbox", { name: /Provider-level role/ });
+    expect(providerRoles).toHaveLength(2);
+    for (const role of providerRoles) {
+      expect(role).toBeDisabled();
+      expect(role).toHaveAttribute(
+        "title",
+        "Your provider assigns this role, so you cannot grant it.",
+      );
+    }
+    expect(screen.queryByRole("checkbox", { name: /System admin/ })).toBeNull();
     expect(screen.getByRole("checkbox", { name: /^Customer admin/ })).toBeEnabled();
   });
 

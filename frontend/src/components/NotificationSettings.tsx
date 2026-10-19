@@ -190,7 +190,7 @@ export function NotificationSettings({ titlesById = {} }: NotificationSettingsPr
               ? `Last saved by ${data.settings.updated_by} on ${formatTimestamp(
                   data.settings.updated_at,
                 )}.`
-              : "Nobody has saved settings for this customer yet, so the values below are the platform defaults."}
+              : "Nobody has saved settings for this customer yet, so the values below are the defaults."}
           </p>
         </div>
         <StatusPill
@@ -244,7 +244,7 @@ export function NotificationSettings({ titlesById = {} }: NotificationSettingsPr
             ))}
           </select>
           <small>
-            A finding at or above this severity is eligible. The platform floor still applies.
+            A finding at or above this severity is eligible. The security floor still applies.
           </small>
         </div>
 

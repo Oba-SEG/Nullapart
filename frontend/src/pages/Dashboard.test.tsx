@@ -198,7 +198,7 @@ describe("Dashboard", () => {
     renderDashboard();
 
     expect(await screen.findByText("1 held message waiting for a decision")).toBeTruthy();
-    expect(screen.getByText("Security overview")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Overview" })).toBeTruthy();
     expect(screen.getByText("Your customer")).toBeTruthy();
     expect(screen.getByText("Open domain findings")).toBeTruthy();
     expect(screen.getByText("Open your organisation")).toBeTruthy();

@@ -22,7 +22,7 @@ import { Hint } from "../components/primitives/Hint";
 import { Input } from "../components/primitives/Input";
 import { Select } from "../components/primitives/Select";
 import { randomUuid } from "../lib/ids";
-import { roleLevelLabel } from "../lib/labels";
+import { roleLevelLabel, TENANT_ROLE_LEVEL_LABEL } from "../lib/labels";
 import { notify } from "../lib/notify";
 import "./Roles.css";
 
@@ -40,7 +40,7 @@ const SYSTEM_ADMIN_ROLE = "system_admin";
  * Administrator. Stating the reservation is what makes the lock actionable.
  */
 const ROLE_DEFINITION_REFUSAL =
-  "Creating or editing a role is limited to the platform's built-in System Administrator role, and your session does not hold it. A role can grant admin:users:manage and still be refused.";
+  "Creating or editing a role needs a provider-level role, and your session does not hold one. A role can grant admin:users:manage and still be refused.";
 
 /**
  * The gate the server publishes on the session decides. A session that carries
@@ -91,7 +91,7 @@ function errorMessage(error: unknown): string {
       return "Role is assigned to users; remove assignments first.";
     }
     if (code === "ROLE_BUILTIN") {
-      return "Built-in roles are managed by the platform and cannot be changed here.";
+      return "Built-in roles come with Nullapart and cannot be changed here.";
     }
     const message = String((error as ApiError).message);
     if (code === "RATE_LIMITED") {
@@ -134,6 +134,10 @@ export function Roles() {
   const permissionCatalog = useQuery({
     queryKey: ["admin-permissions"],
     queryFn: ({ signal }) => listPermissionCatalog(signal),
+    // The catalog lists every permission the installation publishes, including
+    // ones no tenant role can hold, and only the role-definition dialog reads it.
+    // A customer console cannot define roles, so it never asks for that list.
+    enabled: session.isSuccess && !isTenantTier(session.data ?? null),
   });
 
   const current = session.data ?? null;
@@ -146,7 +150,18 @@ export function Roles() {
     "admin:users:manage",
     ROLE_DEFINITION_REFUSAL,
   );
-  const directory = useMemo(() => roles.data ?? [], [roles.data]);
+  // A customer administers the roles that exist inside their own customer. The
+  // provider's higher-level roles are not a tenant concern, and listing them
+  // would put platform vocabulary and platform permission bundles in front of a
+  // customer. The role assignment views stay server-scoped.
+  const directory = useMemo(
+    () => (roles.data ?? []).filter((role) => !tenant || role.roleLevel === "customer"),
+    [roles.data, tenant],
+  );
+  const tenantPermissionCount = useMemo(
+    () => new Set(directory.flatMap((role) => role.permissions)).size,
+    [directory],
+  );
 
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -175,7 +190,7 @@ export function Roles() {
           canManage
             ? "Built-in roles come with Nullapart and cannot be changed here. Custom roles are ones you create for this installation from the permissions listed here."
             : tenant
-              ? "The roles your administrators are assigned to, and the permissions each one grants. Role definitions themselves are written by the platform."
+              ? "The roles your administrators are assigned to, and the permissions each one grants. Role definitions themselves are written by your provider."
               : "Built-in roles come with Nullapart and cannot be changed here. Custom roles are ones the platform defines for this installation from the permissions listed here."
         }
         scope={canManage ? "Managing roles" : tenant ? "Viewing your roles" : "Viewing roles"}
@@ -183,7 +198,11 @@ export function Roles() {
 
       <ControlRail
         title="Roles"
-        summary="Give an administrator the smallest role that lets them do their job. A custom role can only use the permissions listed here."
+        summary={
+          tenant
+            ? "Give an administrator the smallest role that lets them do their job. Your provider writes the role definitions behind these."
+            : "Give an administrator the smallest role that lets them do their job. A custom role can only use the permissions listed here."
+        }
         signals={[
           {
             label: "Roles",
@@ -198,43 +217,77 @@ export function Roles() {
             detail: rolesAvailable
               ? canManage
                 ? "Custom roles you can edit or delete."
-                : "Custom roles written by the platform."
+                : tenant
+                  ? "Custom roles written by your provider."
+                  : "Custom roles written by the platform."
               : "The custom role count is unavailable until the roles load.",
             tone:
               rolesAvailable && directory.some((role) => !role.builtin) ? "attention" : "neutral",
           },
           {
             label: "Permissions",
-            value: permissionCatalog.isSuccess
-              ? permissionCatalog.data.length
-              : permissionCatalog.isError
-                ? "Unavailable"
-                : "Loading",
-            detail: permissionCatalog.isSuccess
-              ? "Permissions you can add to a custom role."
-              : "The permission list is still loading.",
+            value: tenant
+              ? rolesAvailable
+                ? tenantPermissionCount
+                : rolesState
+              : permissionCatalog.isSuccess
+                ? permissionCatalog.data.length
+                : permissionCatalog.isError
+                  ? "Unavailable"
+                  : "Loading",
+            detail: tenant
+              ? rolesAvailable
+                ? "Distinct permissions your roles grant."
+                : "The permission count is unavailable until the roles load."
+              : permissionCatalog.isSuccess
+                ? "Permissions you can add to a custom role."
+                : "The permission list is still loading.",
           },
         ]}
       />
 
       <WorkflowGuide
-        title="Introduce a custom role deliberately"
-        description="A role decides what its holders can do later. Saving, editing and deleting a role is checked against your own role and recorded."
-        steps={[
-          {
-            label: "Compare",
-            detail: "Check the built-in roles first. Add a custom role only when none of them fit.",
-          },
-          {
-            label: "Compose",
-            detail: "Select only the permissions the role needs.",
-          },
-          {
-            label: "Assign",
-            detail:
-              "Give the role to administrators from the directory. Remove those grants before deleting the role.",
-          },
-        ]}
+        title={tenant ? "Keep each role narrow" : "Introduce a custom role deliberately"}
+        description={
+          tenant
+            ? "A role decides what its holders can do next. Your provider writes the definitions; you assign roles to your administrators, and every grant and removal is recorded."
+            : "A role decides what its holders can do later. Saving, editing and deleting a role is checked against your own role and recorded."
+        }
+        steps={
+          tenant
+            ? [
+                {
+                  label: "Compare",
+                  detail:
+                    "Open a role's permissions before assigning it. Check none of them already fits.",
+                },
+                {
+                  label: "Assign",
+                  detail: "Give the smallest role that lets the administrator do their job.",
+                },
+                {
+                  label: "Review",
+                  detail:
+                    "Remove roles an administrator no longer needs, from the administrators page.",
+                },
+              ]
+            : [
+                {
+                  label: "Compare",
+                  detail:
+                    "Check the built-in roles first. Add a custom role only when none of them fit.",
+                },
+                {
+                  label: "Compose",
+                  detail: "Select only the permissions the role needs.",
+                },
+                {
+                  label: "Assign",
+                  detail:
+                    "Give the role to administrators from the directory. Remove those grants before deleting the role.",
+                },
+              ]
+        }
       />
 
       {roles.isError ? (
@@ -277,7 +330,9 @@ export function Roles() {
 
       <div className="card roles-card">
         <table className="roles-table">
-          <caption className="sr-only">Roles defined in this deployment</caption>
+          <caption className="sr-only">
+            {tenant ? "Roles your customer uses" : "Roles defined in this deployment"}
+          </caption>
           <thead>
             <tr>
               <th scope="col">Role</th>
@@ -296,14 +351,26 @@ export function Roles() {
                   <span className="roles-key">{role.roleKey}</span>
                 </td>
                 <td>
-                  <Hint label="The level sets the widest scope this role can reach. System reaches everything, support reaches customer and support work, and customer reaches one customer.">
+                  <Hint
+                    label={
+                      tenant
+                        ? "Every role listed here reaches one organisation: your own. Roles above that belong to your provider and are not listed."
+                        : "The level sets the widest scope this role can reach. System reaches everything, support reaches customer and support work, and customer reaches one customer."
+                    }
+                  >
                     <span className={`roles-badge roles-badge-${role.roleLevel} hint-term`}>
-                      {roleLevelLabel(role.roleLevel)}
+                      {tenant ? TENANT_ROLE_LEVEL_LABEL : roleLevelLabel(role.roleLevel)}
                     </span>
                   </Hint>
                 </td>
                 <td>
-                  <Hint label="Built-in roles come with Nullapart and cannot be edited or deleted here. Custom roles are ones you created.">
+                  <Hint
+                    label={
+                      tenant
+                        ? "Built-in roles come with Nullapart and custom roles are written by your provider. Neither can be edited or deleted from here."
+                        : "Built-in roles come with Nullapart and cannot be edited or deleted here. Custom roles are ones you created."
+                    }
+                  >
                     <span className="hint-term">{role.builtin ? "Built-in" : "Custom"}</span>
                   </Hint>
                 </td>
@@ -364,7 +431,11 @@ export function Roles() {
           </p>
         ) : null}
         {!roles.isLoading && roles.isSuccess && directory.length === 0 ? (
-          <p className="roles-hint">No roles are defined in this deployment.</p>
+          <p className="roles-hint">
+            {tenant
+              ? "No roles are defined for your customer."
+              : "No roles are defined in this deployment."}
+          </p>
         ) : null}
         {!roles.isLoading && roles.isSuccess && directory.length > 0 && filtered.length === 0 ? (
           <p className="roles-hint">No roles match this search.</p>

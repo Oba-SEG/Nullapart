@@ -49,14 +49,17 @@ export function capabilityLock(
     case "role":
       return (
         roleRefusal ??
-        `${subject} is limited to the Support and System roles, and yours include neither. A role can hold the customer permissions and still not be allowed to do this.`
+        `${subject} is reserved for provider-level roles, and yours include neither. A role can hold the customer permissions and still not be allowed to do this.`
       );
     case "permission":
       return `${subject} needs ${needed}, which your roles do not grant.`;
     case "lifecycle":
       return `${subject} is blocked while your own customer account is not active. Restore it first.`;
     case "deployment":
-      return `${subject} is blocked because this session was issued for a different deployment.`;
+      // The server means "this session belongs to another deployment". A
+      // customer operator has no deployment to compare against, so the refusal
+      // names the service they are actually signed in to.
+      return `${subject} is blocked because this sign-in was issued for a different Nullapart service.`;
     default:
       return `${subject} is not available for your roles in this session.`;
   }

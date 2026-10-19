@@ -33,6 +33,7 @@ function buildSession(roles: string[], permissions: string[]) {
 const adminSession = buildSession(["system_admin"], ["policies:view", "policies:manage"]);
 const customerAdminSession = buildSession(["customer_admin"], ["policies:view", "policies:manage"]);
 const viewerSession = buildSession(["support"], ["policies:view"]);
+const supportAdminSession = buildSession(["support"], ["policies:view", "policies:manage"]);
 
 const customerFamily = {
   family_key: "attachments",
@@ -429,7 +430,7 @@ describe("Policies", () => {
     expect(screen.getByRole("link", { name: "Malware scanning" })).toBeTruthy();
   });
 
-  it("says which level a family needs when the session cannot reach it", async () => {
+  it("shows a tenant the buckets instead of the platform level ladder", async () => {
     stubFetch({
       session: customerAdminSession,
       families: [customerFamily, systemFamily],
@@ -437,14 +438,18 @@ describe("Policies", () => {
     renderAt("/policies");
     await screen.findByRole("link", { name: "Attachment handling" });
 
-    // Reachable at customer level, so it shows the level badge, not a lock.
-    expect(within(rowFor("Attachment handling")).getByText("Customer")).toBeTruthy();
-    const lock = within(rowFor("Malware scanning")).getByText("Needs System");
+    // Reachable at customer level, so the row says it is the tenant's to change
+    // rather than printing the platform's level word.
+    expect(within(rowFor("Attachment handling")).getByText("Yours to change")).toBeTruthy();
+    const lock = within(rowFor("Malware scanning")).getByText("Needs your provider");
     const described = lock.getAttribute("aria-describedby");
     expect(described).toBeTruthy();
     expect(document.getElementById(described as string)?.textContent).toMatch(
-      /This family changes at System level\. Your roles reach Customer level\./,
+      /Your provider changes this family\./,
     );
+    // A customer console does not describe the ladder above it.
+    expect(screen.queryByText("Needs System")).toBeNull();
+    expect(screen.queryByText(/^System$/)).toBeNull();
 
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Show only what you can change" }));
@@ -470,14 +475,33 @@ describe("Policies", () => {
     expect(screen.getByText(/your role cannot publish policy changes/i)).toBeTruthy();
   });
 
-  it("names the level a locked family needs and the level the session reaches", async () => {
+  it("says who may change a family the tenant cannot reach", async () => {
     stubFetch({ session: customerAdminSession, detail: systemDetail });
     renderAt("/policies/malware");
 
     expect(await screen.findByRole("heading", { name: "Malware scanning" })).toBeTruthy();
     expect(
       screen.getByText(
-        "This family changes at System level. Your roles reach Customer level, so publishing is not available here.",
+        "This family is changed by your provider, not by your organisation. Ask them if it needs new rules.",
+      ),
+    ).toBeTruthy();
+    const heading = screen
+      .getByRole("heading", { name: "Malware scanning" })
+      .closest(".policy-detail-heading") as HTMLElement;
+    expect(within(heading).getByText("Needs your provider")).toBeTruthy();
+    expect(within(heading).getByText("Security floor")).toBeTruthy();
+    expect(screen.queryByText("System")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Publish revision" })).toBeNull();
+  });
+
+  it("names the level a locked family needs and the level the session reaches", async () => {
+    stubFetch({ session: supportAdminSession, detail: systemDetail });
+    renderAt("/policies/malware");
+
+    expect(await screen.findByRole("heading", { name: "Malware scanning" })).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This family changes at System level. Your roles reach Support level, so publishing is not available here.",
       ),
     ).toBeTruthy();
     const heading = screen

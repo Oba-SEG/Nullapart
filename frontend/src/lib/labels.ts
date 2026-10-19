@@ -50,6 +50,51 @@ export function levelRequirement(level: ManagementLevel): string {
 }
 
 /**
+ * A customer session does not administer the provider's ladder, so the two
+ * levels above customer are one bucket in a tenant console: published by their
+ * provider. Naming them separately would teach a customer a hierarchy they
+ * cannot act inside.
+ */
+export type TenantLevelBucket = "yours" | "provider";
+
+export function tenantLevelBucket(level: ManagementLevel): TenantLevelBucket {
+  return level === "customer" ? "yours" : "provider";
+}
+
+export const TENANT_LEVEL_LABELS: Record<TenantLevelBucket, string> = {
+  yours: "Yours to change",
+  provider: "Needs your provider",
+};
+
+/** The level word for a role that sits above everything a tenant can grant. */
+export const PROVIDER_ROLE_LEVEL_LABEL = "Provider";
+
+/** The level word for the only role level a tenant console lists. */
+export const TENANT_ROLE_LEVEL_LABEL = "Your organisation";
+
+/** Builtin roles that sit above anything a tenant can hold or grant. */
+const PLATFORM_ROLE_KEYS: string[] = ["system_admin", "support"];
+
+/**
+ * The role chip beside an audit actor. A tenant console does not name the
+ * provider's ladder, so a builtin platform role reads as the one bucket above
+ * the tenant's own. Other keys keep their humanised name: an audit row carries
+ * role keys, not levels, so a custom platform role can only be named, not
+ * classified, without reading the role directory a tenant console does not ask
+ * for.
+ */
+export function actorRoleLabels(roleKeys: string[], tenant: boolean): string[] {
+  if (!tenant) return roleKeys.map(roleLevelLabel);
+  return Array.from(
+    new Set(
+      roleKeys.map((key) =>
+        PLATFORM_ROLE_KEYS.includes(key) ? PROVIDER_ROLE_LEVEL_LABEL : roleLevelLabel(key),
+      ),
+    ),
+  );
+}
+
+/**
  * What a rule matches on. "transaction" and "tenant" are the wire names; an
  * operator reads the scope of the decision instead.
  */

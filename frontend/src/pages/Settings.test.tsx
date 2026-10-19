@@ -121,8 +121,13 @@ describe("Settings", () => {
     stubFetch(["audit:view"]);
     renderSettings();
 
-    expect(await screen.findByText("Not available")).toBeTruthy();
+    // The card is not rendered as an unavailable readout: a session that cannot
+    // open the operations service is never told the readout exists.
+    await screen.findByText("Signed in as");
+    expect(screen.queryByRole("region", { name: "Runtime" })).toBeNull();
+    expect(screen.queryByText("Runtime")).toBeNull();
     expect(screen.queryByText("Config version")).toBeNull();
+    expect(screen.queryByText(/live runtime detail/)).toBeNull();
   });
 
   it("reads the platform back in words for a system session", async () => {
@@ -151,8 +156,12 @@ describe("Settings", () => {
     stubFetch(["operations:view"], null);
     renderSettings();
 
-    await screen.findByText("System role only");
+    await screen.findByText("Signed in as");
     expect(screen.queryByRole("region", { name: "Platform" })).toBeNull();
+    expect(screen.queryByText("Platform facts")).toBeNull();
+    expect(screen.queryByText(/what the running platform reports/)).toBeNull();
+    // The runtime readout is a separate gate and this session still holds it.
+    expect(screen.getByRole("region", { name: "Runtime" })).toBeTruthy();
   });
 
   it("says the deployment record is unreadable rather than inventing a name", async () => {

@@ -2,11 +2,11 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { ArrowRight, LogOut, Moon, Sun } from "lucide-react";
 import { api } from "../api/client";
-import { hasPermission, loadSession, logout } from "../auth/session";
+import { hasPermission, isTenantTier, loadSession, logout } from "../auth/session";
 import { readStoredTheme, setTheme, subscribeTheme, type Theme } from "../lib/theme";
 import { useSyncExternalStore } from "react";
 import { Button } from "../components/primitives/Button";
-import { ControlRail } from "../components/ControlRail";
+import { ControlRail, type ControlSignal } from "../components/ControlRail";
 import { Hint } from "../components/primitives/Hint";
 import {
   HINTS,
@@ -16,7 +16,7 @@ import {
   sessionWindowLabel,
 } from "../lib/labels";
 import { WorkspaceHeader } from "../components/WorkspaceHeader";
-import { WorkflowGuide } from "../components/WorkflowGuide";
+import { WorkflowGuide, type WorkflowGuideStep } from "../components/WorkflowGuide";
 import "./Settings.css";
 
 interface RuntimeSnapshot {
@@ -37,6 +37,7 @@ export function Settings() {
     retry: false,
   });
   const session = sessionQuery.data ?? null;
+  const tenant = isTenantTier(session);
   const canSeeRuntime = hasPermission(session, "operations:view");
 
   const runtime = useQuery({
@@ -53,65 +54,93 @@ export function Settings() {
   // The rail shows the word the picker uses, never the stored key.
   const themeLabel = options.find((option) => option.value === theme)?.label ?? theme;
 
-  // The server decides who gets platform facts; the console only renders them.
+  // The server decides who gets platform facts; the console only renders them,
+  // and it never advertises a readout this session cannot open.
   const platform = session?.platform ?? null;
+
+  const signals: ControlSignal[] = [
+    { label: "Theme", value: themeLabel, detail: "The display mode for this browser." },
+    {
+      label: "Permissions",
+      value: session?.permissions?.length ?? "—",
+      detail: "Permissions on your current session.",
+    },
+    ...(platform
+      ? [
+          {
+            label: "Platform facts",
+            value: "Published",
+            detail: "The installation, sign-in method and session policy you are using.",
+            tone: "healthy" as const,
+          },
+        ]
+      : []),
+    ...(canSeeRuntime
+      ? [
+          {
+            label: "Runtime",
+            value: "Allowed",
+            detail: "Live runtime detail from the operations service.",
+            tone: "healthy" as const,
+          },
+        ]
+      : []),
+  ];
+
+  const guideSteps: WorkflowGuideStep[] = [
+    { label: "Set appearance", detail: "Pick the display mode for this browser." },
+    {
+      label: "Confirm session",
+      detail: tenant
+        ? "Check who you are signed in as and which customer you administer."
+        : "Check who you are signed in as and whether you have entered a customer.",
+    },
+    ...(platform
+      ? [
+          {
+            label: "Read the platform",
+            detail:
+              "Check which installation you are on, how you signed in, and how long it lasts.",
+          },
+        ]
+      : []),
+    ...(canSeeRuntime
+      ? [
+          {
+            label: "Inspect runtime",
+            detail: "Use live runtime detail only when your role allows it.",
+          },
+        ]
+      : []),
+  ];
 
   return (
     <div className="settings-page">
       <WorkspaceHeader
         eyebrow="Console preferences"
         title="Settings"
-        description="Set how the console looks on this device, check the session you are signed in with, and read what the running platform reports about itself."
+        description={
+          platform
+            ? "Set how the console looks on this device, check the session you are signed in with, and read what the running platform reports about itself."
+            : "Set how the console looks on this device and check the session you are signed in with."
+        }
         scope="Local browser preferences"
       />
 
       <ControlRail
         title="Session and local preference state"
         summary="Only the display mode is saved in this browser. Your identity, permissions and live status come from your sign-in."
-        signals={[
-          { label: "Theme", value: themeLabel, detail: "The display mode for this browser." },
-          {
-            label: "Permissions",
-            value: session?.permissions?.length ?? "—",
-            detail: "Permissions on your current session.",
-          },
-          {
-            label: "Platform facts",
-            value: platform ? "Published" : "System role only",
-            detail: "The installation, sign-in method and session policy you are using.",
-            tone: platform ? "healthy" : "neutral",
-          },
-          {
-            label: "Runtime",
-            value: canSeeRuntime ? "Allowed" : "Not available",
-            detail: "Runtime detail appears only when your role allows it.",
-            tone: canSeeRuntime ? "healthy" : "neutral",
-          },
-        ]}
+        signals={signals}
       />
 
       <WorkflowGuide
         title="Separate console preference from access"
-        description="This page shows which settings live in your browser, which come from your sign-in, and which belong to the installation itself."
-        steps={[
-          {
-            label: "Set appearance",
-            detail: "Pick the display mode for this browser.",
-          },
-          {
-            label: "Confirm session",
-            detail: "Check who you are signed in as and whether you have entered a customer.",
-          },
-          {
-            label: "Read the platform",
-            detail:
-              "Check which installation you are on, how you signed in, and how long it lasts.",
-          },
-          {
-            label: "Inspect runtime",
-            detail: "Use live runtime detail only when your role allows it.",
-          },
-        ]}
+        description={
+          platform
+            ? "This page shows which settings live in your browser, which come from your sign-in, and which belong to the installation itself."
+            : "This page shows which settings live in your browser and which come from your sign-in."
+        }
+        steps={guideSteps}
       />
 
       <div className="settings-grid">

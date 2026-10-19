@@ -184,7 +184,7 @@ export function Customers() {
     return (
       <div className="customers-page">
         <p className="customers-state" role="status">
-          Checking whether this session administers one customer or the whole platform…
+          Checking what this session can open…
         </p>
       </div>
     );

@@ -643,7 +643,7 @@ export function DomainSecurity() {
                               {source.source_domain ? <span>{source.source_domain}</span> : null}
                             </td>
                             <td>
-                              <Hint label="How the platform judges this sending source. Authorized matches your published policy; partially set up sources have a record that does not line up yet.">
+                              <Hint label="How the mail system judges this sending source. Authorized matches your published policy; partially set up sources have a record that does not line up yet.">
                                 <span className="hint-term">
                                   {sourceClassificationLabel(source.classification)}
                                 </span>

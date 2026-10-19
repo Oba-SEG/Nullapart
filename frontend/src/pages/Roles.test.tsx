@@ -230,9 +230,7 @@ describe("Roles", () => {
     expect(await screen.findByText("Triage agent")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "New role" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
-    expect(
-      screen.getByText(/limited to the platform's built-in System Administrator role/),
-    ).toBeTruthy();
+    expect(screen.getByText(/Creating or editing a role needs a provider-level role/)).toBeTruthy();
   });
 
   it("renders the tenant role list as read-only with its own framing", async () => {
@@ -254,7 +252,7 @@ describe("Roles", () => {
     expect(
       screen.getByText(/A role can grant admin:users:manage and still be refused/),
     ).toBeTruthy();
-    expect(screen.getByText("Custom roles written by the platform.")).toBeTruthy();
+    expect(screen.getByText("Custom roles written by your provider.")).toBeTruthy();
   });
 
   it("follows the published verdict even for a system session", async () => {

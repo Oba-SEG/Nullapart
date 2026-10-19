@@ -17,7 +17,7 @@ import {
   type OverrideValueKind,
   type OverrideWriteResult,
 } from "../api/policies";
-import { hasPermission, loadSession } from "../auth/session";
+import { hasPermission, isTenantTier, loadSession } from "../auth/session";
 import { StepUpPrompt } from "../components/StepUpPrompt";
 import { WorkspaceHeader } from "../components/WorkspaceHeader";
 import { WorkflowGuide } from "../components/WorkflowGuide";
@@ -182,12 +182,20 @@ export function FeatureOverrides() {
     staleTime: 60_000,
     retry: false,
   });
+
+  const current = session.data ?? null;
+  // Feature overrides are a deployment-configuration surface. The navigation
+  // entry is already hidden at the customer level; this stops the direct URL
+  // from fetching and painting the platform's rollout catalog into a tenant
+  // console. The API remains the authorization boundary.
+  const tenant = isTenantTier(current);
+
   const features = useQuery({
     queryKey: ["features"],
     queryFn: ({ signal }) => api.get<FeatureList>("/features", signal),
+    enabled: !session.isPending && !tenant,
   });
 
-  const current = session.data ?? null;
   const canManage = hasPermission(current, "policies:manage");
   // Published by the server from the same ladder the write path enforces, so a
   // row that looks editable here is one the API will actually accept.
@@ -348,6 +356,23 @@ export function FeatureOverrides() {
     clearing !== null &&
     (showClearErrors || clearReason.length > 0) &&
     clearReasonProblem !== undefined;
+
+  if (tenant) {
+    return (
+      <div className="features-page">
+        <WorkspaceHeader
+          eyebrow="Controlled rollout"
+          title="Feature overrides"
+          description="Which features are switched on for your sending is decided by your provider. A customer console does not list or change them."
+          scope="Set by your provider"
+        />
+        <div className="features-state">
+          Nothing here is open to your customer. Ask your provider if a feature needs to be turned
+          on for your sending.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="features-page">

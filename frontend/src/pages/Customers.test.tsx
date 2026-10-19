@@ -326,7 +326,7 @@ describe("Customers", () => {
     expect(screen.queryByRole("button", { name: "New customer" })).toBeNull();
     expect(
       await screen.findByText(
-        /Creating a customer is limited to the Support and System roles, and yours include neither/,
+        /Creating a customer is reserved for provider-level roles, and yours include neither/,
       ),
     ).toBeTruthy();
   });
@@ -477,7 +477,7 @@ describe("Customers", () => {
     // Platform-only controls state the gate that withheld them.
     expect(
       await screen.findByText(
-        /Changing your customer's lifecycle is limited to the Support and System roles/,
+        /Changing your customer's lifecycle is reserved for provider-level roles/,
       ),
     ).toBeTruthy();
     expect(screen.queryByLabelText("New lifecycle")).toBeNull();
@@ -488,7 +488,7 @@ describe("Customers", () => {
     expect(within(typeSelect).getByRole("option", { name: "Internal" })).toBeTruthy();
     expect(within(typeSelect).queryByRole("option", { name: "Send only" })).toBeNull();
     expect(
-      screen.getByText(/Adding a send-only domain is limited to the Support and System roles/),
+      screen.getByText(/Adding a send-only domain is reserved for provider-level roles/),
     ).toBeTruthy();
 
     // Source IP groups are readable at view permission, writable only at manage.
@@ -520,9 +520,7 @@ describe("Customers", () => {
     expect(await screen.findByRole("button", { name: "Add group" })).toBeTruthy();
     expect(screen.queryByText(/Changing your source IP groups/)).toBeNull();
     expect(
-      await screen.findByText(
-        /Adding a send-only domain is limited to the Support and System roles/,
-      ),
+      await screen.findByText(/Adding a send-only domain is reserved for provider-level roles/),
     ).toBeTruthy();
   });
 });
@@ -553,11 +551,44 @@ describe("CustomerDetail", () => {
     expect(within(typeSelect).queryByRole("option", { name: "Send only" })).toBeNull();
     expect(screen.queryByLabelText("New lifecycle")).toBeNull();
     expect(
-      screen.getByText(/Adding a send-only domain is limited to the Support and System roles/),
+      screen.getByText(/Adding a send-only domain is reserved for provider-level roles/),
     ).toBeTruthy();
     expect(
-      screen.getByText(/Changing this lifecycle is limited to the Support and System roles/),
+      screen.getByText(/Changing this lifecycle is reserved for provider-level roles/),
     ).toBeTruthy();
+  });
+
+  it("frames the route as the tenant's own organisation when it names their customer", async () => {
+    stubFetch({
+      session: tenantSession([
+        "admin:customers:view",
+        "admin:customers:manage",
+        "admin:domains:manage",
+      ]),
+      detail: { ...customerRow, domains: [domain], source_ip_groups: [sourceIpGroup] },
+      groups: [sourceIpGroup],
+    });
+    renderAt("/customers/customer-1");
+
+    await screen.findByRole("heading", { name: "Acme Corporation" });
+    // The same facts, addressed to the owner: the platform framing is a directory
+    // affordance, and a tenant reading their own record is not in a directory.
+    expect(screen.getByText(/Your provider sets it/)).toBeTruthy();
+    expect(screen.getByText(/Your provider assigns it/)).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/the platform (sets|assigns) it/i);
+    expect(screen.queryByRole("link", { name: "Customers" })).toBeNull();
+  });
+
+  it("keeps the directory framing on the route for a session with no customer scope", async () => {
+    stubFetch({
+      session: customerAdminSession,
+      detail: { ...customerRow, domains: [domain], source_ip_groups: [sourceIpGroup] },
+      groups: [sourceIpGroup],
+    });
+    renderAt("/customers/customer-1");
+
+    await screen.findByRole("heading", { name: "Acme Corporation" });
+    expect(screen.getByText(/The platform sets it/)).toBeTruthy();
   });
 
   it("limits lifecycle transitions to the allowed set for the current lifecycle", async () => {
