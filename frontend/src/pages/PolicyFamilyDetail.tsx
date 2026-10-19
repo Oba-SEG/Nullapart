@@ -65,6 +65,7 @@ import {
   POLICY_DISPOSITION_LABELS,
   SCANNER_LABELS,
   TENANT_LEVEL_LABELS,
+  familyDisplayName,
   reasonCodeLabel,
   summarizeRuleCondition,
   tenantLevelBucket,
@@ -592,7 +593,9 @@ export function PolicyFamilyDetail() {
         {family ? (
           <>
             <div className="policy-detail-heading">
-              <h1 className="policy-detail-title">{family.display_name}</h1>
+              <h1 className="policy-detail-title">
+                {familyDisplayName(family.family_key, family.display_name, tenantTier)}
+              </h1>
               <span
                 className={`policy-detail-badge policy-detail-level-${family.management_level}`}
               >

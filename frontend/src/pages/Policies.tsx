@@ -19,6 +19,7 @@ import {
   HINTS,
   MANAGEMENT_LEVEL_LABELS,
   TENANT_LEVEL_LABELS,
+  familyDisplayName,
   tenantLevelBucket,
   type TenantLevelBucket,
 } from "../lib/labels";
@@ -316,14 +317,20 @@ export function Policies() {
                             writes a Denied row into that tenant's own audit log,
                             so the name is information rather than a dead end. */}
                         {tenantTier && !editable ? (
-                          <span>{family.display_name}</span>
+                          <span>
+                            {familyDisplayName(family.family_key, family.display_name, tenantTier)}
+                          </span>
                         ) : (
                           <Link
                             to="/policies/$familyKey"
                             params={{ familyKey: family.family_key }}
-                            aria-label={family.display_name}
+                            aria-label={familyDisplayName(
+                              family.family_key,
+                              family.display_name,
+                              tenantTier,
+                            )}
                           >
-                            {family.display_name}
+                            {familyDisplayName(family.family_key, family.display_name, tenantTier)}
                           </Link>
                         )}
                         {/* The family key is how the platform stores the family. A

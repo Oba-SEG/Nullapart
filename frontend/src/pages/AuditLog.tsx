@@ -15,7 +15,7 @@ import { Input } from "../components/primitives/Input";
 import { Select } from "../components/primitives/Select";
 import "./AuditLog.css";
 
-import { actorRoleLabels, auditActionLabel } from "../lib/labels";
+import { actorRoleLabels, auditActionLabel, tenantResourceReference } from "../lib/labels";
 import { notify } from "../lib/notify";
 import { checkpointStatusLabel, resultLabel } from "../lib/status";
 import { humanizeToken } from "../lib/text";
@@ -406,7 +406,11 @@ export function AuditLog() {
                   </td>
                   <td>
                     {humanizeToken(event.resource_type)}
-                    <span className="audit-meta">{event.resource_id ?? "—"}</span>
+                    <span className="audit-meta">
+                      {tenant
+                        ? (tenantResourceReference(event.resource_type, event.resource_id) ?? "—")
+                        : (event.resource_id ?? "—")}
+                    </span>
                   </td>
                   <td>
                     <span className={`audit-result audit-result-${event.result}`}>
@@ -468,7 +472,11 @@ export function AuditLog() {
             <div>
               <dt>Resource</dt>
               <dd>
-                {humanizeToken(detail.data.resource_type)} · {detail.data.resource_id ?? "—"}
+                {humanizeToken(detail.data.resource_type)} ·{" "}
+                {tenant
+                  ? (tenantResourceReference(detail.data.resource_type, detail.data.resource_id) ??
+                    "—")
+                  : (detail.data.resource_id ?? "—")}
               </dd>
             </div>
             {detail.data.session_id ? (

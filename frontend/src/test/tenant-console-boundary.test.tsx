@@ -335,7 +335,7 @@ const PAYLOADS: Array<[string, unknown]> = [
           customer_id: "CZA-1",
           action: "policy_detail",
           resource_type: "policy_family",
-          resource_id: "malware",
+          resource_id: "bulk_sending",
           result: "denied",
           reason: null,
           source_ip: "192.168.8.232",
@@ -352,6 +352,40 @@ const PAYLOADS: Array<[string, unknown]> = [
           action: "session_login",
           resource_type: "session",
           resource_id: "session-tenant",
+          result: "success",
+          reason: null,
+          source_ip: "192.168.8.232",
+          trace_id: null,
+        },
+        {
+          id: "event-sender-approval",
+          created_at: "2026-01-06T09:56:00Z",
+          actor_login: "tenant-admin@example.test",
+          actor_roles: ["customer_admin"],
+          impersonated_subject: null,
+          impersonated_customer: null,
+          customer_id: "CZA-1",
+          action: "outbound_bulk_sender_upserted",
+          resource_type: "approved_bulk_sender",
+          resource_id: "news@acmefreight.example:smtp_mta:office-vpn",
+          result: "success",
+          reason: null,
+          source_ip: "192.168.8.232",
+          trace_id: null,
+        },
+        {
+          id: "event-checkpoint",
+          created_at: "2026-01-06T09:55:00Z",
+          actor_login: "tenant-admin@example.test",
+          actor_roles: ["customer_admin"],
+          impersonated_subject: null,
+          impersonated_customer: null,
+          customer_id: "CZA-1",
+          action: "audit_access_detail",
+          // The ledger checkpoint is the installation's own seal; a row that
+          // names it must not print the reference to the tenant.
+          resource_type: "audit",
+          resource_id: "checkpoint-status",
           result: "success",
           reason: null,
           source_ip: "192.168.8.232",
@@ -499,7 +533,18 @@ const PAYLOADS: Array<[string, unknown]> = [
           credential_rotation_recommended: false,
         },
       ],
-      policy_history: [],
+      policy_history: [
+        {
+          id: "history-sender-approval",
+          action: "outbound_bulk_sender_upserted",
+          actor_login: "tenant-admin@example.test",
+          // The audit row keys an approved sender as a composite machine
+          // reference. The tenant reads the sender, not the key.
+          resource_id: "news@acmefreight.example:smtp_mta:office-vpn",
+          result: "success",
+          created_at: "2026-01-06T09:40:00Z",
+        },
+      ],
     },
   ],
   [
@@ -765,7 +810,7 @@ describe("tenant console boundary", () => {
     await screen.findByText("Your customer · CZA-1");
 
     expect(await screen.findByText("Sender authentication")).toBeInTheDocument();
-    expect(screen.getByText("Bulk sending")).toBeInTheDocument();
+    expect(screen.getByText("Bulk sending limits")).toBeInTheDocument();
     // The bucket word is both a filter chip and the per-row answer, so each one
     // appears more than once; only its absence would be a problem.
     expect(screen.getAllByText("Needs your provider").length).toBeGreaterThan(1);
@@ -793,7 +838,7 @@ describe("tenant console boundary", () => {
     expect(provider?.textContent).toContain("Provider");
     expect(provider?.textContent).not.toMatch(/system_admin|System admin/);
 
-    const own = screen.getByText("Customer admin").closest("tr");
+    const own = screen.getAllByText("Customer admin")[0].closest("tr");
     expect(own?.textContent).toContain("tenant-admin@example.test");
   });
 
@@ -805,8 +850,11 @@ describe("tenant console boundary", () => {
     expect((await screen.findByText("Quarantine handling")).closest("a")).not.toBeNull();
     // Opening one of these 403s and writes a Denied row into the tenant's own
     // audit log, so the name is a fact about the account, not a dead-end link.
-    for (const name of ["Bulk sending", "Sender authentication"]) {
+    // A tenant family reads in the console's own words, so a catalog name that
+    // describes the engine ("ML threat classification") is not what they see.
+    for (const name of ["Bulk sending limits", "Sender authentication"]) {
       expect(screen.getByText(name).closest("a")).toBeNull();
     }
+    expect(screen.queryByText("Bulk sending")).toBeNull();
   });
 });

@@ -27,6 +27,7 @@ import {
   outboundEventLabel,
   outboundOutcomeLabel,
   reasonCodeLabel,
+  tenantResourceReference,
 } from "../lib/labels";
 import { severityLabel, type StatusTone } from "../lib/status";
 import "./OutboundIntelligence.css";
@@ -934,7 +935,11 @@ export function OutboundIntelligence() {
                   <div>
                     <strong>{auditActionLabel(entry.action)}</strong>
                     <p>
-                      {entry.resource_id ?? "outbound policy"} by {entry.actor_login}
+                      {tenant
+                        ? (tenantResourceReference("approved_bulk_sender", entry.resource_id) ??
+                          "your sender approvals")
+                        : (entry.resource_id ?? "outbound policy")}{" "}
+                      by {entry.actor_login}
                     </p>
                     <small>{formatDate(entry.created_at)}</small>
                   </div>

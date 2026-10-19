@@ -395,6 +395,82 @@ export function auditActionLabel(action: string): string {
 }
 
 /**
+ * The policy families by the name the policy console gives them. A change
+ * history row carries the storage key, not the name, so a customer reading
+ * their own history needs the same words the policy list uses. The catalog is
+ * versioned server-side; an unmapped key still reads as a name, never as a key.
+ */
+const POLICY_FAMILY_LABELS: Record<string, string> = {
+  attachments: "Attachment handling",
+  authentication: "Sender authentication",
+  bulk_sending: "Bulk sending limits",
+  connection_security: "Connection security",
+  connectors_remediation: "Connector remediation",
+  content_security: "Content filtering",
+  dmarc_bimi: "DMARC and BIMI",
+  geolocation: "Geolocation rules",
+  greylisting: "Greylisting",
+  impersonation: "Impersonation protection",
+  inbound_routing: "Inbound routing",
+  malware: "Malware scanning",
+  ml_threat_classification: "Automatic threat review",
+  notifications: "Notifications",
+  outbound_abuse: "Outbound abuse detection",
+  outbound_routing: "Outbound routing",
+  outbound_senders: "Outbound sender approvals",
+  quarantine: "Quarantine handling",
+  recipient_controls: "Recipient controls",
+  retention: "Retention windows",
+  sender_reputation: "Sender reputation",
+  spam_filtering: "Spam filtering",
+  transport_security: "TLS transport security",
+  url_security: "URL protection",
+  vip_protection: "VIP protection",
+};
+
+export function policyFamilyLabel(familyKey: string): string {
+  return fromLabels(POLICY_FAMILY_LABELS, familyKey);
+}
+
+/**
+ * The family name for the seat reading it. A platform operator quotes the
+ * catalog name their runbooks use; a customer reads what the family does for
+ * their mail, so a catalog name that describes the engine rather than the
+ * outcome is renamed for them and nowhere else.
+ */
+export function familyDisplayName(familyKey: string, catalogName: string, tenant: boolean): string {
+  return tenant ? policyFamilyLabel(familyKey) : catalogName;
+}
+
+/**
+ * A history row's reference in a customer seat's own words. The ledger stores a
+ * machine reference for the thing a write touched: a family key, a composite
+ * `address:source-kind:source-id`, the platform's own readout name. A customer
+ * needs to know which policy or which sender changed, not how the row is keyed.
+ * Anything already usable as a reference (a message id, the customer's own id)
+ * passes through untouched, and a reference that names platform machinery
+ * instead of their own thing becomes nothing rather than a leak.
+ */
+export function tenantResourceReference(
+  resourceType: string,
+  resourceId: string | null,
+): string | null {
+  if (resourceId === null || resourceId.trim().length === 0) return null;
+  switch (resourceType) {
+    case "policy_family":
+      return resourceId === "families" ? "All your mail policies" : policyFamilyLabel(resourceId);
+    case "approved_bulk_sender":
+      return resourceId.split(":")[0] ?? resourceId;
+    case "audit":
+      // The ledger checkpoint is the installation's own seal. A tenant row about
+      // it says which record was read, and they have the row either way.
+      return resourceId === "checkpoint-status" ? null : resourceId;
+    default:
+      return resourceId;
+  }
+}
+
+/**
  * What each permission key lets someone do, in the words the person assigning
  * it cares about. A customer console shows these; a platform console shows the
  * key, because the key is what the API and the runbooks quote. Grants this map
