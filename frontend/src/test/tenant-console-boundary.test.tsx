@@ -18,7 +18,7 @@ import {
   createRouter,
   RouterProvider,
 } from "@tanstack/react-router";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FC } from "react";
 
@@ -321,6 +321,36 @@ const PAYLOADS: Array<[string, unknown]> = [
   ["/admin/users", adminDirectory],
   ["/admin/roles", roleDirectory],
   ["/admin/permissions", []],
+  [
+    "/audit/events/event-tenant",
+    {
+      id: "event-tenant",
+      created_at: "2026-01-06T09:57:00Z",
+      actor_login: "tenant-admin@example.test",
+      actor_roles: ["customer_admin"],
+      impersonated_subject: null,
+      impersonated_customer: null,
+      customer_id: "CZA-1",
+      action: "policy_published",
+      resource_type: "policy_family",
+      resource_id: "bulk_sending",
+      result: "success",
+      reason: null,
+      source_ip: "192.168.8.232",
+      trace_id: null,
+      session_id: null,
+      // What a customer's audit read is actually handed: the projection has
+      // already dropped the platform's own fields (filters, identity, scope) and
+      // the structures it cannot render. What is left still stores machine keys
+      // and machine values, because that is what the ledger holds.
+      details: [
+        { key: "family_key", value: "ml_threat_classification" },
+        { key: "reason_code", value: "QUARANTINE_MALWARE" },
+        { key: "row_count", value: "50" },
+        { key: "scope_level", value: "tenant" },
+      ],
+    },
+  ],
   [
     "/audit/events",
     {
@@ -856,5 +886,27 @@ describe("tenant console boundary", () => {
       expect(screen.getByText(name).closest("a")).toBeNull();
     }
     expect(screen.queryByText("Bulk sending")).toBeNull();
+  });
+
+  /**
+   * The event detail is the one place the ledger's own vocabulary arrives in the
+   * console, and it arrives as stored: a column name and the value written into
+   * it. The server has already removed the fields that describe its machinery;
+   * what is left is named here, in the words the rest of the tenant's console
+   * uses for the same thing.
+   */
+  it("names an audit event's stored fields instead of printing its columns", async () => {
+    stubTenantFetch();
+    renderSurface(surfaceNamed("Audit log"));
+    await screen.findByText("Your customer · CZA-1");
+
+    fireEvent.click(await screen.findByText("1/6/2026, 11:57:00 AM"));
+    expect(await screen.findByText("Mail policy")).toBeInTheDocument();
+
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("Automatic threat review");
+    expect(text).toContain("Your organisation");
+    expect(text).not.toMatch(/[a-z][a-z0-9]*(?:_[a-z0-9]+)+/);
+    expect(text).not.toMatch(/\{|"/);
   });
 });

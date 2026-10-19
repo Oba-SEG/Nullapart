@@ -510,7 +510,11 @@ impl AuditEventRecord {
         AuditEventDetail {
             item: self.list_item(platform),
             session_id: platform.then(|| self.session_id.clone()).flatten(),
-            details: detail_fields(&self.details),
+            details: if platform {
+                detail_fields(&self.details)
+            } else {
+                customer_detail_fields(&self.details)
+            },
         }
     }
 }
@@ -542,6 +546,56 @@ pub fn detail_fields(details: &serde_json::Value) -> Vec<AuditDetailField> {
         }),
     }
     fields
+}
+
+/// Detail fields that describe the platform's own machinery rather than the
+/// event. A customer read of the same record shows the outcome without them:
+/// the filter one console applied, the identity source that proved an actor,
+/// the internal artifact or session row a write referenced, and the permission
+/// keys a role change moved belong to a system the customer does not run.
+const PLATFORM_ONLY_DETAIL_KEYS: [&str; 13] = [
+    "artifact_id",
+    "auth_method",
+    "auth_subject",
+    "bootstrapped",
+    "filters",
+    "identity",
+    "permissions",
+    "permissions_after",
+    "permissions_before",
+    "scope",
+    "scope_id",
+    "session_id",
+    "trace_id",
+];
+
+/// Whether a customer seat may read one stored detail field. A value the ledger
+/// stored as a structure is dropped with it: rendered compactly it is still raw
+/// JSON on a customer screen, and the console has no layout for it. The check
+/// asks the stored value, not its rendering, because a redacted credential
+/// renders as `[redacted]` and is the answer, not a structure.
+fn customer_keeps_field(key: &str, details: &serde_json::Value) -> bool {
+    let normalized = key.to_ascii_lowercase();
+    if PLATFORM_ONLY_DETAIL_KEYS.contains(&normalized.as_str()) {
+        return false;
+    }
+    let serde_json::Value::Object(map) = details else {
+        return true;
+    };
+    !matches!(
+        map.get(key),
+        Some(serde_json::Value::Object(_) | serde_json::Value::Array(_))
+    )
+}
+
+/// The customer projection of the same flattening. Past the withheld keys, the
+/// event still names the action, its result and the outcome fields a customer
+/// can act on.
+pub fn customer_detail_fields(details: &serde_json::Value) -> Vec<AuditDetailField> {
+    detail_fields(details)
+        .into_iter()
+        .filter(|field| customer_keeps_field(&field.key, details))
+        .collect()
 }
 
 fn render_detail_value(value: &serde_json::Value) -> String {
@@ -2104,6 +2158,61 @@ mod tests {
         );
     }
 
+    /// An audit row stores the columns the writer filled in. A customer read
+    /// keeps the facts in them and loses the fields that describe the platform's
+    /// own machinery, including any value stored as a structure.
+    #[test]
+    fn a_customer_detail_read_keeps_the_facts_and_drops_the_machinery() {
+        let mut seeded = record(
+            Some("customer-a"),
+            "audit_access_list",
+            "admin@example.test",
+        );
+        seeded.details = serde_json::json!({
+            "changed": {"before": 1, "after": 2},
+            "filters": {"action": null, "trace_id": "trace"},
+            "identity": "ob1",
+            "row_count": 50,
+            "scope": "tenant",
+            "session_token": "super-secret-value",
+        });
+
+        // What a customer was doing in their own console, not which filter
+        // object the platform ran or which identity source proved the actor. A
+        // credential still arrives redacted rather than absent, so the seat can
+        // see that something sensitive was recorded without recording it.
+        let customer = seeded.detail(false);
+        let fields: Vec<(&str, &str)> = customer
+            .details
+            .iter()
+            .map(|field| (field.key.as_str(), field.value.as_str()))
+            .collect();
+        assert_eq!(
+            fields,
+            [("row_count", "50"), ("session_token", "[redacted]")]
+        );
+
+        // The platform seat still reads the fields a runbook quotes, structure
+        // included, because it is the seat that runs the system they name.
+        let platform = seeded.detail(true);
+        let platform_keys: Vec<&str> = platform
+            .details
+            .iter()
+            .map(|field| field.key.as_str())
+            .collect();
+        assert_eq!(
+            platform_keys,
+            [
+                "changed",
+                "filters",
+                "identity",
+                "row_count",
+                "scope",
+                "session_token"
+            ]
+        );
+    }
+
     /// A trace id and a session id name the platform's own logs, not anything
     /// inside the customer's record, so the customer projection leaves them out
     /// and a platform projection keeps them.
@@ -2458,7 +2567,7 @@ mod tests {
             .await
             .unwrap();
         let rendered = String::from_utf8(body.to_vec()).expect("utf-8 response");
-        assert!(rendered.contains("[redacted]"));
+        assert!(rendered.contains("[redacted]"), "rendered: {rendered}");
         assert!(
             !rendered.contains("super-secret-value"),
             "leaked: {rendered}"

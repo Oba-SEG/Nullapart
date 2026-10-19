@@ -471,6 +471,79 @@ export function tenantResourceReference(
 }
 
 /**
+ * The name a customer reads for one field of an audit event's details. What the
+ * ledger stores is the column the writer used; what the customer needs is the
+ * fact in it. A key this map has never seen still reads as a label, never as a
+ * snake_case column.
+ */
+const AUDIT_DETAIL_KEY_LABELS: Record<string, string> = {
+  changed: "Changed",
+  classification: "Source class",
+  created: "Created",
+  cidr_count: "Address ranges",
+  domain: "Domain",
+  domain_type: "Domain kind",
+  expires_at: "Expires",
+  family_key: "Mail policy",
+  format: "File format",
+  lifecycle: "Status",
+  login: "Administrator",
+  reason: "Reason",
+  reason_code: "Recorded reason",
+  release_reason: "Release note",
+  revision: "Revision",
+  revision_number: "Revision",
+  role_key: "Role",
+  role_level: "Role level",
+  row_count: "Records",
+  rules_count: "Rules",
+  scope_level: "Applies to",
+  source_key: "Sending range",
+  status: "Result",
+  truncated: "Cut short",
+};
+
+export function auditDetailFieldLabel(key: string): string {
+  return fromLabels(AUDIT_DETAIL_KEY_LABELS, key);
+}
+
+/**
+ * A detail field's value in the words the rest of the customer's console
+ * already uses for the same thing. The audit row carries the key the writer
+ * stored; the policy list, the role directory and the quarantine table all show
+ * a name, so the ledger cannot be the one screen that shows the key.
+ */
+export function auditDetailValueLabel(key: string, value: string): string {
+  switch (key) {
+    case "family_key":
+      return policyFamilyLabel(value);
+    case "role_key":
+    case "role_level":
+      return roleLevelLabel(value);
+    case "scope_level":
+      return value === "customer" || value === "tenant"
+        ? TENANT_ROLE_LEVEL_LABEL
+        : PROVIDER_ROLE_LEVEL_LABEL;
+    case "classification":
+      return sourceClassificationLabel(value);
+    case "domain_type":
+      return domainTypeLabel(value);
+    case "lifecycle":
+      return lifecycleLabel(value);
+    case "reason_code":
+      return reasonCodeLabel(value);
+    case "changed":
+    case "created":
+    case "truncated":
+      if (value === "true") return "Yes";
+      if (value === "false") return "No";
+      return value;
+    default:
+      return value;
+  }
+}
+
+/**
  * What each permission key lets someone do, in the words the person assigning
  * it cares about. A customer console shows these; a platform console shows the
  * key, because the key is what the API and the runbooks quote. Grants this map

@@ -15,7 +15,13 @@ import { Input } from "../components/primitives/Input";
 import { Select } from "../components/primitives/Select";
 import "./AuditLog.css";
 
-import { actorRoleLabels, auditActionLabel, tenantResourceReference } from "../lib/labels";
+import {
+  actorRoleLabels,
+  auditActionLabel,
+  auditDetailFieldLabel,
+  auditDetailValueLabel,
+  tenantResourceReference,
+} from "../lib/labels";
 import { notify } from "../lib/notify";
 import { checkpointStatusLabel, resultLabel } from "../lib/status";
 import { humanizeToken } from "../lib/text";
@@ -494,8 +500,15 @@ export function AuditLog() {
                   <ul className="audit-detail-fields">
                     {detail.data.details.map((field) => (
                       <li key={field.key}>
-                        <span className="audit-detail-key">{field.key}</span>
-                        <span className="audit-detail-value">{field.value}</span>
+                        {/* The ledger stores the column the writer used. A
+                            customer seat reads the fact, in the same words the
+                            rest of their console uses for it. */}
+                        <span className="audit-detail-key">
+                          {tenant ? auditDetailFieldLabel(field.key) : field.key}
+                        </span>
+                        <span className="audit-detail-value">
+                          {tenant ? auditDetailValueLabel(field.key, field.value) : field.value}
+                        </span>
                       </li>
                     ))}
                   </ul>
