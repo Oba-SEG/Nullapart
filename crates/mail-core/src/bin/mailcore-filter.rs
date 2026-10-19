@@ -113,6 +113,16 @@ fn nonempty(value: String) -> Option<String> {
 
 #[tokio::main]
 async fn main() {
+    // Pre-flight probe used by mailcore-filter-wrapper: reaching this point
+    // proves the executable and every dynamic dependency load cleanly. A
+    // glibc/libstdc++ mismatch (see docs/26-PACKAGE-COMPATIBILITY.md) fails
+    // inside the dynamic loader before any Rust code runs, so this exit code
+    // is never reached on a broken binary and the wrapper can map the
+    // difference to EX_TEMPFAIL instead of accepting a permanent bounce.
+    if env::args().nth(1).as_deref() == Some("--selftest") {
+        process::exit(0);
+    }
+
     if let Err(error) = run().await {
         eprintln!("mailcore-filter: {error}");
         process::exit(EX_TEMPFAIL);

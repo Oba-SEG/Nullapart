@@ -70,6 +70,14 @@ if [ "$sender" = '"<>"' ]; then
   sender="<>"
 fi
 
+# Pre-flight: a binary that cannot load (missing shared library, glibc or
+# libstdc++ version mismatch) would make a bare exec exit 127/1 and turn an
+# infrastructure failure into a permanent 5.3.0 bounce. The selftest proves
+# the executable and its dynamic dependencies load, and any residual exec
+# failure is mapped to EX_TEMPFAIL so Postfix retries instead.
+/usr/libexec/nullapart/mailcore-filter --selftest >/dev/null 2>&1 \
+  || fail "mailcore-filter failed selftest (binary or dependencies unusable)"
+
 exec /usr/libexec/nullapart/mailcore-filter \
   --queue-id "$queue_id" \
   --client-address "$client_address" \
@@ -77,4 +85,5 @@ exec /usr/libexec/nullapart/mailcore-filter \
   --client-helo "$client_helo" \
   --sasl-username "$sasl_username" \
   --sender "$sender" \
-  -- "$@"
+  -- "$@" \
+  || fail "cannot exec mailcore-filter"
