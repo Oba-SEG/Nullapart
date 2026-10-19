@@ -88,6 +88,26 @@ const customerAdminSession = buildSession(
 
 const readOnlySession = buildSession(["customer_admin"], ["admin:customers:view"]);
 
+/**
+ * A customer-tier session: the server publishes the tier, and the console places
+ * this route as the operator's own organisation instead of the directory.
+ * `buildSession` carries no tier, so the directory tests keep their shape.
+ */
+function tenantSession(permissions: string[]) {
+  return {
+    ...buildSession(["customer_admin"], permissions),
+    tier: "customer",
+    customerId: "customer-1",
+  };
+}
+
+/** What a customer_admin actually gets: the tenant writes are role-blocked. */
+const tenantBlocked: StubOptions["blocked"] = [
+  "create_customer",
+  "change_lifecycle",
+  "add_send_only_domain",
+];
+
 function ok(body: unknown, status = 200) {
   return {
     ok: true,
@@ -420,6 +440,90 @@ describe("Customers", () => {
         reason: "investigating a report",
       });
     });
+  });
+  it("renders the organisation surface for a customer session without reading the directory", async () => {
+    const fetchMock = stubFetch({
+      session: tenantSession(["admin:customers:view", "admin:domains:manage"]),
+      detail: { ...customerRow, domains: [domain], source_ip_groups: [sourceIpGroup] },
+      groups: [sourceIpGroup],
+      blocked: tenantBlocked,
+      blocker: "role",
+    });
+    renderAt("/customers");
+
+    // The record is the operator's own, so the customer name is a section
+    // heading: the page already has exactly one h1.
+    expect(await screen.findByRole("heading", { name: "Acme Corporation", level: 2 })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Your organisation", level: 1 })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "New customer" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Customers" })).toBeNull();
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([input]) =>
+          String(input).endsWith("/admin/customers/customer-1"),
+        ),
+      ).toBe(true);
+    });
+    // Another customer's name is never fetched into a tenant session.
+    const directoryCalls = fetchMock.mock.calls.filter(
+      ([input, init]) =>
+        String(input).endsWith("/admin/customers") && (init?.method ?? "GET") === "GET",
+    );
+    expect(directoryCalls).toHaveLength(0);
+
+    expect(screen.getByText("Domains your customer has proved it controls.")).toBeTruthy();
+
+    // Platform-only controls state the gate that withheld them.
+    expect(
+      await screen.findByText(
+        /Changing your customer's lifecycle is limited to the Support and System roles/,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByLabelText("New lifecycle")).toBeNull();
+
+    // The send-only refusal comes from the published role blocker, and the
+    // option itself is absent so the form cannot offer a refused write.
+    const typeSelect = screen.getByLabelText("Domain type");
+    expect(within(typeSelect).getByRole("option", { name: "Internal" })).toBeTruthy();
+    expect(within(typeSelect).queryByRole("option", { name: "Send only" })).toBeNull();
+    expect(
+      screen.getByText(/Adding a send-only domain is limited to the Support and System roles/),
+    ).toBeTruthy();
+
+    // Source IP groups are readable at view permission, writable only at manage.
+    expect(await screen.findByText("Office network")).toBeTruthy();
+    expect(screen.getByText("203.0.113.0/24")).toBeTruthy();
+    expect(
+      screen.getByText(
+        /Changing your source IP groups needs the admin:customers:manage permission/,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add group" })).toBeNull();
+  });
+
+  it("keeps the source IP group forms open for a customer session that holds the manage permission", async () => {
+    stubFetch({
+      session: tenantSession([
+        "admin:customers:view",
+        "admin:customers:manage",
+        "admin:domains:manage",
+      ]),
+      detail: { ...customerRow, domains: [], source_ip_groups: [] },
+      groups: [],
+      blocked: tenantBlocked,
+      blocker: "role",
+    });
+    renderAt("/customers");
+
+    expect(await screen.findByRole("button", { name: "Add group" })).toBeTruthy();
+    expect(screen.queryByText(/Changing your source IP groups/)).toBeNull();
+    expect(
+      await screen.findByText(
+        /Adding a send-only domain is limited to the Support and System roles/,
+      ),
+    ).toBeTruthy();
   });
 });
 

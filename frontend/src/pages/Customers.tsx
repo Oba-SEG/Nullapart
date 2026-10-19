@@ -4,7 +4,13 @@ import { useState } from "react";
 
 import { api, type ApiError } from "../api/client";
 import { capabilityLock, type CustomerCapabilities } from "../api/capabilities";
-import { canImpersonate, hasPermission, loadSession, startImpersonation } from "../auth/session";
+import {
+  canImpersonate,
+  hasPermission,
+  isTenantTier,
+  loadSession,
+  startImpersonation,
+} from "../auth/session";
 import { StepUpPrompt } from "../components/StepUpPrompt";
 import { Hint } from "../components/primitives/Hint";
 import { WorkspaceHeader } from "../components/WorkspaceHeader";
@@ -13,6 +19,7 @@ import { ControlRail } from "../components/ControlRail";
 import { Button } from "../components/primitives/Button";
 import { Dialog } from "../components/primitives/Dialog";
 import { Input } from "../components/primitives/Input";
+import { CustomerRecord } from "./CustomerDetail";
 import { randomUuid } from "../lib/ids";
 import { HINTS, LIFECYCLE_LABELS } from "../lib/labels";
 import "./Customers.css";
@@ -83,9 +90,15 @@ export function Customers() {
     staleTime: 60_000,
     retry: false,
   });
+  const current = session.data ?? null;
+  // A customer session administers one organisation, so the directory read
+  // never happens: the record below is the same customer the list would
+  // return, fetched by the id the session already carries.
+  const ownCustomerId = isTenantTier(current) ? (current?.customerId ?? "") : "";
   const customers = useQuery({
     queryKey: ["customers"],
     queryFn: ({ signal }) => api.get<CustomerList>("/admin/customers", signal),
+    enabled: !session.isPending && ownCustomerId.length === 0,
   });
 
   const [open, setOpen] = useState(false);
@@ -98,7 +111,6 @@ export function Customers() {
   const [entryError, setEntryError] = useState<unknown>(null);
   const [entryBusy, setEntryBusy] = useState(false);
 
-  const current = session.data ?? null;
   // The list carries the server's own verdict on creating a customer, computed
   // by the same predicate the POST runs. A role that holds
   // `admin:customers:manage` without a platform role therefore reads a stated
@@ -163,6 +175,33 @@ export function Customers() {
     } finally {
       setBusy(false);
     }
+  }
+
+  // Which surface this route is depends on the session's own tier, and nothing
+  // about the directory should paint for a customer session that will never see
+  // another customer's name.
+  if (session.isPending) {
+    return (
+      <div className="customers-page">
+        <p className="customers-state" role="status">
+          Checking whether this session administers one customer or the whole platform…
+        </p>
+      </div>
+    );
+  }
+
+  if (ownCustomerId.length > 0) {
+    return (
+      <div className="customers-page">
+        <WorkspaceHeader
+          eyebrow="Your customer"
+          title="Your organisation"
+          description="The domains your customer sends from, the addresses allowed to send as them, and the checks that decide whether either counts. Controls your provider keeps state what they need."
+          scope="Your customer"
+        />
+        <CustomerRecord customerId={ownCustomerId} ownRecord />
+      </div>
+    );
   }
 
   return (

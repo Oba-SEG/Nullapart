@@ -144,8 +144,22 @@ function parseCidrs(value: string): string[] {
     .filter((entry) => entry.length > 0);
 }
 
-export function CustomerDetail() {
-  const { customerId = "" } = useParams({ from: "/customers/$customerId" });
+/**
+ * The customer record: lifecycle, domains, verification and source IP groups.
+ *
+ * `ownRecord` renders it as the operator's own organisation rather than a
+ * record pulled out of the directory: no back link to a directory a customer
+ * session cannot use, and copy addressed to the owner. The data and every
+ * gate are identical, because both views read the same server-published
+ * capabilities.
+ */
+export function CustomerRecord({
+  customerId,
+  ownRecord = false,
+}: {
+  customerId: string;
+  ownRecord?: boolean;
+}) {
   const queryClient = useQueryClient();
   const cidrInputId = useId();
 
@@ -178,14 +192,28 @@ export function CustomerDetail() {
   // customer off, and a session that can is never offered a refused form.
   const capabilities = detail.data?.capabilities;
   const mayChangeLifecycle = capabilities?.change_lifecycle.allowed ?? false;
-  const lifecycleLock = capabilityLock(capabilities?.change_lifecycle, "Changing this lifecycle");
+  const lifecycleLock = capabilityLock(
+    capabilities?.change_lifecycle,
+    ownRecord ? "Changing your customer's lifecycle" : "Changing this lifecycle",
+    "admin:customers:manage",
+  );
   const mayOfferSendOnly = capabilities?.add_send_only_domain.allowed ?? false;
   const sendOnlyLock = capabilityLock(
     capabilities?.add_send_only_domain,
     "Adding a send-only domain",
+    "admin:domains:manage",
   );
   const canManageCustomers = hasPermission(current, "admin:customers:manage");
   const canManageDomains = hasPermission(current, "admin:domains:manage");
+  // The source IP group routes publish no capability, so the console's own
+  // permission check decides, stated in the same sentence a blocker produces.
+  const groupsLock = capabilityLock(
+    canManageCustomers
+      ? { allowed: true, blocker: null }
+      : ({ allowed: false, blocker: "permission" } as const),
+    ownRecord ? "Changing your source IP groups" : "Changing source IP groups",
+    "admin:customers:manage",
+  );
 
   const customer = detail.data ?? null;
 
@@ -301,10 +329,12 @@ export function CustomerDetail() {
 
   return (
     <div className="customer-detail-page">
-      <Link to="/customers" className="customer-detail-back">
-        <ArrowLeft size={16} aria-hidden="true" />
-        Customers
-      </Link>
+      {ownRecord ? null : (
+        <Link to="/customers" className="customer-detail-back">
+          <ArrowLeft size={16} aria-hidden="true" />
+          Customers
+        </Link>
+      )}
 
       <header className="customer-detail-header">
         {detail.isPending ? (
@@ -323,7 +353,13 @@ export function CustomerDetail() {
         {customer ? (
           <>
             <div className="customer-detail-heading">
-              <h1 className="customer-detail-title">{customer.display_name}</h1>
+              {/* The organisation surface already carries a page-level h1, so the
+                  customer name is the section heading there. */}
+              {ownRecord ? (
+                <h2 className="customer-detail-title">{customer.display_name}</h2>
+              ) : (
+                <h1 className="customer-detail-title">{customer.display_name}</h1>
+              )}
               <Hint label={HINTS.lifecycle}>
                 <span
                   className={`customer-detail-lifecycle customer-detail-lifecycle-${customer.lifecycle} hint-term`}
@@ -372,47 +408,84 @@ export function CustomerDetail() {
 
       {customer ? (
         <ControlRail
-          title="Customer status"
-          summary="The current record decides which lifecycle and configuration actions are still relevant."
+          title={ownRecord ? "Your organisation" : "Customer status"}
+          summary={
+            ownRecord
+              ? "The record your customer administrator sees. Platform-only controls state why they are withheld."
+              : "The current record decides which lifecycle and configuration actions are still relevant."
+          }
           signals={[
             {
               label: "Lifecycle",
               value: LIFECYCLE_LABELS[customer.lifecycle],
-              detail: "The lifecycle set for this customer.",
+              detail: ownRecord
+                ? "The state your provider set for your customer."
+                : "The lifecycle set for this customer.",
               tone: customer.lifecycle === "active" ? "healthy" : "attention",
             },
             {
               label: "Domains",
               value: customer.domain_count,
-              detail: "Domains set up for this customer.",
+              detail: ownRecord
+                ? "Domains registered for your customer."
+                : "Domains set up for this customer.",
             },
-            {
-              label: "Transitions",
-              value: LIFECYCLE_TRANSITIONS[customer.lifecycle].length,
-              detail: "Lifecycle states you can move to next.",
-            },
+            ownRecord
+              ? {
+                  label: "Verified",
+                  value: customer.domains.filter(
+                    (entry) => entry.verification_status === "verified",
+                  ).length,
+                  detail: "Domains your customer has proved it controls.",
+                }
+              : {
+                  label: "Transitions",
+                  value: LIFECYCLE_TRANSITIONS[customer.lifecycle].length,
+                  detail: "Lifecycle states you can move to next.",
+                },
           ]}
         />
       ) : null}
 
       {customer ? (
         <WorkflowGuide
-          title="Manage the customer"
-          description="Set the lifecycle and sending configuration here before you rely on customer-specific policies or connectors."
-          steps={[
-            {
-              label: "Confirm identity",
-              detail: "Check the customer record and its current lifecycle.",
-            },
-            {
-              label: "Configure sending",
-              detail: "Manage domains and source IP groups through the forms below.",
-            },
-            {
-              label: "Record change",
-              detail: "Enter a reason with each change so you can review it later.",
-            },
-          ]}
+          title={ownRecord ? "Set your customer up" : "Manage the customer"}
+          description={
+            ownRecord
+              ? "Verify the domains your customer sends from and list the addresses allowed to send as them. Anything marked platform-only needs your provider."
+              : "Set the lifecycle and sending configuration here before you rely on customer-specific policies or connectors."
+          }
+          steps={
+            ownRecord
+              ? [
+                  {
+                    label: "Verify each domain",
+                    detail: "A domain reports only after its DNS check passes.",
+                  },
+                  {
+                    label: "List the senders",
+                    detail: "Source IP groups decide which addresses count as your customer.",
+                  },
+                  {
+                    label: "Add alert recipients",
+                    detail: "Domain security lists the verified domains you may mail findings to.",
+                  },
+                ]
+              : [
+                  {
+                    label: "Confirm identity",
+                    detail: "Check the customer record and its current lifecycle.",
+                  },
+                  {
+                    label: "Configure sending",
+                    detail: "Manage domains and source IP groups through the forms below.",
+                  },
+                  {
+                    label: "Record change",
+                    detail: "Enter a reason with each change so you can review it later.",
+                  },
+                ]
+          }
         />
       ) : null}
 
@@ -496,7 +569,11 @@ export function CustomerDetail() {
         <section className="card customer-detail-panel" aria-labelledby="domains-heading">
           <h2 id="domains-heading">Domains</h2>
           {customer.domains.length === 0 ? (
-            <p className="customer-detail-hint">No domains are registered for this customer.</p>
+            <p className="customer-detail-hint">
+              {ownRecord
+                ? "No domains are registered yet. Add the domain your customer sends from, then verify it."
+                : "No domains are registered for this customer."}
+            </p>
           ) : (
             <div className="customer-detail-table-wrap">
               <table className="customer-detail-table">
@@ -647,7 +724,7 @@ export function CustomerDetail() {
         </section>
       ) : null}
 
-      {canManageCustomers ? (
+      {customer ? (
         <section className="card customer-detail-panel" aria-labelledby="source-ip-heading">
           <h2 id="source-ip-heading">Source IP groups</h2>
 
@@ -665,7 +742,11 @@ export function CustomerDetail() {
             </>
           ) : null}
           {groups.isSuccess && groups.data.groups.length === 0 ? (
-            <p className="customer-detail-hint">No source IP groups are configured.</p>
+            <p className="customer-detail-hint">
+              {ownRecord
+                ? "No source IP groups yet. A group is the set of addresses Nullapart trusts as your customer."
+                : "No source IP groups are configured."}
+            </p>
           ) : null}
           {groups.isSuccess && groups.data.groups.length > 0 ? (
             <ul className="customer-detail-groups">
@@ -678,79 +759,90 @@ export function CustomerDetail() {
                     </span>
                   </div>
                   <span className="customer-detail-cidrs">{group.cidrs.join(", ")}</span>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="danger"
-                    onClick={() => setPendingDelete(group)}
-                  >
-                    Remove
-                  </Button>
+                  {canManageCustomers ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="danger"
+                      onClick={() => setPendingDelete(group)}
+                    >
+                      Remove
+                    </Button>
+                  ) : null}
                 </li>
               ))}
             </ul>
           ) : null}
 
-          <form
-            className="customer-detail-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!groupValid) return;
-              setGroupNotice(null);
-              addGroup.mutate({ name: groupName.trim(), cidrs: cidrList });
-            }}
-          >
-            <h3>Add source IP group</h3>
-            <Input
-              label="Group name"
-              value={groupName}
-              onChange={(event) => setGroupName(event.target.value)}
-              placeholder="Office network"
-              maxLength={128}
-              error={groupName.length > 0 ? groupNameValueError : undefined}
-            />
-            <div className="customer-detail-field">
-              <label htmlFor={cidrInputId} className="customer-detail-field-label">
-                CIDRs
-              </label>
-              <textarea
-                id={cidrInputId}
-                className="customer-detail-textarea"
-                value={cidrText}
-                onChange={(event) => setCidrText(event.target.value)}
-                rows={3}
-                placeholder="203.0.113.0/24, 198.51.100.7/32"
+          {groupsLock !== "" ? (
+            <p className="customer-detail-lock" role="status">
+              {groupsLock}
+            </p>
+          ) : null}
+
+          {canManageCustomers ? (
+            <form
+              className="customer-detail-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!groupValid) return;
+                setGroupNotice(null);
+                addGroup.mutate({ name: groupName.trim(), cidrs: cidrList });
+              }}
+            >
+              <h3>Add source IP group</h3>
+              <Input
+                label="Group name"
+                value={groupName}
+                onChange={(event) => setGroupName(event.target.value)}
+                placeholder="Office network"
+                maxLength={128}
+                error={groupName.length > 0 ? groupNameValueError : undefined}
               />
-              <p className="customer-detail-hint">
-                Addresses that are allowed to send as this customer. Separate each range with a
-                comma or a new line.
-                {cidrList.length > 0 ? ` You entered ${cidrList.length}.` : ""}
-              </p>
-            </div>
-            {addGroup.isError ? (
-              <>
-                <p className="customer-detail-error" role="alert">
-                  {errorMessage(addGroup.error)}
+              <div className="customer-detail-field">
+                <label htmlFor={cidrInputId} className="customer-detail-field-label">
+                  CIDRs
+                </label>
+                <textarea
+                  id={cidrInputId}
+                  className="customer-detail-textarea"
+                  value={cidrText}
+                  onChange={(event) => setCidrText(event.target.value)}
+                  rows={3}
+                  placeholder="203.0.113.0/24, 198.51.100.7/32"
+                />
+                <p className="customer-detail-hint">
+                  Addresses that are allowed to send as{" "}
+                  {ownRecord ? "your customer" : "this customer"}. Separate each range with a comma
+                  or a new line.
+                  {cidrList.length > 0 ? ` You entered ${cidrList.length}.` : ""}
                 </p>
-                <StepUpPrompt error={addGroup.error} />
-              </>
-            ) : null}
-            {groupNotice ? (
-              <p className="customer-detail-notice" role="status">
-                {groupNotice}
-              </p>
-            ) : null}
-            <div className="customer-detail-form-actions">
-              <Button
-                type="submit"
-                variant="primary"
-                loading={addGroup.isPending}
-                disabled={addGroup.isPending || !groupValid}
-              >
-                Add group
-              </Button>
-            </div>
-          </form>
+              </div>
+              {addGroup.isError ? (
+                <>
+                  <p className="customer-detail-error" role="alert">
+                    {errorMessage(addGroup.error)}
+                  </p>
+                  <StepUpPrompt error={addGroup.error} />
+                </>
+              ) : null}
+              {groupNotice ? (
+                <p className="customer-detail-notice" role="status">
+                  {groupNotice}
+                </p>
+              ) : null}
+              <div className="customer-detail-form-actions">
+                <Button
+                  type="submit"
+                  variant="primary"
+                  loading={addGroup.isPending}
+                  disabled={addGroup.isPending || !groupValid}
+                >
+                  Add group
+                </Button>
+              </div>
+            </form>
+          ) : null}
         </section>
       ) : null}
 
@@ -803,4 +895,13 @@ export function CustomerDetail() {
       </Dialog>
     </div>
   );
+}
+
+/**
+ * The route form of the record: a customer opened out of the directory, with
+ * the back link and the platform's own framing.
+ */
+export function CustomerDetail() {
+  const { customerId = "" } = useParams({ from: "/customers/$customerId" });
+  return <CustomerRecord customerId={customerId} />;
 }
