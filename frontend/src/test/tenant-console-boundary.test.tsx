@@ -211,7 +211,13 @@ const adminDirectory = [
   },
 ];
 
-/** Every level the server publishes, so a filter or badge cannot hide behind an empty list. */
+/**
+ * Every level a platform console publishes. The server no longer answers a
+ * customer seat with the higher levels, and this fixture deliberately keeps
+ * answering: wording that only leaks once data arrives is still a leak, and a
+ * guard that renders only the narrowed answer cannot tell whether the console
+ * would stay clean if that narrowing regressed.
+ */
 const roleDirectory = [
   {
     roleKey: "system_admin",
@@ -297,13 +303,6 @@ const policyFamilies = [
   },
 ];
 
-/**
- * Payloads are the smallest valid answer each page can render, and they carry
- * real rows wherever the server would publish platform vocabulary: the role
- * directory includes system and support roles, an administrator still holds
- * them, and the policy queue mixes all three management levels. Wording that
- * only leaks once data arrives is still a leak.
- */
 /**
  * What the trace detail endpoint answers a customer seat with: the tenant's own
  * message facts, and none of the platform's machinery. The correlation id, the
@@ -432,6 +431,18 @@ const tenantHeldMessage = {
   ],
 };
 
+/**
+ * Payloads are the smallest valid answer each page can render, and they carry
+ * real rows wherever platform vocabulary exists anywhere in the installation:
+ * the role directory includes system and support roles even though the server
+ * now stops a customer's answer at the levels that seat may grant, an
+ * administrator still holds them, and the policy queue mixes all three
+ * management levels. Wording that only leaks once data arrives is still a leak.
+ * The permission catalog is the one read stubbed empty, because the console must
+ * never ask for it at all and a `PLATFORM_READS` assertion below proves it does
+ * not; a payload there would only ever be answered by a page that should not
+ * exist.
+ */
 const PAYLOADS: Array<[string, unknown]> = [
   ["/auth/session", tenantSession],
   // Ordering matters: the stub answers the first needle the URL contains, and a

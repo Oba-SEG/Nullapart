@@ -222,6 +222,14 @@ export interface FeatureOverride {
   expires_at: string | null;
 }
 
+/**
+ * What `GET /features` answers the operator console. The same read answered to a
+ * customer-tier session is projected: the platform's security floors, kill
+ * switches and scope ladder are absent rather than blanked, features no Customer
+ * scope may reach are not listed, and only that customer's own override rows
+ * come back alongside a `governed_by` outcome word. This console is never that
+ * reader, so the fields it renders stay required here.
+ */
 export interface Feature {
   feature_id: string;
   /** Catalog label written for operators; the id is what audit records name. */

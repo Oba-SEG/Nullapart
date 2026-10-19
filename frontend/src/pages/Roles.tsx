@@ -135,9 +135,10 @@ export function Roles() {
   const permissionCatalog = useQuery({
     queryKey: ["admin-permissions"],
     queryFn: ({ signal }) => listPermissionCatalog(signal),
-    // The catalog lists every permission the installation publishes, including
-    // ones no tenant role can hold, and only the role-definition dialog reads it.
-    // A customer console cannot define roles, so it never asks for that list.
+    // Only the role-definition dialog reads the catalog, and a customer console
+    // cannot define roles, so it never asks. The read would be safe anyway: the
+    // server answers a caller who can only grant with the permissions they
+    // already hold, not the platform's full vocabulary.
     enabled: session.isSuccess && !isTenantTier(session.data ?? null),
   });
 
@@ -152,9 +153,9 @@ export function Roles() {
     ROLE_DEFINITION_REFUSAL,
   );
   // A customer administers the roles that exist inside their own customer. The
-  // provider's higher-level roles are not a tenant concern, and listing them
-  // would put platform vocabulary and platform permission bundles in front of a
-  // customer. The role assignment views stay server-scoped.
+  // server already stops the directory at the levels this caller may grant, so
+  // this filter is what keeps the list honest for a support-tier seat that can
+  // see customer roles but must not present them as its whole ladder.
   const directory = useMemo(
     () => (roles.data ?? []).filter((role) => !tenant || role.roleLevel === "customer"),
     [roles.data, tenant],
