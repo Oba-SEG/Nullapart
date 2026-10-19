@@ -605,6 +605,121 @@ session.customerId === customerId`, which restores the own-record framing and
   caller classes; `cargo fmt -p nullapart-mail-core -- --check` leaves
   `policy_admin.rs` untouched. `cargo test --workspace` recorded separately.
 
+## Landed in the eleventh pass (what the server hands, and what the guard can see)
+
+The tenth pass rewrote copy the console authors itself. Browsed again as
+`ob2-customer-admin` on `.4`, what was left was not the console's wording. It
+was values the API put on the wire, one class of value the guard was blind to,
+and a screen that read as an operator's readout because it named the component
+that produced it. The pass settled on a division the rest of the tenant console
+now follows: **an identity is removed by the server projection, a vocabulary is
+replaced by the naming layer, and a handle the customer must be able to quote
+stays on the wire and is never merely printed.**
+
+- **Placement decides the words; permission still decides the access.** An
+  operator who entered a customer through customer entry is answered as that
+  customer. `634990d` and `9cefad7` moved that to one predicate per read instead
+  of three drifting copies in the projections, and nothing about authorization
+  changed.
+- **Internal evidence is rebuilt, not filtered.** The customer trace projection
+  used to strip scanner prose by a fixed word list, so any engine that named
+  something the list forgot passed through verbatim. It now composes the sentence
+  from severity and category and the customer query no longer selects the stored
+  description column at all (`9cefad7`). A model, an engine or a threshold scheme
+  cannot reach a customer response by accident.
+- **A readout with no credential answers nothing about itself.** The trace health
+  route is the one surface a load balancer calls without one, and it reported the
+  node id and build version to anyone who could reach the port. It reports
+  liveness only (`9cefad7`).
+- **The installation's own seal is not a tenant record.** The audit checkpoint
+  carried the root hash, signer key id and archive location behind `audit:view`,
+  which the tenant role holds. Scope says which rows a read may see, so placement
+  is now carried alongside it and the checkpoint readout requires a
+  platform-placed actor (`9cefad7`).
+- **Bookkeeping identifiers are withheld, not restyled.** The mail-server queue
+  ids, the content dedup hash, the node reference, the answering `deployment_id`
+  on domain security, outbound and notification settings, the alert-delivery
+  queue reference, and the surrogate placement key, region and sequence on a
+  customer record are absent from the customer answer rather than blanked in the
+  UI (`634990d`, `3b2095b`, `afb60d2`, `6439080`). What a customer quotes back
+  stays: the transaction id, the message id and the SMTP codes a sender saw.
+- **Machine codes read as outcomes.** Every reason code the policy engine can
+  emit maps to outcome words, and an operator-typed code falls back to words from
+  its shape instead of echoing the key (`1daf24c`). The same vocabulary now covers
+  the held-mail checks: a tenant's case detail lists the capability the server
+  names and whether it answered, while whether that check was mandatory, how long
+  its node took and the word for the component itself stay on the operator's side
+  (`6b99056`). The rule builder reads "Security check findings" for a tenant and
+  "Scanner findings" for a platform seat.
+- **A stored key gets a name before it reaches the screen.** The policy list and
+  the role directory stopped printing the row identifier under the human name
+  (`8ed30dd`); a tenant's history rows name the family, the sender and the action
+  instead of keying them (`98d615f`); the audit detail dialog names the 13
+  platform-only detail keys it no longer shows and renders the rest in the console's
+  own words (`2945a21`). `detail_fields` is untouched, so credential redaction
+  still happens where it was designed. One vocabulary collision found while
+  reading the writers: `source_key` is only ever written by a DMARC report-source
+  row, so it now reads "Report source", not "Sending range".
+- **A revision says who published it.** `published_by` stores the actor's row key.
+  `57c9abd` adds `published_by_name` alongside it (the additive shape `docs/27`
+  prescribes) and resolves it per seat: a customer reads their own administrator's
+  display name, and anyone outside their organisation reads "Your provider".
+- **The field is additive, so the render must survive skew.** Live on `.4` the
+  queue printed `#5 · by undefined`: the rebuilt frontend had run ahead of a
+  mailcore image that does not publish the new field. `f1fdb6c` types
+  `published_by_name` as optional, drops the clause instead of printing a missing
+  value, and gives the guard a `undefined`/`NaN` tripwire. The lesson is a rule,
+  not an apology: a UI that reads a new field must not be the reason the field's
+  absence becomes a word on a customer screen.
+- **The guard's blind spot is closed.** The snake_case tripwire from the tenth
+  pass cannot see a primary key, because a UUID has no underscore. `d3fefac` adds
+  an opaque-shape term for UUIDs and long hex, and with it the exemption that
+  makes it honest: `tenantResourceReference` lets an opaque value through when the
+  resource type names the customer's own mail (`transaction`, `quarantine`,
+  `quarantine_case`, `message`), and checks a composite key segment by segment.
+  The boundary test derives the same exemption from its own trace fixture rather
+  than weakening the pattern, so a real row key still fails. The first run of the
+  new term reported the trace page's transaction id, which is the customer's
+  handle, and that is what settled the rule with evidence from both sides: the
+  trace search accepts a transaction id and the quarantine route opens on a
+  message id.
+- **The guard reports all of it, and now reads a case.** `a4dbf08` fails with
+  every match of a term rather than the first, so a page with three machine keys
+  reads as three findings. `6b99056` adds `/quarantine/$tenant_message_id` as a
+  tenant surface, a `scanner` term, and an anti-vacuous test that the case detail
+  paints its checks and their outcomes. `17c3bed` then removed the guard's own
+  blind spot: the audit fixtures were keyed `event-tenant`, an opaque term can
+  never fire on a word, so the one page that legitimately prints an id — the
+  detail dialog, where an operator quotes the event they are disputing — was
+  untested. The fixtures now carry real UUIDs, and the event id is a third named
+  customer handle shared by the row and its detail payload.
+- **Live re-audit**: 11 tenant routes on `.4` as a fresh `customer` session,
+  scanned with the guard's own terms. Ten are clean. The only hit is
+  `Transaction d43552d2-…` on an audit row whose resource type is `transaction`,
+  which is the allowed handle, and `/policies` showed the `undefined` publisher
+  above before `f1fdb6c`. Re-run after the mailcore rebuild, `/policies` reads
+  `#5 · by ob1`: on this deployment the seed account that published the revision
+  carries a `customer_id`, so the resolution treats it as the customer's own
+  administrator and prints its account name. That is the same decision already
+  made about `actor_login` below, not a leak fixed by the projection.
+- **Gates**: `pnpm check-all` green (295 tests, 34 files) with the new publisher,
+  check-outcome and boundary cases.
+
+**Not changed, and why.** `connectors_remediation` keeps its family name and the
+outbound "Source kind" option list keeps its words: both are surfaces a tenant
+selects on, not machinery reporting itself. `actor_login` still shows for a
+provider actor, because a tenant is entitled to know that someone outside their
+organisation touched their record, and only the ladder is renamed. A tenant's CSV
+export keeps raw action, resource and role keys, because that file is evidence the
+customer quotes to us. The scanner's own health page is unchanged; it is a
+platform read.
+
+**Coverage the guard has that live data does not.** The `.4` quarantine queue was
+empty during the sweep, so the held-message detail is verified by the boundary
+test and its fixture, not by a real case. The same holds for `outbound_transaction_id`:
+this deployment has no `notification_deliveries` rows, so no alert has carried the
+reference a customer would quote. Say so rather than implying a live pass.
+
 ## Deploy incident: never `rsync --delete` to `.4`
 
 A previous sync used `rsync --delete` while deploying frontend changes. It was
@@ -687,5 +802,19 @@ write history. Both are described under "Landed in the fifth pass".
   view; no action implies content access that the API does not grant.
 - Every mutation is assumed audited server-side; toasts confirm outcomes but
   never carry evidence.
+- A customer console leaks in three distinct ways, and each has one fixed
+  remedy. An **identity** (which engine, node, version or row produced this) is
+  removed by the server projection, not by hiding it in the UI. A **vocabulary**
+  (a mechanism word the customer has no use for) is replaced in the naming
+  layer, `src/lib/labels.ts`. A **handle** the customer must be able to quote —
+  a transaction id, a held message id, an audit event id — stays on the wire and
+  is printed only when it names their own mail or their own ledger row.
+- Which vocabulary a page uses is decided by placement, not permission: an
+  operator seated inside a customer entry is answered as that customer. The
+  permission still decides whether they get the data at all.
+- An additive response field needs a render fallback. A service that has not
+  been rebuilt yet omits the field, and `undefined` reaching a customer screen
+  is the incident; the guard trips on `undefined`/`NaN` so the class cannot
+  return quietly.
 - Coverage floors in `vitest.config.ts` hold: each converted page ships with
   updated tests, and CI (`pnpm check-all`) is the merge gate.
