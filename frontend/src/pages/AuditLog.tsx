@@ -30,6 +30,8 @@ interface AuditEvent {
   created_at: string;
   actor_login: string;
   actor_roles: string[];
+  /** Set when the server left an actor's role off this answer. */
+  actor_roles_outside_view?: boolean;
   impersonated_subject: string | null;
   impersonated_customer: string | null;
   customer_id: string | null;
@@ -395,7 +397,11 @@ export function AuditLog() {
                   <td>
                     {event.actor_login}
                     <span className="audit-meta">
-                      {actorRoleLabels(event.actor_roles, tenant).join(", ")}
+                      {actorRoleLabels(
+                        event.actor_roles,
+                        tenant,
+                        event.actor_roles_outside_view === true,
+                      ).join(", ")}
                     </span>
                     {event.impersonated_subject && (
                       <span className="audit-meta">Acted as {event.impersonated_subject}</span>
@@ -463,7 +469,12 @@ export function AuditLog() {
               <dt>Actor</dt>
               <dd>
                 {detail.data.actor_login} (
-                {actorRoleLabels(detail.data.actor_roles, tenant).join(", ")})
+                {actorRoleLabels(
+                  detail.data.actor_roles,
+                  tenant,
+                  detail.data.actor_roles_outside_view === true,
+                ).join(", ")}
+                )
               </dd>
             </div>
             <div>

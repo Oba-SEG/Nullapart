@@ -85,22 +85,33 @@ export const TENANT_ROLE_LEVEL_LABEL = "Your organisation";
 const PLATFORM_ROLE_KEYS: string[] = ["system_admin", "support"];
 
 /**
+ * What an actor role the server left off reads as. The key names a rung the
+ * reader cannot resolve, so the console reports the gap and never a name.
+ * Mirrors `ACTOR_ROLES_OUTSIDE_VIEW_LABEL` in the audit projection.
+ */
+export const ACTOR_ROLES_OUTSIDE_VIEW_LABEL = "A role outside your view";
+
+/**
  * The role chip beside an audit actor. A tenant console does not name the
  * provider's ladder, so a builtin platform role reads as the one bucket above
  * the tenant's own. Other keys keep their humanised name: an audit row carries
  * role keys, not levels, so a custom platform role can only be named, not
  * classified, without reading the role directory a tenant console does not ask
- * for.
+ * for. A server that withheld a key says so instead, and that gap is the third
+ * honest word here.
  */
-export function actorRoleLabels(roleKeys: string[], tenant: boolean): string[] {
-  if (!tenant) return roleKeys.map(roleLevelLabel);
-  return Array.from(
-    new Set(
-      roleKeys.map((key) =>
+export function actorRoleLabels(
+  roleKeys: string[],
+  tenant: boolean,
+  rolesOutsideView = false,
+): string[] {
+  const labels = tenant
+    ? roleKeys.map((key) =>
         PLATFORM_ROLE_KEYS.includes(key) ? PROVIDER_ROLE_LEVEL_LABEL : roleLevelLabel(key),
-      ),
-    ),
-  );
+      )
+    : roleKeys.map(roleLevelLabel);
+  if (rolesOutsideView) labels.push(ACTOR_ROLES_OUTSIDE_VIEW_LABEL);
+  return Array.from(new Set(labels));
 }
 
 /** What a rule matches on, in the words of the seat reading it. */

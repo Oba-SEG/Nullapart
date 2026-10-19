@@ -891,9 +891,48 @@ recorded here rather than absorbed into a wording pass.
 `cargo fmt --all` and `cargo clippy -p nullapart-mail-core --all-targets -- -D
 warnings` clean. `pnpm check-all` green (305 tests, 34 files).
 
+## Landed in the fifteenth pass (the audit ledger stopped naming the actor's ladder)
+
+The same fact reaches a customer console by three paths, and only one of them was
+a screen.
+
+- **Reads and the export share one rule.** `crates/mail-core/src/admin_audit.rs`
+  now splits an actor's roles against the reader's own ladder in
+  `list_item`/`detail`, and `render_csv` uses the same split. The CSV path
+  matters: `audit:export` is a `customer_admin` permission, so a tenant could
+  download a file the console had been careful not to show them. A withheld role
+  travels there as the words `A role outside your view`, because a spreadsheet has
+  no flag column to carry it.
+- **What stays visible, and why.** The actor's login is not withheld. A customer
+  is entitled to know that a named hand touched their record; what the platform
+  used to leak is the rung that hand stood on. `impersonated_subject` stays for
+  the same reason: it is the customer's own account, not a platform identity.
+- **The ladder is resolved without a new dependency.** `is_customer_ladder_role`
+  reads the builtin table, and a key the reader holds themselves counts as their
+  own ladder even when no builtin can resolve it, so a tenant's custom role is
+  still named to that tenant. The audit router does not gain a role-store handle,
+  which keeps the placement rule inside the two modules that already own it.
+- **The console says the gap, and keeps its guard.** `actorRoleLabels` takes the
+  flag as a third input, so a tenant row reads `Customer admin, A role outside
+your view`. The old bucket that renamed a leaked `system_admin` to `Provider`
+  is still in place: the boundary fixture keeps answering with platform keys on
+  purpose, so a projection regression cannot turn into a rendered platform name.
+
+**Gates**: `cargo test -p nullapart-mail-core --lib` 641 passed (1 ignored),
+`cargo fmt --all` and `cargo clippy -p nullapart-mail-core --all-targets -- -D
+warnings` clean. `pnpm check-all` green (306 tests, 34 files).
+
 **Still open, stated rather than implied.** The live wire sweep on `.4` has not
 re-run against this build, and migration `044` has not been applied to the
-long-lived Postgres volume there.
+long-lived Postgres volume there. A route-by-route read of what a `customer_admin`
+session can still pull named four more answers that publish platform machinery:
+`GET /outbound-intelligence` carries the stored rule algorithm
+(`rspamd_fuzzy`, `nullapart_v1`) and a content-derived fingerprint that the page
+uses as a row heading; `GET /quarantine/{id}` carries each check's capability key,
+status and duration; `GET /mail-trace/transaction/{id}` keeps the
+`postfix_queue_id` and `scanner_type` field names on the wire even though it
+empties their values; and `GET /notifications/settings` delivery rows carry
+internal failure prose. Each is a projection fix, not a wording fix.
 
 ## Deploy incident: never `rsync --delete` to `.4`
 

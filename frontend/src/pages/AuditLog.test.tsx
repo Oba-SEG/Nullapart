@@ -29,7 +29,7 @@ const auditEvent = {
   trace_id: "trace-1",
 };
 
-function stubFetch() {
+function stubFetch(event: Record<string, unknown> = auditEvent) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
@@ -75,7 +75,7 @@ function stubFetch() {
           status: 200,
           json: async () => ({
             data: {
-              ...auditEvent,
+              ...event,
               session_id: "session-1",
               details: [
                 { key: "release_reason", value: "false positive" },
@@ -89,7 +89,7 @@ function stubFetch() {
         return {
           ok: true,
           status: 200,
-          json: async () => ({ data: { events: [auditEvent], next_cursor: null } }),
+          json: async () => ({ data: { events: [event], next_cursor: null } }),
         };
       }
       return { ok: false, status: 404, json: async () => ({}) };
@@ -159,5 +159,25 @@ describe("AuditLog", () => {
     expect(screen.getByText("session_token")).toBeTruthy();
     expect(screen.getByText("[redacted]")).toBeTruthy();
     expect(screen.getByText("quarantine.release")).toBeTruthy();
+  });
+
+  /**
+   * A role above the reader's own ladder is left off a tenant's audit answer, so
+   * the row reports the gap instead of naming a rung. The actor's login still
+   * reads: a customer is entitled to know whose hand touched their record.
+   */
+  it("reports a withheld actor role as a gap, not as a role name", async () => {
+    stubFetch({
+      ...auditEvent,
+      actor_login: "ob1",
+      actor_roles: ["customer_admin"],
+      actor_roles_outside_view: true,
+    });
+    renderInRouter();
+
+    const roles = await screen.findByText(/A role outside your view/);
+    expect(roles.textContent).toContain("Customer admin");
+    expect(roles.textContent).not.toMatch(/support_agent|Support/);
+    expect(screen.getByText("ob1")).toBeTruthy();
   });
 });
