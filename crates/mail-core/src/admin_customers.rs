@@ -171,17 +171,20 @@ struct ApiErrorBody {
 struct CustomerSummaryResponse {
     id: String,
     display_name: String,
-    /// Surrogate row key in the installation's own table. Nullable because a
-    /// customer seat is answered without it; see `projected`.
+    /// Surrogate row key in the installation's own table. The key is omitted for
+    /// a customer seat; see `projected`.
+    #[serde(skip_serializing_if = "Option::is_none")]
     internal_key: Option<i64>,
     lifecycle: String,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     domain_count: i64,
-    /// Operational placement (migration 018). Nullable because direct
-    /// database fixtures may predate the columns; freshly created customers
-    /// always carry both.
+    /// Operational placement (migration 018). Omitted when there is none to
+    /// report: a customer seat is answered without them, and freshly created
+    /// customers always carry both.
+    #[serde(skip_serializing_if = "Option::is_none")]
     region_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     sequence_no: Option<i64>,
 }
 
@@ -2140,10 +2143,32 @@ mod tests {
         assert_eq!(for_customer.id, "CZA-1");
         assert_eq!(for_customer.display_name, "Acme Freight");
 
+        // Absent, not null: an answer must not advertise the slot a placement
+        // number would have occupied.
+        let customer_body = serde_json::to_value(&for_customer).expect("serializable");
+        let customer_keys = customer_body.as_object().expect("object");
+        for withheld in ["internal_key", "region_code", "sequence_no"] {
+            assert!(
+                !customer_keys.contains_key(withheld),
+                "a customer answer must not even carry a {withheld} slot: {customer_body}"
+            );
+        }
+
         let for_platform = summary.projected(true);
         assert_eq!(for_platform.internal_key, Some(7));
         assert_eq!(for_platform.region_code.as_deref(), Some("CZA"));
         assert_eq!(for_platform.sequence_no, Some(1));
+        let platform_keys = serde_json::to_value(&for_platform)
+            .expect("serializable")
+            .as_object()
+            .expect("object")
+            .clone();
+        for published in ["internal_key", "region_code", "sequence_no"] {
+            assert!(
+                platform_keys.contains_key(published),
+                "a platform answer must still carry {published}"
+            );
+        }
     }
 
     fn deployment() -> DeploymentId {

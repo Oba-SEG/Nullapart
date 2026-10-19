@@ -303,7 +303,6 @@ describe("NotificationSettings delivery ledger", () => {
             recipient_count: 0,
             attempts: 3,
             reason: "The outbound relay refused the connection.",
-            outbound_transaction_id: null,
             created_at: "2026-01-05T09:00:00Z",
             updated_at: "2026-01-05T09:20:00Z",
           },

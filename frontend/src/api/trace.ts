@@ -86,15 +86,15 @@ export interface TraceFlowStage {
 
 export interface TraceTransaction {
   transaction_id: string;
-  /** Platform log correlation id; the customer projection leaves it out. */
-  trace_id: string | null;
+  /** Platform log correlation id. The customer answer omits the key. */
+  trace_id?: string;
   direction: string;
-  /** Which node accepted the mail — platform-only machinery. */
-  deployment_id: string | null;
+  /** Which node accepted the mail. The customer answer omits the key. */
+  deployment_id?: string;
   envelope_sender: string | null;
   message_id: string | null;
-  /** Content dedup hash — platform-only machinery. */
-  content_hash: string | null;
+  /** Content dedup hash. The customer answer omits the key. */
+  content_hash?: string;
   received_at: string;
   recipients: TraceRecipient[];
   auth: TraceAuthResults;

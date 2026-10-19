@@ -46,9 +46,9 @@ export interface EffectiveNotificationSettings {
 
 /**
  * One row of the delivery ledger: the only answer to "was it sent".
- * `outbound_transaction_id` is the mail server's own queue reference, published
- * only to a platform seat. The ledger publishes no recipient addresses and no
- * message content.
+ * `outbound_transaction_id` is the mail server's own queue reference; the key
+ * appears only in a platform answer. The ledger publishes no recipient
+ * addresses and no message content.
  */
 export interface NotificationDelivery {
   notification_id: string;
@@ -56,7 +56,7 @@ export interface NotificationDelivery {
   recipient_count: number;
   attempts: number;
   reason: string | null;
-  outbound_transaction_id: string | null;
+  outbound_transaction_id?: string;
   created_at: string;
   updated_at: string;
 }
@@ -68,10 +68,10 @@ export interface NotificationCapabilities {
 }
 
 export interface NotificationSettingsResponse {
-  /** Platform log reference; the customer projection leaves it out. */
-  deployment_id: string | null;
+  /** Which installation answered. The customer answer omits the key. */
+  deployment_id?: string;
   generated_at: string;
-  /** Absent until this tenant has saved a row, so the console can show the
+  /** null until this tenant has saved a row, so the console can show the
    * effective values as platform defaults rather than as somebody's choice. */
   settings: NotificationSettingsView | null;
   effective: EffectiveNotificationSettings;

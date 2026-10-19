@@ -77,8 +77,9 @@ struct ApiErrorBody {
 
 #[derive(Debug, Serialize)]
 struct OutboundIntelligenceResponse {
-    /// Which installation answered. Published only to a platform seat; a
-    /// customer's own sending picture does not name the machine behind it.
+    /// Which installation answered. The key is published only to a platform seat;
+    /// a customer's own sending picture does not name the machine behind it.
+    #[serde(skip_serializing_if = "Option::is_none")]
     deployment_id: Option<String>,
     generated_at: DateTime<Utc>,
     summary: OutboundIntelligenceSummary,

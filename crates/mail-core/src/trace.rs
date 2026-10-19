@@ -420,17 +420,21 @@ struct WorkloadTransactionDetail {
 #[derive(Serialize)]
 struct TransactionDetail {
     transaction_id: String,
-    /// Platform log correlation id; absent for a customer placement.
+    /// Platform log correlation id. The key is omitted for a customer placement:
+    /// a tenant's answer should not even show that a correlation slot exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
     trace_id: Option<String>,
     direction: String,
-    /// Which installation handled the transaction; absent for a customer
+    /// Which installation handled the transaction. Omitted for a customer
     /// placement, because a customer's trace does not name the machine it ran on.
+    #[serde(skip_serializing_if = "Option::is_none")]
     deployment_id: Option<String>,
     envelope_sender: String,
     message_id: Option<String>,
-    /// Content deduplication hash; absent for a customer placement. It is how the
-    /// platform recognises a body it has already scanned, not something a customer
-    /// can act on.
+    /// Content deduplication hash. Omitted for a customer placement: it is how
+    /// the platform recognises a body it has already scanned, not something a
+    /// customer can act on.
+    #[serde(skip_serializing_if = "Option::is_none")]
     content_hash: Option<String>,
     received_at: DateTime<Utc>,
     recipients: Vec<TraceRecipientResponse>,

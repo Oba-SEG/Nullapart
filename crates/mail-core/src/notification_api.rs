@@ -112,8 +112,9 @@ struct NotificationCapabilities {
 
 #[derive(Debug, Serialize)]
 struct NotificationSettingsResponse {
-    /// Which installation answered. Published only to a platform seat; the
-    /// tenant's own alert settings do not need the machine reference.
+    /// Which installation answered. The key is published only to a platform seat;
+    /// the tenant's own alert settings do not need the machine reference.
+    #[serde(skip_serializing_if = "Option::is_none")]
     deployment_id: Option<String>,
     generated_at: DateTime<Utc>,
     /// `None` until the tenant has saved a row: the platform default is then
@@ -156,9 +157,10 @@ struct DeliveryView {
     recipient_count: i32,
     attempts: i32,
     reason: Option<String>,
-    /// The MTA's queue reference for a delivered notice. Published only to a
-    /// platform seat: a tenant sees that their alert mail was delivered, not
-    /// which queue on the mail server carried it.
+    /// The MTA's queue reference for a delivered notice. The key is published
+    /// only to a platform seat: a tenant sees that their alert mail was
+    /// delivered, not which queue on the mail server carried it.
+    #[serde(skip_serializing_if = "Option::is_none")]
     outbound_transaction_id: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,

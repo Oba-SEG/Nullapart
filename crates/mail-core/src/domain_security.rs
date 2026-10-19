@@ -121,8 +121,9 @@ struct ApiErrorBody {
 
 #[derive(Debug, Serialize)]
 struct DomainSecurityResponse {
-    /// Which installation answered. Published only to a platform seat: a
-    /// customer console sees its own domains, not the machine that holds them.
+    /// Which installation answered. The key is published only to a platform seat:
+    /// a customer console sees its own domains, not the machine that holds them.
+    #[serde(skip_serializing_if = "Option::is_none")]
     deployment_id: Option<String>,
     generated_at: DateTime<Utc>,
     summary: DomainSecuritySummary,

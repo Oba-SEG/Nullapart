@@ -117,8 +117,8 @@ interface PolicyHistory {
 }
 
 interface OutboundIntelligenceResponse {
-  /** Platform log reference; the customer projection leaves it out. */
-  deployment_id: string | null;
+  /** Which installation answered. The customer answer omits the key. */
+  deployment_id?: string;
   generated_at: string;
   summary: OutboundIntelligenceSummary;
   approved_senders: ApprovedBulkSender[];

@@ -49,10 +49,11 @@ interface SourceIpGroup {
 interface CustomerSummary {
   id: string;
   display_name: string;
-  /** Operational placement, published only to a platform seat. */
-  internal_key: number | null;
-  region_code: string | null;
-  sequence_no: number | null;
+  /** Operational placement. A customer answer omits these keys; an older
+   * answer may still carry them as null, so the render checks for a number. */
+  internal_key?: number | null;
+  region_code?: string | null;
+  sequence_no?: number | null;
   lifecycle: CustomerLifecycle;
   created_at: string;
   updated_at: string;
@@ -375,10 +376,11 @@ export function CustomerRecord({
                 <dd className="truncate customer-detail-id">{customer.id}</dd>
               </div>
               {/* The server publishes operational placement to platform seats
-                  only, so the surrogate key being absent is the marker that the
-                  whole set was withheld. A legacy row that is genuinely
-                  unplaced still says so. */}
-              {customer.internal_key !== null ? (
+                  only, and a customer answer omits the keys rather than sending
+                  null. A number in the surrogate slot is therefore the marker
+                  that the whole set was handed over; a legacy row that is
+                  genuinely unplaced still says so. */}
+              {typeof customer.internal_key === "number" ? (
                 <>
                   <div>
                     <dt>Internal key</dt>

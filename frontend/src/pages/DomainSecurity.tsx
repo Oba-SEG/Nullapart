@@ -127,8 +127,8 @@ interface AcknowledgedNotification {
 }
 
 interface DomainSecurityResponse {
-  /** Platform log reference; the customer projection leaves it out. */
-  deployment_id: string | null;
+  /** Which installation answered. The customer answer omits the key. */
+  deployment_id?: string;
   generated_at: string;
   summary: DomainSecuritySummary;
   domains: DomainSecurityDomain[];

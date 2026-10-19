@@ -162,17 +162,19 @@ const PLATFORM_LANGUAGE: Array<{ term: string; pattern: RegExp }> = [
   // field the service did not publish, which is what happened when the UI was
   // rebuilt ahead of the API that names a revision's publisher.
   { term: "missing value", pattern: /\b(?:undefined|NaN)\b/ },
+  // A render that fell over. The sweep below only compares words on the page, so
+  // an error boundary would scan as clean text and a surface that crashes on the
+  // tenant's own answer could hide inside a green guard.
+  { term: "crashed render", pattern: /\b(?:Something went wrong|Cannot read propert)/ },
 ];
 
 /** The tenant's own organisation record, with no domains or groups set yet.
- *  Operational placement is null because the server publishes it only to a
- *  platform seat; the tenant reads its derived customer ID instead. */
+ *  Operational placement is not in the answer at all: the server publishes it
+ *  only to a platform seat, and a customer read does not even show the slot.
+ *  The tenant reads their derived customer ID instead. */
 const customerRecord = {
   id: "CZA-1",
   display_name: "Acme Freight",
-  internal_key: null,
-  region_code: null,
-  sequence_no: null,
   lifecycle: "active",
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
@@ -311,12 +313,9 @@ const policyFamilies = [
  */
 const tenantTrace = {
   transaction_id: "0f9d0a6b-1111-2222-3333-444455556666",
-  trace_id: null,
   direction: "inbound",
-  deployment_id: null,
   envelope_sender: "newsletter@partner.example",
   message_id: "<20260106-0949@partner.example>",
-  content_hash: null,
   received_at: "2026-01-06T09:49:55Z",
   recipients: [{ address: "ops@acmefreight.example", orcpt: null, notify: null }],
   auth: { spf_result: "pass", dkim_result: "pass", dmarc_result: "pass", arc_result: null },
@@ -578,12 +577,16 @@ const PAYLOADS: Array<[string, unknown]> = [
       next_cursor: null,
     },
   ],
+  // The stub matches the first needle contained in the URL, so the more
+  // specific read has to precede the record it is filed under.
+  // The stub matches the first needle contained in the URL, so the more
+  // specific read has to precede the record it is filed under.
+  ["/admin/customers/CZA-1/source-ip-groups", { groups: [] }],
   ["/admin/customers/CZA-1", customerRecord],
   ["/admin/customers", { customers: [] }],
   [
     "/domain-security",
     {
-      deployment_id: null,
       generated_at: "2026-01-06T10:00:00Z",
       summary: {
         domains_total: 1,
@@ -622,7 +625,6 @@ const PAYLOADS: Array<[string, unknown]> = [
   [
     "/notifications/settings",
     {
-      deployment_id: null,
       generated_at: "2026-01-06T10:00:00Z",
       settings: {
         enabled: true,
@@ -647,8 +649,8 @@ const PAYLOADS: Array<[string, unknown]> = [
           recipient_count: 1,
           attempts: 1,
           reason: null,
-          // The mail server's queue reference: platform seats only.
-          outbound_transaction_id: null,
+          // The mail server's queue reference is a platform key: the customer
+          // answer carries no such field at all.
           created_at: "2026-01-06T09:00:00Z",
           updated_at: "2026-01-06T09:01:00Z",
         },
@@ -661,7 +663,6 @@ const PAYLOADS: Array<[string, unknown]> = [
   [
     "/outbound-intelligence",
     {
-      deployment_id: null,
       generated_at: "2026-01-06T10:00:00Z",
       summary: {
         messages_1h: 0,
@@ -797,6 +798,7 @@ const TERM_SAMPLES: Array<[string, string]> = [
   ["machine key", "Family ml_threat_classification."],
   ["opaque row key", "Record 9c4279a2-0d8e-455a-94c4-7c496786df12 was updated."],
   ["missing value", "Published by undefined on Tuesday."],
+  ["crashed render", "Something went wrong while this screen was drawn."],
   ["model word", "The model flagged the link."],
   ["engine or artifact name", "Weighted by qwen and served from an ONNX file."],
   ["inference machinery", "A classifier scored the body text."],
@@ -1079,6 +1081,25 @@ describe("tenant console boundary", () => {
     const row = await screen.findByText("legacy@example.test");
     expect(row.closest("tr")?.textContent).toContain("Provider-level role");
     expect(row.closest("tr")?.textContent).not.toMatch(/system_admin|System Administrator/);
+  });
+
+  /**
+   * The organisation record is the one tenant surface that used to carry the
+   * platform's placement numbers. The server answer now omits those keys, and
+   * the console has to treat an absent number as "not published" rather than as
+   * a slot to fill in with a word.
+   */
+  it("shows the tenant's own record without the platform's placement", async () => {
+    stubTenantFetch();
+    renderSurface(surfaceNamed("Your organisation"));
+    await screen.findByText("Your customer · CZA-1");
+
+    const record = await screen.findByText("Acme Freight");
+    expect(record.textContent).toBeTruthy();
+    expect(screen.getByText("CZA-1")).toBeInTheDocument();
+    expect(screen.queryByText("Internal key")).not.toBeInTheDocument();
+    expect(screen.queryByText("Not placed")).not.toBeInTheDocument();
+    expect(screen.queryByText("Not assigned")).not.toBeInTheDocument();
   });
 
   it("names a provider actor in the audit log as the provider", async () => {
