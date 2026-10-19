@@ -31,7 +31,7 @@ use chrono::{DateTime, Utc};
 use nullapart_mail_contracts::{
     policy::PolicyRule,
     rate_limit::{HighRiskLimits, TokenBucket},
-    transaction::DeploymentId,
+    transaction::{CustomerId, DeploymentId},
 };
 use nullapart_policy::{
     CustomerLifecycle, FeatureDefinition, FeatureEvaluator, FeatureId, FeatureOverride,
@@ -370,13 +370,24 @@ struct FeatureResponse {
     feature_id: FeatureId,
     /// Catalog label for humans; the id remains because audit names the id.
     display_name: String,
-    description: String,
+    /// Platform-authored prose about the machinery behind the switch. Withheld
+    /// from a customer reader; additively absent per
+    /// `docs/27-API-VERSIONING-FEATURE-FLAGS.md`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
     default_value: String,
-    mandatory: bool,
-    kill_switch: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mandatory: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kill_switch: Option<bool>,
     allowed_scopes: Vec<OverrideScope>,
     effective_value: String,
-    winning_scope: OverrideScope,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    winning_scope: Option<OverrideScope>,
+    /// Additive, and published only where `winning_scope` is withheld: whose
+    /// decision the effective value reflects, in the words a customer reads.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    governed_by: Option<&'static str>,
     overrides: Vec<FeatureOverrideResponse>,
 }
 
@@ -1198,6 +1209,7 @@ fn override_from_row(row: FeatureOverrideRow) -> Option<LoadedOverride> {
     })
 }
 
+#[derive(Clone)]
 pub(crate) struct LoadedOverride {
     id: Uuid,
     pub(crate) item: FeatureOverride,
@@ -1950,6 +1962,84 @@ async fn refresh_family(
     (StatusCode::OK, Json(ApiEnvelope { data: response })).into_response()
 }
 
+/// Builds the feature list one caller is entitled to read. The decision input
+/// is always every stored override, so the effective value is the truth; what
+/// changes with placement is the catalog and the fields. A customer reader may
+/// write only their own Customer scope, so the platform's ladder, its security
+/// floors and kill switches, and the override rows written above them (which
+/// name platform actors and the identifiers of scopes the reader does not belong
+/// to) are withheld rather than blanked.
+fn project_features(
+    definitions: &[FeatureDefinition],
+    overrides: &[LoadedOverride],
+    labels: &HashMap<String, String>,
+    actor_names: &HashMap<String, String>,
+    deployment_id: &DeploymentId,
+    customer_id: &CustomerId,
+    customer_reader: bool,
+) -> Result<Vec<FeatureResponse>, ()> {
+    let evaluator = FeatureEvaluator::new(definitions.to_vec());
+    let now = Utc::now();
+    let mut features = Vec::with_capacity(definitions.len());
+    for definition in definitions {
+        if customer_reader && !definition.allowed_scopes.contains(&OverrideScope::Tenant) {
+            continue;
+        }
+        let applicable: Vec<&LoadedOverride> = overrides
+            .iter()
+            .filter(|loaded| loaded.item.feature_id == definition.feature_id)
+            .collect();
+        let applicable_overrides = applicable
+            .iter()
+            .map(|loaded| loaded.item.clone())
+            .collect::<Vec<FeatureOverride>>();
+        let evaluation = evaluator
+            .evaluate(
+                &definition.feature_id,
+                deployment_id,
+                customer_id,
+                &applicable_overrides,
+                now,
+            )
+            .map_err(|_| ())?;
+        features.push(FeatureResponse {
+            feature_id: definition.feature_id.clone(),
+            // A missing label degrades to the key, never to a 503: the label is
+            // presentation, and losing the whole console view over it would
+            // hide the state an operator needs to see.
+            display_name: labels
+                .get(definition.feature_id.0.as_str())
+                .cloned()
+                .unwrap_or_else(|| definition.feature_id.0.clone()),
+            description: (!customer_reader).then(|| definition.description.clone()),
+            default_value: encode_feature_value(&definition.default_value),
+            mandatory: (!customer_reader).then_some(definition.mandatory),
+            kill_switch: (!customer_reader).then_some(definition.kill_switch),
+            allowed_scopes: if customer_reader {
+                vec![OverrideScope::Tenant]
+            } else {
+                definition.allowed_scopes.clone()
+            },
+            effective_value: encode_feature_value(&evaluation.value),
+            winning_scope: (!customer_reader).then_some(evaluation.winning_scope),
+            governed_by: customer_reader.then_some(
+                if evaluation.winning_scope == OverrideScope::Tenant {
+                    "you"
+                } else {
+                    "provider"
+                },
+            ),
+            overrides: applicable
+                .iter()
+                .copied()
+                .filter(|loaded| !customer_reader || loaded.item.scope == OverrideScope::Tenant)
+                .map(|loaded| override_response(loaded, actor_names))
+                .collect(),
+        });
+    }
+    Ok(features)
+}
+
 async fn list_features(
     State(state): State<AdminPolicyState>,
     headers: HeaderMap,
@@ -2002,50 +2092,19 @@ async fn list_features(
         Ok(names) => names,
         Err(response) => return response,
     };
-    let now = Utc::now();
-    let evaluator = FeatureEvaluator::new(definitions.clone());
-    let mut features = Vec::with_capacity(definitions.len());
-    for definition in &definitions {
-        let applicable: Vec<&LoadedOverride> = overrides
-            .iter()
-            .filter(|loaded| loaded.item.feature_id == definition.feature_id)
-            .collect();
-        let applicable_overrides = applicable
-            .iter()
-            .map(|loaded| loaded.item.clone())
-            .collect::<Vec<FeatureOverride>>();
-        let evaluation = match evaluator.evaluate(
-            &definition.feature_id,
-            &state.0.deployment_id,
-            &context.customer_id,
-            &applicable_overrides,
-            now,
-        ) {
-            Ok(evaluation) => evaluation,
-            Err(_) => return unavailable(),
-        };
-        features.push(FeatureResponse {
-            feature_id: definition.feature_id.clone(),
-            // A missing label degrades to the key, never to a 503: the label is
-            // presentation, and losing the whole console view over it would
-            // hide the state an operator needs to see.
-            display_name: labels
-                .get(definition.feature_id.0.as_str())
-                .cloned()
-                .unwrap_or_else(|| definition.feature_id.0.clone()),
-            description: definition.description.clone(),
-            default_value: encode_feature_value(&definition.default_value),
-            mandatory: definition.mandatory,
-            kill_switch: definition.kill_switch,
-            allowed_scopes: definition.allowed_scopes.clone(),
-            effective_value: encode_feature_value(&evaluation.value),
-            winning_scope: evaluation.winning_scope,
-            overrides: applicable
-                .iter()
-                .map(|loaded| override_response(loaded, &actor_names))
-                .collect(),
-        });
-    }
+    let customer_reader = caller == Some(0);
+    let features = match project_features(
+        &definitions,
+        &overrides,
+        &labels,
+        &actor_names,
+        &state.0.deployment_id,
+        &context.customer_id,
+        customer_reader,
+    ) {
+        Ok(features) => features,
+        Err(_) => return unavailable(),
+    };
     let allowed_override_scopes = [
         OverrideScope::System,
         OverrideScope::Deployment,
@@ -2950,6 +3009,225 @@ mod tests {
             "an injected management level must never be persisted: {}",
             after.1
         );
+    }
+
+    fn switchboard_definition(
+        feature_id: &str,
+        description: &str,
+        mandatory: bool,
+        kill_switch: bool,
+        allowed_scopes: &[OverrideScope],
+    ) -> FeatureDefinition {
+        FeatureDefinition {
+            feature_id: FeatureId::new(feature_id),
+            description: description.to_string(),
+            default_value: FeatureValue::Enabled,
+            mandatory,
+            kill_switch,
+            allowed_scopes: allowed_scopes.to_vec(),
+        }
+    }
+
+    fn switchboard_override(
+        feature_id: &str,
+        scope: OverrideScope,
+        scope_id: &str,
+        value: FeatureValue,
+        owner: &str,
+        revision: i64,
+    ) -> LoadedOverride {
+        LoadedOverride {
+            id: Uuid::new_v4(),
+            item: FeatureOverride {
+                feature_id: FeatureId::new(feature_id),
+                scope,
+                scope_id: scope_id.to_string(),
+                value,
+                owner: owner.to_string(),
+                reason: "Switchboard projection test".to_string(),
+                revision,
+                created_at: Utc::now(),
+                expires_at: None,
+            },
+        }
+    }
+
+    /// The same stored rows the platform holds: a security floor nobody may
+    /// switch, a scanner the platform killed and the customer asked to re-enable,
+    /// plus the labels and actor names both write paths would publish.
+    struct Switchboard {
+        definitions: Vec<FeatureDefinition>,
+        overrides: Vec<LoadedOverride>,
+        labels: HashMap<String, String>,
+        actor_names: HashMap<String, String>,
+    }
+
+    fn switchboard_fixture() -> Switchboard {
+        let definitions = vec![
+            switchboard_definition(
+                "tenant_authorization",
+                "Server-authoritative tenant authorization boundary",
+                true,
+                false,
+                &[OverrideScope::System],
+            ),
+            switchboard_definition(
+                "deep_ai_analysis",
+                "Deep AI content analysis scanner",
+                false,
+                true,
+                &[
+                    OverrideScope::System,
+                    OverrideScope::Deployment,
+                    OverrideScope::Tenant,
+                ],
+            ),
+        ];
+        let overrides = vec![
+            switchboard_override(
+                "deep_ai_analysis",
+                OverrideScope::System,
+                "system",
+                FeatureValue::Disabled,
+                "platform-owner",
+                4,
+            ),
+            switchboard_override(
+                "deep_ai_analysis",
+                OverrideScope::Tenant,
+                "local-customer",
+                FeatureValue::Enabled,
+                "tenant-owner",
+                7,
+            ),
+        ];
+        let labels = HashMap::from([
+            (
+                "tenant_authorization".to_string(),
+                "Customer authorization boundary".to_string(),
+            ),
+            (
+                "deep_ai_analysis".to_string(),
+                "Deep AI message analysis".to_string(),
+            ),
+        ]);
+        let actor_names = HashMap::from([
+            ("platform-owner".to_string(), "ob1".to_string()),
+            ("tenant-owner".to_string(), "Dana Whitfield".to_string()),
+        ]);
+        Switchboard {
+            definitions,
+            overrides,
+            labels,
+            actor_names,
+        }
+    }
+
+    #[test]
+    fn feature_list_withholds_the_switchboard_from_a_customer_reader() {
+        let board = switchboard_fixture();
+        let deployment = DeploymentId::new("LOCAL-TEST");
+        let customer = CustomerId::new("local-customer");
+
+        let projected = project_features(
+            &board.definitions,
+            &board.overrides,
+            &board.labels,
+            &board.actor_names,
+            &deployment,
+            &customer,
+            true,
+        )
+        .expect("customer projection");
+        let value = serde_json::to_value(&projected).expect("serializable");
+        let text = value.to_string();
+
+        // A switch no Customer scope may ever reach is not in the answer at all.
+        assert_eq!(value.as_array().expect("list").len(), 1);
+        assert_eq!(value[0]["feature_id"], "deep_ai_analysis");
+        assert_eq!(value[0]["allowed_scopes"], serde_json::json!(["tenant"]));
+        // The floor flag, the kill switch, the scope ladder and the platform's
+        // own prose are absent rather than blanked, so nothing downstream has to
+        // remember to hide them.
+        for withheld in [
+            "tenant_authorization",
+            "Deep AI content analysis scanner",
+            "mandatory",
+            "kill_switch",
+            "winning_scope",
+            "system",
+            "deployment",
+            "platform-owner",
+            "ob1",
+        ] {
+            assert!(
+                !text.contains(withheld),
+                "a customer answer must not carry {withheld}: {text}"
+            );
+        }
+        // Their own row survives, and who governs replaces the ladder without
+        // losing the honest answer: the platform's kill still holds.
+        assert_eq!(value[0]["overrides"].as_array().expect("rows").len(), 1);
+        assert_eq!(value[0]["overrides"][0]["owner"], "tenant-owner");
+        assert_eq!(value[0]["governed_by"], "provider");
+        assert_eq!(value[0]["effective_value"], "disabled");
+
+        // Anti-vacuous: the platform reader of the same rows still gets all of it.
+        let platform = project_features(
+            &board.definitions,
+            &board.overrides,
+            &board.labels,
+            &board.actor_names,
+            &deployment,
+            &customer,
+            false,
+        )
+        .expect("platform projection");
+        let platform_text = serde_json::to_value(&platform)
+            .expect("serializable")
+            .to_string();
+        for published in [
+            "tenant_authorization",
+            "Deep AI content analysis scanner",
+            "\"mandatory\":true",
+            "\"kill_switch\":true",
+            "\"winning_scope\":\"system\"",
+            "\"scope_id\":\"system\"",
+            "platform-owner",
+            "ob1",
+        ] {
+            assert!(
+                platform_text.contains(published),
+                "a platform answer must still carry {published}: {platform_text}"
+            );
+        }
+        assert_eq!(platform.len(), 2);
+    }
+
+    #[test]
+    fn feature_list_names_the_customer_as_the_governing_scope_of_their_own_switch() {
+        let board = switchboard_fixture();
+        // Without the platform's kill, the customer's own row decides, and the
+        // withheld ladder is still replaced by the outcome the customer reads.
+        let their_own: Vec<LoadedOverride> = board
+            .overrides
+            .iter()
+            .filter(|loaded| loaded.item.scope == OverrideScope::Tenant)
+            .cloned()
+            .collect();
+        let projected = project_features(
+            &board.definitions,
+            &their_own,
+            &board.labels,
+            &board.actor_names,
+            &DeploymentId::new("LOCAL-TEST"),
+            &CustomerId::new("local-customer"),
+            true,
+        )
+        .expect("customer projection");
+        let value = serde_json::to_value(&projected).expect("serializable");
+        assert_eq!(value[0]["governed_by"], "you");
+        assert_eq!(value[0]["effective_value"], "enabled");
     }
 
     #[tokio::test]
