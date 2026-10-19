@@ -21,7 +21,11 @@
 //!    `feature_overrides`.
 //! 5. **Static catalog**: `POLICY_FAMILY_MANAGEMENT_LEVELS` mirrors the seeded
 //!    `policy_families` rows exactly, so the offline tier gate cannot drift
-//!    from the database.
+//!    from the database, and the rule profile marks only the four families
+//!    whose revisions a runtime stage actually reads.
+//! 6. **Rule profile**: the detail response carries the per-family schema the
+//!    rule editor renders from, including the exact `action.metadata` keys the
+//!    publish validator accepts.
 //!
 //! `postgres_rls_isolation.rs::rls_feature_overrides_cannot_self_escalate`
 //! must keep passing alongside this suite: it is the escalation proof for the
@@ -41,6 +45,7 @@ use nullapart_mail_core::policy_admin::{
     policy_admin_router, AdminPolicyState, POLICIES_MANAGE_PERMISSION, POLICIES_VIEW_PERMISSION,
     POLICY_FAMILY_MANAGEMENT_LEVELS,
 };
+use nullapart_mail_core::policy_profile::{rule_profile, EnforcementMode};
 use nullapart_policy::{
     AuthenticationAssurance, ContextActor, CustomerLifecycle, RegionId, TenantContext,
 };
@@ -280,6 +285,16 @@ fn publish_request(uri: &str, key: &str) -> Request<Body> {
         .header("content-type", "application/json")
         .header("x-idempotency-key", key)
         .body(Body::from(format!("{{\"rules\":[{rule}]}}")))
+        .expect("test request must build")
+}
+
+/// A read-only detail request: the profile the rule editor renders from is
+/// carried here, so no publish is needed to observe it.
+fn detail_request(uri: &str) -> Request<Body> {
+    Request::builder()
+        .method("GET")
+        .uri(uri)
+        .body(Body::empty())
         .expect("test request must build")
 }
 
@@ -661,6 +676,69 @@ async fn ml_family_publish_validates_threshold_metadata() {
     .execute(&pool)
     .await
     .expect("the config revision fixture must be removable");
+
+    cleanup(&pool, &fixture).await;
+}
+
+#[tokio::test]
+#[ignore = "requires migrated local PostgreSQL through 014_policy_administration.sql"]
+async fn family_detail_publishes_the_rule_profile_the_editor_renders_from() {
+    let pool = connect().await;
+    ensure_request_role(&pool).await;
+    let fixture = seed(&pool).await;
+    let state = AdminPolicyState::new(pool.clone(), fixture.deployment_a.clone());
+    let app = policy_admin_router(state).layer(Extension(context(&fixture)));
+
+    let unwired = app
+        .clone()
+        .oneshot(detail_request("/api/v1/policies/spam_filtering"))
+        .await
+        .expect("the detail read must answer");
+    assert_eq!(unwired.status(), StatusCode::OK);
+    let unwired = json_body(unwired).await;
+    let profile = &unwired["data"]["profile"];
+    assert_eq!(profile["enforcement"]["mode"], json!("not_enforced"));
+    assert_eq!(profile["metadata"]["read"], json!(false));
+    let conditions = profile["conditions"]
+        .as_array()
+        .expect("every family lists its condition fieldsets");
+    assert_eq!(
+        conditions.len(),
+        5,
+        "the profile must account for each predicate the shared rule contract carries"
+    );
+    assert!(
+        conditions
+            .iter()
+            .all(|field| field["honoured"] == json!(false)),
+        "no family may claim an evaluated predicate until a stage reads one"
+    );
+
+    let wired = app
+        .oneshot(detail_request("/api/v1/policies/bulk_sending"))
+        .await
+        .expect("the wired detail read must answer");
+    assert_eq!(wired.status(), StatusCode::OK);
+    let profile = &json_body(wired).await["data"]["profile"];
+    assert_eq!(profile["enforcement"]["mode"], json!("outbound_thresholds"));
+    assert_eq!(profile["metadata"]["read"], json!(true));
+    assert_eq!(profile["metadata"]["exact_keys"], json!(true));
+    let keys: Vec<&str> = profile["metadata"]["fields"]
+        .as_array()
+        .expect("threshold fields must be a list")
+        .iter()
+        .map(|field| field["key"].as_str().expect("keys are strings"))
+        .collect();
+    assert_eq!(
+        keys,
+        vec![
+            "max_messages_per_minute",
+            "max_messages_per_hour",
+            "max_recipients_per_message",
+            "max_unique_recipients_per_hour",
+        ],
+        "the form must offer exactly the keys the publish validator accepts"
+    );
 
     cleanup(&pool, &fixture).await;
 }
@@ -1159,4 +1237,30 @@ async fn static_family_catalog_mirrors_the_seeded_table() {
         catalog, seeded,
         "the offline tier gate must mirror the seeded policy_families rows exactly"
     );
+
+    // The same drift proof for the rule profile: a seeded family is presented
+    // as enforced only while a runtime reader actually consumes its revisions.
+    let enforced: Vec<&str> = POLICY_FAMILY_MANAGEMENT_LEVELS
+        .iter()
+        .filter(|(key, _)| rule_profile(key).metadata.read)
+        .map(|(key, _)| *key)
+        .collect();
+    assert_eq!(
+        enforced,
+        vec![
+            "bulk_sending",
+            "ml_threat_classification",
+            "outbound_abuse",
+            "sender_reputation",
+        ],
+        "the profile must name exactly the families whose revisions a stage reads"
+    );
+    for (key, _) in POLICY_FAMILY_MANAGEMENT_LEVELS {
+        let profile = rule_profile(key);
+        assert_eq!(
+            profile.metadata.read,
+            profile.enforcement.mode != EnforcementMode::NotEnforced,
+            "family {key} reports a metadata reader that its enforcement mode denies"
+        );
+    }
 }

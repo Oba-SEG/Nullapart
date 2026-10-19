@@ -36,6 +36,7 @@ pub mod phase2_persistence;
 pub mod pipeline;
 pub mod policy;
 pub mod policy_admin;
+pub mod policy_profile;
 pub mod quarantine;
 pub mod quarantine_api;
 pub mod quarantine_reinjection;

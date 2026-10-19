@@ -48,6 +48,7 @@ use crate::admin_rbac::BUILTIN_ROLES;
 use crate::idempotency::{claim, complete, ClaimOutcome};
 use crate::inline_ml::thresholds::{validate_family_rules, ML_THREAT_CLASSIFICATION_FAMILY};
 use crate::outbound_intelligence::validate_outbound_policy_rules;
+use crate::policy_profile::{rule_profile, RuleProfile};
 
 pub const POLICIES_VIEW_PERMISSION: &str = "policies:view";
 pub const POLICIES_MANAGE_PERMISSION: &str = "policies:manage";
@@ -312,6 +313,12 @@ struct PolicyDetailResponse {
     /// Same published decision input as the list response: the tier this
     /// session resolved to, so the detail editor never re-derives it.
     caller_tier: Option<&'static str>,
+    /// What this family's published rules actually do, which fields the runtime
+    /// reads, and what `action.metadata` accepts. Additive per
+    /// `docs/27-API-VERSIONING-FEATURE-FLAGS.md`: an older console ignores it and
+    /// keeps posting the same rule shape. The editor renders from this instead
+    /// of showing every family the same condition fieldsets.
+    profile: RuleProfile,
 }
 
 #[derive(Serialize)]
@@ -1440,6 +1447,7 @@ async fn get_family(
     }
     let caller_tier = tier_name(caller);
     let summary = active_revision(&active_row);
+    let profile = rule_profile(&family_key);
     let family = FamilySummaryResponse {
         family_key: active_row.0,
         display_name: active_row.1,
@@ -1456,6 +1464,7 @@ async fn get_family(
                 family,
                 revisions,
                 caller_tier,
+                profile,
             },
         }),
     )

@@ -236,3 +236,71 @@
 .policy-detail-check input {
   box-shadow: none;
 }
+
+/* What publishing in this family changes, in the reader's own words. Stated
+   before the rule table because it decides what the table is worth. */
+.policy-detail-enforcement {
+  background-color: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  max-width: 78ch;
+  padding: var(--spacing-3) var(--spacing-4);
+}
+
+.policy-detail-mode-ml_thresholds,
+.policy-detail-mode-outbound_thresholds {
+  background-color: var(--color-chip-accent-bg);
+  color: var(--color-chip-accent-text);
+}
+
+/* A family with no reader is the warning case, so it carries the warning tone. */
+.policy-detail-mode-not_enforced {
+  background-color: var(--color-warning-light);
+  color: var(--color-warning);
+}
+
+/* Predicates the delivery path never evaluates, named before they are filled in. */
+.policy-detail-stored-only {
+  background-color: var(--color-warning-light);
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-md);
+  color: var(--color-warning);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-relaxed);
+  max-width: 78ch;
+  padding: var(--spacing-3);
+}
+
+/* One classifier class: its three band points on one row, removable as a unit. */
+.policy-detail-band {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3);
+}
+
+.policy-detail-band-head {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.policy-detail-band-class {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.policy-detail-band-inputs {
+  display: grid;
+  gap: var(--spacing-3);
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+}

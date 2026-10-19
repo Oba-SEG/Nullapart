@@ -11,8 +11,10 @@
 import {
   decodeOverrideValue,
   type AuthResult,
+  type ConditionFieldName,
   type ConditionScope,
   type Disposition,
+  type EnforcementMode,
   type FindingCategory,
   type FindingSeverity,
   type ManagementLevel,
@@ -55,6 +57,26 @@ export const CONDITION_SCOPE_LABELS: Record<ConditionScope, string> = {
   transaction: "One message",
   tenant: "Everything for this customer",
   recipient: "One recipient",
+};
+
+/** The condition fieldsets in the rule builder, named the way the form names them. */
+export const CONDITION_FIELD_LABELS: Record<ConditionFieldName, string> = {
+  sender: "Sender",
+  recipient: "Recipient",
+  auth: "Authentication",
+  content: "Content",
+  finding: "Scanner findings",
+};
+
+/**
+ * What a stage does with this family's published revisions. The sentence an
+ * operator reads next to it comes from the server, so the claim and the check
+ * are the same code.
+ */
+export const ENFORCEMENT_MODE_LABELS: Record<EnforcementMode, string> = {
+  ml_thresholds: "Sets classifier score bands",
+  outbound_thresholds: "Sets outbound sending limits",
+  not_enforced: "Stored, not enforced",
 };
 
 /**

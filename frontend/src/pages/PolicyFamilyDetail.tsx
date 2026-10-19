@@ -23,6 +23,8 @@ import {
   summarizeCondition,
   tierAllows,
   type AuthResult,
+  type ClassBandEntry,
+  type ConditionFieldProfile,
   type ConditionScope,
   type Disposition,
   type FindingCategory,
@@ -35,6 +37,7 @@ import {
   type RefreshResult,
   type Rule,
   type RuleDraft,
+  type RuleProfile,
   type ScannerType,
   type TriState,
 } from "../api/policies";
@@ -48,9 +51,12 @@ import { Hint } from "../components/primitives/Hint";
 import { Input } from "../components/primitives/Input";
 import { Select } from "../components/primitives/Select";
 import { randomUuid } from "../lib/ids";
+import { humanizeToken } from "../lib/text";
 import {
   AUTH_RESULT_LABELS,
+  CONDITION_FIELD_LABELS,
   CONDITION_SCOPE_LABELS,
+  ENFORCEMENT_MODE_LABELS,
   FINDING_CATEGORY_LABELS,
   FINDING_SEVERITY_LABELS,
   HINTS,
@@ -181,6 +187,210 @@ function CheckGroup<T extends string>({
   );
 }
 
+/** Joins labels so a group of condition names reads as one sentence. */
+function joinLabels(labels: string[]): string {
+  if (labels.length <= 1) return labels[0] ?? "";
+  return `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+}
+
+interface ConditionNoticeProps {
+  conditions: ConditionFieldProfile[];
+}
+
+/**
+ * Which condition groups the delivery path never evaluates, in the words the
+ * server publishes. A family whose predicates are read shows nothing here, so
+ * the warning cannot survive the change that makes conditions real.
+ */
+function ConditionNotice({ conditions }: ConditionNoticeProps) {
+  const byNote = new Map<string, string[]>();
+  for (const entry of conditions) {
+    if (entry.honoured) continue;
+    const labels = byNote.get(entry.note) ?? [];
+    labels.push(CONDITION_FIELD_LABELS[entry.field]);
+    byNote.set(entry.note, labels);
+  }
+  if (byNote.size === 0) return null;
+  return (
+    <div className="policy-detail-stored-only">
+      {[...byNote.entries()].map(([note, labels]) => (
+        <p key={note}>
+          <strong>{joinLabels(labels)}</strong> {labels.length === 1 ? "is" : "are"} recorded on the
+          rule but never evaluated. {note}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+/** Class keys the profile declares, in taxonomy order, minus the ones already banded. */
+function remainingClasses(classes: string[], draft: RuleDraft): string[] {
+  return classes.filter((classKey) => draft.classBands[classKey] === undefined);
+}
+
+/** Keys of a stored payload this family has no form for, so a notice can name them. */
+function storedMetadataKeys(metadata: Record<string, unknown> | undefined): string[] {
+  return metadata === undefined ? [] : Object.keys(metadata);
+}
+
+function classLabel(classKey: string): string {
+  const known = FINDING_CATEGORY_LABELS[classKey as FindingCategory];
+  return known ?? humanizeToken(classKey);
+}
+
+/** Each band point, in the words an operator sets an operating point with. */
+const BAND_PART_LABELS: Record<keyof ClassBandEntry, string> = {
+  low: "Becomes a finding at",
+  medium: "Medium band above",
+  high: "High band above",
+};
+
+interface MetadataFieldsProps {
+  profile: RuleProfile;
+  draft: RuleDraft;
+  errors: Record<string, string | undefined>;
+  showErrors: boolean;
+  onDraftChange: (next: RuleDraft) => void;
+}
+
+/**
+ * The threshold form for one family, built from the keys its runtime reader
+ * actually consumes. `exact_keys` families publish all declared keys or none,
+ * so a partial set is refused here rather than at publish time.
+ */
+function MetadataFields({
+  profile,
+  draft,
+  errors,
+  showErrors,
+  onDraftChange,
+}: MetadataFieldsProps) {
+  const metadata = profile.metadata;
+  if (!metadata.read || metadata.fields.length === 0) return null;
+
+  const bandField = metadata.fields.find((field) => field.kind === "class_bands");
+  const scalarFields = metadata.fields.filter((field) => field.kind !== "class_bands");
+  const setScalar = (key: string, value: string) =>
+    onDraftChange({ ...draft, metadataValues: { ...draft.metadataValues, [key]: value } });
+  const setBand = (classKey: string, part: keyof ClassBandEntry, value: string) => {
+    const current = draft.classBands[classKey] ?? { low: "", medium: "", high: "" };
+    onDraftChange({
+      ...draft,
+      classBands: { ...draft.classBands, [classKey]: { ...current, [part]: value } },
+    });
+  };
+  const addBand = (classKey: string) => {
+    if (classKey.length === 0 || draft.classBands[classKey] !== undefined) return;
+    onDraftChange({
+      ...draft,
+      classBands: { ...draft.classBands, [classKey]: { low: "", medium: "", high: "" } },
+    });
+  };
+  const removeBand = (classKey: string) => {
+    const next = { ...draft.classBands };
+    delete next[classKey];
+    onDraftChange({ ...draft, classBands: next });
+  };
+  const bandedClasses = (bandField?.classes ?? []).filter(
+    (key) => draft.classBands[key] !== undefined,
+  );
+
+  return (
+    <fieldset className="policy-detail-fieldset">
+      <legend>{bandField !== undefined ? bandField.label : "Limits this rule sets"}</legend>
+      <p className="policy-detail-hint">{metadata.merge}</p>
+      {bandField !== undefined ? <p className="policy-detail-hint">{bandField.hint}</p> : null}
+
+      {scalarFields.map((field) => {
+        const value = draft.metadataValues[field.key] ?? "";
+        const error = showErrors || value.trim().length > 0 ? errors[field.key] : undefined;
+        return (
+          <Input
+            key={field.key}
+            label={field.label}
+            type="number"
+            min={field.min ?? undefined}
+            max={field.max ?? undefined}
+            step="any"
+            value={value}
+            placeholder={field.default === null ? undefined : String(field.default)}
+            onChange={(event) => setScalar(field.key, event.target.value)}
+            error={error}
+            hint={
+              field.default === null
+                ? field.hint
+                : `${field.hint} Left empty, the built-in ${field.default} stays in force.`
+            }
+          />
+        );
+      })}
+
+      {bandField !== undefined ? (
+        <>
+          {bandedClasses.map((classKey) => {
+            const entry = draft.classBands[classKey] ?? { low: "", medium: "", high: "" };
+            const rowError =
+              showErrors || entry.low.length + entry.medium.length + entry.high.length > 0
+                ? errors[`${bandField.key}:${classKey}`]
+                : undefined;
+            return (
+              <div className="policy-detail-band" key={classKey}>
+                <div className="policy-detail-band-head">
+                  <span className="policy-detail-band-class">{classLabel(classKey)}</span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => removeBand(classKey)}
+                  >
+                    Remove class
+                  </Button>
+                </div>
+                <div className="policy-detail-band-inputs">
+                  {(["low", "medium", "high"] as const).map((part) => (
+                    <Input
+                      key={part}
+                      label={BAND_PART_LABELS[part]}
+                      type="number"
+                      min={bandField.min ?? undefined}
+                      max={bandField.max ?? undefined}
+                      step="any"
+                      value={entry[part]}
+                      onChange={(event) => setBand(classKey, part, event.target.value)}
+                    />
+                  ))}
+                </div>
+                {rowError ? (
+                  <p className="policy-detail-error" role="alert">
+                    {rowError}
+                  </p>
+                ) : null}
+              </div>
+            );
+          })}
+          {remainingClasses(bandField.classes ?? [], draft).length > 0 ? (
+            <Select
+              label="Add a class band"
+              value=""
+              options={[
+                { value: "", label: "Choose a class" },
+                ...remainingClasses(bandField.classes ?? [], draft).map((classKey) => ({
+                  value: classKey,
+                  label: classLabel(classKey),
+                })),
+              ]}
+              onChange={(event) => addBand(event.target.value)}
+              hint="Only the classes you add are published. A class with no band produces no finding."
+            />
+          ) : (
+            <p className="policy-detail-hint">Every class already has a band row.</p>
+          )}
+        </>
+      ) : null}
+    </fieldset>
+  );
+}
+
 export function PolicyFamilyDetail() {
   const { familyKey = "" } = useParams({ from: "/policies/$familyKey" });
   const queryClient = useQueryClient();
@@ -204,6 +414,10 @@ export function PolicyFamilyDetail() {
   // The tier comes from the server with the family, never re-derived from role
   // names here, so a custom role reaches the same conclusion in UI and API.
   const callerTier = detail.data?.caller_tier ?? null;
+  // Every threshold field, predicate note and enforcement sentence below comes
+  // from this server-published profile, so the form cannot offer a field the
+  // delivery path would ignore.
+  const profile = detail.data?.profile ?? null;
   const mayPublish =
     canManage && family !== null && tierAllows(callerTier, family.management_level);
 
@@ -265,7 +479,7 @@ export function PolicyFamilyDetail() {
   });
 
   function openEditor(rule?: Rule) {
-    setEditing(rule ? draftFromRule(rule) : newRuleDraft());
+    setEditing(rule ? draftFromRule(rule, profile ?? undefined) : newRuleDraft());
     setShowErrors(false);
   }
 
@@ -276,11 +490,11 @@ export function PolicyFamilyDetail() {
 
   function saveRule() {
     if (!editing) return;
-    if (!isDraftValid(editing)) {
+    if (!isDraftValid(editing, profile ?? undefined)) {
       setShowErrors(true);
       return;
     }
-    const rule = ruleFromDraft(editing);
+    const rule = ruleFromDraft(editing, profile ?? undefined);
     setRules((previous) => {
       const list = previous ?? [];
       const exists = list.some((entry) => entry.id === rule.id);
@@ -316,7 +530,7 @@ export function PolicyFamilyDetail() {
     publish.mutate({ rules: ordered });
   }
 
-  const errors = editing ? draftErrors(editing) : {};
+  const errors = editing ? draftErrors(editing, profile ?? undefined) : {};
   const thresholdClearWarning = publishWouldClearMlThresholds(familyKey, rules);
   const nameError =
     showErrors || (editing !== null && editing.name.length > 0) ? errors.name : undefined;
@@ -332,6 +546,9 @@ export function PolicyFamilyDetail() {
     family?.management_level === "system"
       ? OVERRIDE_SCOPE_LABELS.system
       : OVERRIDE_SCOPE_LABELS.tenant;
+  // Whether the rules table column is a matcher or only stored data, decided by
+  // the reader the server names rather than by the column's traditional label.
+  const evaluatesConditions = profile?.conditions.some((entry) => entry.honoured) ?? true;
 
   // The tier in these sentences comes from the server, so the reason an
   // operator reads is the same reason the API applied.
@@ -535,6 +752,18 @@ export function PolicyFamilyDetail() {
           </p>
         ) : null}
 
+        {profile ? (
+          <div className="policy-detail-enforcement">
+            <span className={`policy-detail-badge policy-detail-mode-${profile.enforcement.mode}`}>
+              {ENFORCEMENT_MODE_LABELS[profile.enforcement.mode]}
+            </span>
+            <p className="policy-detail-hint">{profile.enforcement.summary}</p>
+            {profile.metadata.read ? (
+              <p className="policy-detail-hint">{profile.metadata.merge}</p>
+            ) : null}
+          </div>
+        ) : null}
+
         {publishNotice ? (
           <p className="policy-detail-notice" role="status">
             {publishNotice}
@@ -577,7 +806,7 @@ export function PolicyFamilyDetail() {
                   <th scope="col">Name</th>
                   <th scope="col">Order</th>
                   <th scope="col">Status</th>
-                  <th scope="col">Matches when</th>
+                  <th scope="col">{evaluatesConditions ? "Matches when" : "Conditions, stored"}</th>
                   <th scope="col">Does</th>
                   <th scope="col">Reason code</th>
                   {mayPublish ? <th scope="col">Actions</th> : null}
@@ -697,6 +926,8 @@ export function PolicyFamilyDetail() {
                 }
               />
             </fieldset>
+
+            {profile ? <ConditionNotice conditions={profile.conditions} /> : null}
 
             <fieldset className="policy-detail-fieldset">
               <legend>Sender</legend>
@@ -885,6 +1116,24 @@ export function PolicyFamilyDetail() {
                 }
               />
             </fieldset>
+
+            {profile ? (
+              <MetadataFields
+                profile={profile}
+                draft={editing}
+                errors={errors}
+                showErrors={showErrors}
+                onDraftChange={setEditing}
+              />
+            ) : null}
+
+            {!profile?.metadata.read && storedMetadataKeys(editing.actionMetadata).length > 0 ? (
+              <p className="policy-detail-hint">
+                This rule already carries{" "}
+                <code>{storedMetadataKeys(editing.actionMetadata).join(", ")}</code> in its action
+                data. Nothing in this family reads it, and saving keeps it unchanged.
+              </p>
+            ) : null}
 
             <div className="policy-detail-form-actions">
               <Button type="button" variant="ghost" onClick={closeEditor}>

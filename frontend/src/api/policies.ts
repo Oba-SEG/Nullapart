@@ -124,7 +124,63 @@ export interface PolicyDetail {
   revisions: PolicyRevision[];
   /** Resolved server-side from this session's roles; null when it carries none. */
   caller_tier: ManagementLevel | null;
+  /** What this family's published rules actually do. The editor renders its
+   * condition and threshold sections from this instead of showing every family
+   * the same fields. */
+  profile: RuleProfile;
 }
+
+// ---------------------------------------------------------------------------
+// Per-family rule profile (published by `nullapart_mail_core::policy_profile`)
+// ---------------------------------------------------------------------------
+
+export type EnforcementMode = "ml_thresholds" | "outbound_thresholds" | "not_enforced";
+export type ConditionFieldName = "sender" | "recipient" | "auth" | "content" | "finding";
+export type MetadataFieldKind = "count" | "minutes" | "ratio" | "class_bands";
+
+export interface EnforcementProfile {
+  mode: EnforcementMode;
+  summary: string;
+}
+
+export interface ConditionFieldProfile {
+  field: ConditionFieldName;
+  /** False means the delivery path never evaluates this predicate here. */
+  honoured: boolean;
+  note: string;
+}
+
+export interface MetadataFieldProfile {
+  key: string;
+  label: string;
+  kind: MetadataFieldKind;
+  min: number | null;
+  max: number | null;
+  /** The built-in operating point used when the key is absent. */
+  default: number | null;
+  /** Accepted class keys, present only for `class_bands`. */
+  classes?: string[];
+  hint: string;
+}
+
+export interface MetadataProfile {
+  read: boolean;
+  /** When metadata is present it must carry exactly the listed keys. */
+  exact_keys: boolean;
+  metadata_optional: boolean;
+  merge: string;
+  fields: MetadataFieldProfile[];
+}
+
+export interface RuleProfile {
+  enforcement: EnforcementProfile;
+  conditions: ConditionFieldProfile[];
+  metadata: MetadataProfile;
+}
+
+/** The single `action.metadata` key the inline classifier reads. */
+export const ML_THRESHOLDS_KEY = "thresholds";
+export const ML_THRESHOLDS_PAYLOAD_VERSION = 1;
 
 export interface PolicyList {
   families: PolicyFamily[];
@@ -287,6 +343,16 @@ export interface RuleDraft {
   reasonCode: string;
   notify: NotifyTarget[];
   actionMetadata?: Record<string, unknown>;
+  /** Text value per scalar `action.metadata` key the family profile declares. */
+  metadataValues: Record<string, string>;
+  /** Per-class operating points for a `class_bands` profile, set classes only. */
+  classBands: Record<string, ClassBandEntry>;
+}
+
+export interface ClassBandEntry {
+  low: string;
+  medium: string;
+  high: string;
 }
 
 const REASON_CODE_PATTERN = /^[A-Z0-9_]{1,64}$/;
@@ -361,27 +427,189 @@ export function toCondition(draft: RuleDraft): RuleCondition {
   return condition;
 }
 
-function toAction(draft: RuleDraft): RuleAction {
+// ---------------------------------------------------------------------------
+// Profile-driven action metadata
+// ---------------------------------------------------------------------------
+
+function numericText(value: unknown): string {
+  return typeof value === "number" && Number.isFinite(value) ? String(value) : "";
+}
+
+function scalarFields(profile: RuleProfile): MetadataFieldProfile[] {
+  return profile.metadata.fields.filter((field) => field.kind !== "class_bands");
+}
+
+function bandField(profile: RuleProfile): MetadataFieldProfile | undefined {
+  return profile.metadata.fields.find((field) => field.kind === "class_bands");
+}
+
+/** Reads the scalar threshold values a stored rule carries for this family. */
+export function scalarsFromMetadata(
+  profile: RuleProfile,
+  metadata: Record<string, unknown> | undefined,
+): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const field of scalarFields(profile)) {
+    values[field.key] = numericText(metadata?.[field.key]);
+  }
+  return values;
+}
+
+/**
+ * Reads the per-class bands from a stored `thresholds` payload. A payload the
+ * server would reject reads back as unset rather than half-populated, so the
+ * operator sees the fields they must fill instead of an editor showing numbers
+ * that cannot publish.
+ */
+export function classBandsFromMetadata(
+  profile: RuleProfile,
+  metadata: Record<string, unknown> | undefined,
+): Record<string, ClassBandEntry> {
+  const field = bandField(profile);
+  const result: Record<string, ClassBandEntry> = {};
+  if (field === undefined) return result;
+  const payload = metadata?.[field.key];
+  if (typeof payload !== "object" || payload === null) return result;
+  const classes = (payload as Record<string, unknown>).classes;
+  if (typeof classes !== "object" || classes === null) return result;
+  for (const classKey of field.classes ?? []) {
+    const entry = (classes as Record<string, unknown>)[classKey];
+    if (typeof entry !== "object" || entry === null) continue;
+    const record = entry as Record<string, unknown>;
+    const low = numericText(record.low);
+    const medium = numericText(record.medium);
+    const high = numericText(record.high);
+    if (low.length === 0 || medium.length === 0 || high.length === 0) continue;
+    if (classBandError(low, medium, high) !== undefined) continue;
+    result[classKey] = { low, medium, high };
+  }
+  return result;
+}
+
+/** Mirrors `valid_class_threshold` in the classifier's threshold parser. */
+function classBandError(low: string, medium: string, high: string): string | undefined {
+  const values = [low, medium, high].map(Number);
+  if (values.some((value) => !Number.isFinite(value))) {
+    return "Enter a score between 0 and 1.";
+  }
+  const [lowValue, mediumValue, highValue] = values;
+  if (!(lowValue > 0)) return "The operating point must be above 0.";
+  if (!(lowValue <= mediumValue && mediumValue <= highValue)) {
+    return "Bands must rise: low at or below medium, medium at or below high.";
+  }
+  if (highValue > 1) return "Bands cannot exceed 1.";
+  return undefined;
+}
+
+function scalarFieldError(field: MetadataFieldProfile, raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return `${field.label} is required when any threshold is set.`;
+  const value = Number(trimmed);
+  if (!Number.isFinite(value)) return `${field.label} must be a number.`;
+  if (field.kind === "ratio") {
+    if (!(value > 0)) return `${field.label} must be above 0.`;
+    if (field.max !== null && value > field.max)
+      return `${field.label} cannot exceed ${field.max}.`;
+    return undefined;
+  }
+  if (!Number.isInteger(value)) return `${field.label} must be a whole number.`;
+  if (field.min !== null && value < field.min)
+    return `${field.label} must be at least ${field.min}.`;
+  if (field.max !== null && value > field.max) return `${field.label} cannot exceed ${field.max}.`;
+  return undefined;
+}
+
+/**
+ * Builds the `action.metadata` object this family accepts, plus the per-key
+ * errors that stop it. A profile with `exact_keys` cannot be published half
+ * filled, so any value set makes every declared key required; leaving them all
+ * blank publishes no metadata, which keeps the built-in defaults.
+ * Error keys are the metadata key, or `<key>:<class>` for one band row.
+ */
+export function metadataFromDraft(
+  profile: RuleProfile,
+  draft: RuleDraft,
+): { metadata?: Record<string, unknown>; errors: Record<string, string> } {
+  const errors: Record<string, string> = {};
+  const fields = profile.metadata.fields;
+  if (!profile.metadata.read || fields.length === 0) {
+    // Nothing reads this family's metadata, so a stored payload is kept exactly
+    // as it is rather than discarded by an editor that cannot interpret it.
+    return draft.actionMetadata && hasEntries(draft.actionMetadata)
+      ? { metadata: structuredClone(draft.actionMetadata), errors }
+      : { errors };
+  }
+
+  const scalars = scalarFields(profile);
+  const setScalars = scalars.filter((field) => draft.metadataValues[field.key]?.trim().length > 0);
+  const metadata: Record<string, unknown> = {};
+
+  if (setScalars.length > 0) {
+    const scalarErrors: [string, string][] = [];
+    const values: Record<string, number> = {};
+    for (const field of scalars) {
+      const error = scalarFieldError(field, draft.metadataValues[field.key] ?? "");
+      if (error !== undefined) scalarErrors.push([field.key, error]);
+      else values[field.key] = Number(draft.metadataValues[field.key].trim());
+    }
+    // `exact_keys` means a partial object is a rejected publish, not a rule that
+    // keeps the defaults for the keys left out. Refusing the whole set here is
+    // what stops Save from writing a rule the server cannot accept.
+    if (scalarErrors.length === 0) Object.assign(metadata, values);
+    else for (const [key, error] of scalarErrors) errors[key] = error;
+  }
+
+  const bands = bandField(profile);
+  if (bands !== undefined) {
+    const entries = Object.entries(draft.classBands);
+    if (entries.length > 0) {
+      const classes: Record<string, { low: number; medium: number; high: number }> = {};
+      for (const [classKey, entry] of entries) {
+        const error = classBandError(entry.low, entry.medium, entry.high);
+        if (error !== undefined) errors[`${bands.key}:${classKey}`] = error;
+        else
+          classes[classKey] = {
+            low: Number(entry.low),
+            medium: Number(entry.medium),
+            high: Number(entry.high),
+          };
+      }
+      const bandErrors = Object.keys(errors).some((key) => key.startsWith(`${bands.key}:`));
+      if (!bandErrors && Object.keys(classes).length > 0) {
+        metadata[bands.key] = { version: ML_THRESHOLDS_PAYLOAD_VERSION, classes };
+      }
+    }
+  }
+
+  return Object.keys(metadata).length > 0 ? { metadata, errors } : { errors };
+}
+
+function toAction(draft: RuleDraft, metadata: Record<string, unknown> | undefined): RuleAction {
   const action: RuleAction = {
     disposition: draft.disposition,
     reason_code: draft.reasonCode,
   };
   if (draft.notify.length > 0) action.notify = draft.notify;
-  if (draft.actionMetadata && hasEntries(draft.actionMetadata)) {
-    action.metadata = structuredClone(draft.actionMetadata);
+  if (metadata && hasEntries(metadata)) {
+    action.metadata = structuredClone(metadata);
   }
   return action;
 }
 
 /** Builds the wire `Rule` from structured editor state. */
-export function ruleFromDraft(draft: RuleDraft): Rule {
+export function ruleFromDraft(draft: RuleDraft, profile?: RuleProfile): Rule {
+  // With a profile the metadata is rebuilt from the family's own form, so
+  // clearing every threshold really does drop the key instead of leaving a
+  // stale payload from the revision that was loaded.
+  const metadata =
+    profile === undefined ? draft.actionMetadata : metadataFromDraft(profile, draft).metadata;
   return {
     id: draft.id,
     name: draft.name.trim(),
     priority: draft.priority,
     enabled: draft.enabled,
     condition: toCondition(draft),
-    action: toAction(draft),
+    action: toAction(draft, metadata),
   };
 }
 
@@ -394,8 +622,9 @@ function triState(value: boolean | undefined): TriState {
 }
 
 /** Converts a stored rule back into structured editor state. */
-export function draftFromRule(rule: Rule): RuleDraft {
+export function draftFromRule(rule: Rule, profile?: RuleProfile): RuleDraft {
   const condition = rule.condition;
+  const metadata = rule.action.metadata;
   return {
     id: rule.id,
     name: rule.name,
@@ -423,7 +652,9 @@ export function draftFromRule(rule: Rule): RuleDraft {
     disposition: rule.action.disposition,
     reasonCode: rule.action.reason_code,
     notify: rule.action.notify ?? [],
-    actionMetadata: rule.action.metadata ? structuredClone(rule.action.metadata) : undefined,
+    actionMetadata: metadata ? structuredClone(metadata) : undefined,
+    metadataValues: profile === undefined ? {} : scalarsFromMetadata(profile, metadata),
+    classBands: profile === undefined ? {} : classBandsFromMetadata(profile, metadata),
   };
 }
 
@@ -456,6 +687,8 @@ export function newRuleDraft(): RuleDraft {
     reasonCode: "",
     notify: [],
     actionMetadata: undefined,
+    metadataValues: {},
+    classBands: {},
   };
 }
 
@@ -488,23 +721,32 @@ export function reasonCodeError(value: string): string | undefined {
   return undefined;
 }
 
-export function draftErrors(draft: RuleDraft): {
+/**
+ * Editor validation problems. The three rule-identity fields are named because
+ * the form always shows them; every other key is a profile-driven one: a
+ * metadata key, or `<key>:<class>` for one classifier band row.
+ */
+export interface DraftErrors {
   name?: string;
   priority?: string;
   reasonCode?: string;
-} {
-  const errors: { name?: string; priority?: string; reasonCode?: string } = {};
+  [key: string]: string | undefined;
+}
+
+export function draftErrors(draft: RuleDraft, profile?: RuleProfile): DraftErrors {
+  const errors: DraftErrors = {};
   const name = ruleNameError(draft.name);
   const priority = priorityError(draft.priority);
   const reasonCode = reasonCodeError(draft.reasonCode);
   if (name !== undefined) errors.name = name;
   if (priority !== undefined) errors.priority = priority;
   if (reasonCode !== undefined) errors.reasonCode = reasonCode;
+  if (profile !== undefined) Object.assign(errors, metadataFromDraft(profile, draft).errors);
   return errors;
 }
 
-export function isDraftValid(draft: RuleDraft): boolean {
-  return Object.keys(draftErrors(draft)).length === 0;
+export function isDraftValid(draft: RuleDraft, profile?: RuleProfile): boolean {
+  return Object.keys(draftErrors(draft, profile)).length === 0;
 }
 
 /** Evaluation order: higher priority is evaluated first. */

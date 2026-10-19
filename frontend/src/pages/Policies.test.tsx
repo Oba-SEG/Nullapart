@@ -139,6 +139,100 @@ const systemDetail = {
   ],
 };
 
+// The per-family profile the detail endpoint publishes. These mirror
+// `nullapart_mail_core::policy_profile::rule_profile` for an unwired family, an
+// outbound limit family and the inline classifier, which is what the editor
+// renders its threshold fields and predicate warnings from.
+const CONDITION_FIELDS = ["sender", "recipient", "auth", "content", "finding"] as const;
+const NO_READER_NOTE =
+  "No stage reads this family's published rules, so nothing here can match or miss.";
+const READER_NOTE =
+  "The reader for this family uses only enabled rules and their thresholds, and never evaluates a condition.";
+
+function unreadConditions(note: string) {
+  return CONDITION_FIELDS.map((field) => ({ field, honoured: false, note }));
+}
+
+const unwiredProfile = {
+  enforcement: {
+    mode: "not_enforced",
+    summary:
+      "Nothing reads this family's published rules yet. A revision is stored, audited and versioned, but it changes no delivery decision.",
+  },
+  conditions: unreadConditions(NO_READER_NOTE),
+  metadata: {
+    read: false,
+    exact_keys: false,
+    metadata_optional: true,
+    merge: "No reader, so metadata is stored but never applied.",
+    fields: [],
+  },
+};
+
+const bulkProfile = {
+  enforcement: {
+    mode: "outbound_thresholds",
+    summary:
+      "Enabled rules override the outbound intelligence operating points. Sender approval state and behaviour still decide which of them is compared.",
+  },
+  conditions: unreadConditions(READER_NOTE),
+  metadata: {
+    read: true,
+    exact_keys: true,
+    metadata_optional: true,
+    merge:
+      "Enabled rules apply in revision order and each overwrites the keys it sets, so the last enabled rule to set a key decides it.",
+    fields: [
+      {
+        key: "max_messages_per_minute",
+        label: "Messages per minute",
+        kind: "count",
+        min: 1,
+        max: 4294967295,
+        default: 25,
+        hint: "Whole number above zero. Omit the key to keep the built-in default.",
+      },
+      {
+        key: "max_messages_per_hour",
+        label: "Messages per hour",
+        kind: "count",
+        min: 1,
+        max: 4294967295,
+        default: 100,
+        hint: "Whole number above zero. Omit the key to keep the built-in default.",
+      },
+    ],
+  },
+};
+
+const mlProfile = {
+  enforcement: {
+    mode: "ml_thresholds",
+    summary:
+      "Enabled rules set the inline classifier's per-class score bands. The stage reports an explicit warning when no rule carries a threshold payload.",
+  },
+  conditions: unreadConditions(READER_NOTE),
+  metadata: {
+    read: true,
+    exact_keys: true,
+    metadata_optional: true,
+    merge:
+      "Enabled rules are ordered by priority and the first rule that defines a class sets its bands; a later rule cannot change a class an earlier rule already set.",
+    fields: [
+      {
+        key: "thresholds",
+        label: "Per-class score bands",
+        kind: "class_bands",
+        min: 0,
+        max: 1,
+        default: null,
+        classes: ["malware", "phishing"],
+        hint: "Scores run from 0 to 1. A class needs three rising points.",
+      },
+    ],
+  },
+};
+
 function ok(body: unknown, status = 200) {
   return {
     ok: true,
@@ -477,6 +571,106 @@ describe("Policies", () => {
 
     expect(screen.getByLabelText("Rule name")).toBeTruthy();
     expect(screen.queryByText("Bad code rule")).toBeNull();
+  });
+
+  it("states what publishing in a family with no reader changes", async () => {
+    stubFetch({
+      session: adminSession,
+      detail: { ...customerDetail, profile: unwiredProfile },
+    });
+    renderAt("/policies/attachments");
+    await screen.findByText("Quarantine external attachments");
+
+    expect(screen.getByText("Stored, not enforced")).toBeTruthy();
+    expect(screen.getByText(/it changes no delivery decision/)).toBeTruthy();
+    // The rule table stops calling a stored predicate a matcher.
+    expect(screen.getByText("Conditions, stored")).toBeTruthy();
+  });
+
+  it("says in the rule dialog which predicates the reader never evaluates", async () => {
+    stubFetch({
+      session: adminSession,
+      detail: { ...customerDetail, profile: bulkProfile },
+    });
+    const user = userEvent.setup();
+    renderAt("/policies/attachments");
+    await screen.findByText("Quarantine external attachments");
+
+    await user.click(screen.getByRole("button", { name: "Add rule" }));
+    expect(screen.getByText(/recorded on the rule but never evaluated/)).toBeTruthy();
+    expect(
+      screen.getByText("Sender, Recipient, Authentication, Content and Scanner findings"),
+    ).toBeTruthy();
+  });
+
+  it("renders the limits this family publishes and refuses a half-filled set", async () => {
+    stubFetch({
+      session: adminSession,
+      detail: { ...customerDetail, profile: bulkProfile },
+    });
+    const user = userEvent.setup();
+    renderAt("/policies/attachments");
+    await screen.findByText("Quarantine external attachments");
+
+    await user.click(screen.getByRole("button", { name: "Add rule" }));
+    await user.type(screen.getByLabelText("Rule name"), "Cap the sender rate");
+    await user.type(screen.getByLabelText("Reason code"), "DEFER_RATE");
+    await user.type(screen.getByLabelText("Messages per minute"), "10");
+
+    // An untouched sibling is not scolded before the operator tries to save.
+    await user.click(screen.getByRole("button", { name: "Save rule" }));
+    expect(
+      await screen.findByText(/Messages per hour is required when any threshold/),
+    ).toBeTruthy();
+    expect(screen.queryByText("Cap the sender rate")).toBeNull();
+
+    await user.type(screen.getByLabelText("Messages per hour"), "40");
+    expect(screen.queryByText(/is required when any threshold/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Save rule" }));
+    expect(await screen.findByText("Cap the sender rate")).toBeTruthy();
+  });
+
+  it("builds the classifier score bands a banded family reads", async () => {
+    const fetchMock = stubFetch({
+      session: adminSession,
+      detail: { ...customerDetail, profile: mlProfile },
+      published: {
+        family_key: "attachments",
+        revision_number: 4,
+        published_at: "2026-01-06T10:00:00Z",
+        rules_count: 2,
+      },
+    });
+    const user = userEvent.setup();
+    renderAt("/policies/attachments");
+    await screen.findByText("Quarantine external attachments");
+
+    await user.click(screen.getByRole("button", { name: "Add rule" }));
+    await user.type(screen.getByLabelText("Rule name"), "Band malware");
+    await user.type(screen.getByLabelText("Reason code"), "ML_MALWARE");
+    await user.selectOptions(screen.getByLabelText("Add a class band"), "malware");
+
+    await user.type(screen.getByLabelText("Becomes a finding at"), "0.4");
+    await user.type(screen.getByLabelText("Medium band above"), "0.7");
+    await user.type(screen.getByLabelText("High band above"), "0.9");
+    await user.click(screen.getByRole("button", { name: "Save rule" }));
+
+    await user.click(screen.getByRole("button", { name: "Publish revision" }));
+    await user.click(screen.getByRole("button", { name: "Confirm publish" }));
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([input, init]) =>
+          String(input).endsWith("/policies/attachments/revisions") && init?.method === "POST",
+      );
+      const body = JSON.parse(String(call?.[1]?.body)) as {
+        rules: { action: { metadata?: Record<string, unknown> } }[];
+      };
+      const banded = body.rules.find((rule) => rule.action.metadata !== undefined);
+      expect(banded?.action.metadata).toEqual({
+        thresholds: { version: 1, classes: { malware: { low: 0.4, medium: 0.7, high: 0.9 } } },
+      });
+    });
   });
 
   it("renders the revision history for the family", async () => {
