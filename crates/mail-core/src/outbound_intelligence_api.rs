@@ -28,7 +28,7 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::admin_audit::{source_ip_from, AuditEventRecord, PostgresAuditStore};
-use crate::admin_rbac::{SUPPORT_ROLE, SYSTEM_ADMIN_ROLE};
+use crate::admin_rbac::platform_placement;
 use crate::idempotency::{claim, complete, ClaimOutcome};
 
 pub const OUTBOUND_INTELLIGENCE_VIEW_PERMISSION: &str = "outbound-intelligence:view";
@@ -888,19 +888,6 @@ fn has_permission(context: &TenantContext, permission: &str) -> bool {
         .any(|granted| granted == permission)
 }
 
-/// Whether this read comes from a platform seat rather than a customer console.
-/// Permission decides what a caller may read; placement decides whose words the
-/// answer is written in. An operator sitting in a customer's console through
-/// impersonation is answered as that customer.
-fn platform_placement(context: &TenantContext) -> bool {
-    context.impersonation.is_none()
-        && context
-            .actor
-            .roles
-            .iter()
-            .any(|role| role == SYSTEM_ADMIN_ROLE || role == SUPPORT_ROLE)
-}
-
 async fn set_scope(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     deployment_id: &str,
@@ -1072,6 +1059,8 @@ mod tests {
     use axum::{body::Body, http::Request, Extension};
     use nullapart_mail_contracts::ActorId;
     use nullapart_policy::{AuthenticationAssurance, ContextActor, ImpersonationContext, RegionId};
+
+    use crate::admin_rbac::{SUPPORT_ROLE, SYSTEM_ADMIN_ROLE};
     use sqlx::postgres::PgPoolOptions;
     use tower::ServiceExt;
 

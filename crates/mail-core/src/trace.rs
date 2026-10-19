@@ -18,6 +18,12 @@
 //! `ContentReview` artifact grant; every content access audits
 //! `trace_content_accessed` as success, denied or failed and never records
 //! message bytes.
+//!
+//! The session detail projection is written for the seat reading it. A customer
+//! trace names the message and what happened to it; the installation reference,
+//! the content deduplication hash, the MTA queue identifiers and the log
+//! correlation id are the platform's own machinery, so they are carried only for
+//! a platform placement.
 
 use std::{
     collections::HashMap,
@@ -55,7 +61,7 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::admin_audit::{source_ip_from, AuditEventRecord, AuditStore, PostgresAuditStore};
-use crate::admin_rbac::{TRACE_CONTENT_PERMISSION, TRACE_VIEW_PERMISSION};
+use crate::admin_rbac::{platform_placement, TRACE_CONTENT_PERMISSION, TRACE_VIEW_PERMISSION};
 #[cfg(test)]
 use crate::artifact_store::FilesystemArtifactRuntime;
 use crate::artifact_store::{
@@ -328,6 +334,8 @@ struct TraceDeliveryAttemptResponse {
     scheduled_at: Option<DateTime<Utc>>,
     completed_at: Option<DateTime<Utc>>,
     next_retry_at: Option<DateTime<Utc>>,
+    /// The MTA's queue identifier for this attempt; absent for a customer
+    /// placement.
     postfix_queue_id: Option<String>,
 }
 
@@ -412,15 +420,23 @@ struct WorkloadTransactionDetail {
 #[derive(Serialize)]
 struct TransactionDetail {
     transaction_id: String,
+    /// Platform log correlation id; absent for a customer placement.
     trace_id: Option<String>,
     direction: String,
-    deployment_id: String,
+    /// Which installation handled the transaction; absent for a customer
+    /// placement, because a customer's trace does not name the machine it ran on.
+    deployment_id: Option<String>,
     envelope_sender: String,
     message_id: Option<String>,
-    content_hash: String,
+    /// Content deduplication hash; absent for a customer placement. It is how the
+    /// platform recognises a body it has already scanned, not something a customer
+    /// can act on.
+    content_hash: Option<String>,
     received_at: DateTime<Utc>,
     recipients: Vec<TraceRecipientResponse>,
     auth: TraceAuthResults,
+    /// MTA queue identifiers; empty for a customer placement. The attempt status,
+    /// SMTP code and timing stay, which is what a customer needs about a delivery.
     postfix_queue_ids: Vec<String>,
     instances: Vec<TraceInstanceResponse>,
     delivery_attempts: Vec<TraceDeliveryAttemptResponse>,
@@ -1004,6 +1020,7 @@ async fn session_transaction_detail(
     context: &TenantContext,
     transaction_id: Uuid,
 ) -> Result<TransactionDetail, Response> {
+    let platform = platform_placement(context);
     let mut transaction = state.0.pool.begin().await.map_err(|_| unavailable())?;
     set_scope(
         &mut transaction,
@@ -1090,7 +1107,11 @@ async fn session_transaction_detail(
             scheduled_at: row.get("scheduled_at"),
             completed_at: row.get("completed_at"),
             next_retry_at: row.get("next_retry_at"),
-            postfix_queue_id: row.get("postfix_queue_id"),
+            postfix_queue_id: if platform {
+                row.get("postfix_queue_id")
+            } else {
+                None
+            },
         })
         .collect();
     let findings: Vec<TraceFindingResponse> = finding_rows
@@ -1108,15 +1129,20 @@ async fn session_transaction_detail(
         .collect();
 
     let base = session.base;
+    let queue_ids = if platform {
+        session.postfix_queue_ids
+    } else {
+        Vec::new()
+    };
     Ok(TransactionDetail {
         flow_stages: session_flow_stages(base.received_at, &instances, &delivery_attempts),
         transaction_id: base.transaction_id.to_string(),
-        trace_id: base.trace_id,
+        trace_id: if platform { base.trace_id } else { None },
         direction: base.direction,
-        deployment_id: base.deployment_id,
+        deployment_id: platform.then_some(base.deployment_id),
         envelope_sender: base.envelope_sender,
         message_id: base.message_id,
-        content_hash: base.content_hash,
+        content_hash: platform.then_some(base.content_hash),
         received_at: base.received_at,
         recipients,
         auth: TraceAuthResults {
@@ -1125,7 +1151,7 @@ async fn session_transaction_detail(
             dmarc_result: session.dmarc_result,
             arc_result: session.arc_result,
         },
-        postfix_queue_ids: session.postfix_queue_ids,
+        postfix_queue_ids: queue_ids,
         instances,
         delivery_attempts,
         findings,

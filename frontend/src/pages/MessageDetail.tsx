@@ -172,6 +172,10 @@ export function MessageDetail() {
   const linkedCases = data
     ? data.instances.filter((instance) => isQuarantineLinked(instance.disposition))
     : [];
+  const queueIds = data?.postfix_queue_ids ?? [];
+  const hasAttemptQueueIds = data
+    ? data.delivery_attempts.some((attempt) => attempt.postfix_queue_id !== null)
+    : false;
 
   return (
     <div className="detail-page">
@@ -289,8 +293,12 @@ export function MessageDetail() {
               <dd>{data.envelope_sender ?? "—"}</dd>
               <dt>Message ID</dt>
               <dd className="detail-mono">{data.message_id ?? "—"}</dd>
-              <dt>Content hash</dt>
-              <dd className="detail-mono">{data.content_hash ?? "—"}</dd>
+              {data.content_hash ? (
+                <>
+                  <dt>Content hash</dt>
+                  <dd className="detail-mono">{data.content_hash}</dd>
+                </>
+              ) : null}
               <dt>Received</dt>
               <dd>{formatTimestamp(data.received_at)}</dd>
             </dl>
@@ -379,20 +387,18 @@ export function MessageDetail() {
             )}
           </section>
 
-          <section className="card" aria-label="Delivery queue IDs">
-            <h2 className="detail-section-title">Delivery queue IDs</h2>
-            {data.postfix_queue_ids.length === 0 ? (
-              <p className="detail-subtitle">No queue IDs are recorded.</p>
-            ) : (
+          {queueIds.length > 0 ? (
+            <section className="card" aria-label="Delivery queue IDs">
+              <h2 className="detail-section-title">Delivery queue IDs</h2>
               <ul className="detail-queue-list">
-                {data.postfix_queue_ids.map((queueId) => (
+                {queueIds.map((queueId) => (
                   <li key={queueId} className="detail-mono">
                     {queueId}
                   </li>
                 ))}
               </ul>
-            )}
-          </section>
+            </section>
+          ) : null}
 
           <section className="card" aria-label="Customer copies">
             <h2 className="detail-section-title">Customer copies</h2>
@@ -466,7 +472,7 @@ export function MessageDetail() {
                       <th>Scheduled</th>
                       <th>Completed</th>
                       <th>Next retry</th>
-                      <th>Queue ID</th>
+                      {hasAttemptQueueIds ? <th>Queue ID</th> : null}
                     </tr>
                   </thead>
                   <tbody>
@@ -480,7 +486,9 @@ export function MessageDetail() {
                         <td>{formatTimestamp(attempt.scheduled_at)}</td>
                         <td>{formatTimestamp(attempt.completed_at)}</td>
                         <td>{formatTimestamp(attempt.next_retry_at)}</td>
-                        <td className="detail-mono">{attempt.postfix_queue_id ?? "—"}</td>
+                        {hasAttemptQueueIds ? (
+                          <td className="detail-mono">{attempt.postfix_queue_id ?? "—"}</td>
+                        ) : null}
                       </tr>
                     ))}
                   </tbody>

@@ -13,7 +13,9 @@
 //!    instances and only that customer's instance projection.
 //! 3. **Session detail**: instances, delivery attempts and security findings are
 //!    projected for the owning customer, `smtp_code` is stringified for the
-//!    contract, and an unseen transaction is 404.
+//!    contract, an unseen transaction is 404, and the platform's own identifiers
+//!    (deployment, content hash, MTA queue ids, trace id) only appear for a
+//!    platform seat.
 //! 4. **Content success**: a `trace:content` reader receives the stored MIME
 //!    projection and the access is audited as `success`.
 //! 5. **Content denials**: missing permission, cross-customer ownership, a
@@ -744,6 +746,111 @@ async fn session_detail_scopes_instances_attempts_and_findings_to_the_customer()
         .await
         .expect("the detail must answer");
     assert_eq!(malformed.status(), StatusCode::NOT_FOUND);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The customer trace answers with the message's own history. The installation
+/// reference, the content deduplication hash, the MTA queue identifiers and the
+/// log correlation id describe the machinery that carried the message, so they
+/// are only written for a seat that can act on them.
+#[tokio::test]
+#[ignore = "requires migrated local PostgreSQL through 004_scanner_evidence.sql"]
+async fn session_detail_withholds_platform_machinery_from_the_customer_read() {
+    let pool = connect().await;
+    let fixture = seed(&pool).await;
+    let transaction_id = TransactionId::new();
+    let artifact_id = ArtifactId::new();
+    let sender = format!("detail-{}@example.test", fixture.suffix);
+    insert_artifact_row(
+        &pool,
+        artifact_id.clone(),
+        &fixture.deployment,
+        &fixture.customer_a,
+        1,
+        "detail-hash",
+        &format!("{}.artifact", artifact_id.0),
+    )
+    .await;
+    insert_transaction(
+        &pool,
+        &fixture.deployment,
+        &transaction_id,
+        &sender,
+        &artifact_id.0.to_string(),
+    )
+    .await;
+    let tenant_message_id =
+        insert_instance(&pool, &transaction_id, &fixture.customer_a, "allow").await;
+    insert_attempt(&pool, tenant_message_id.clone(), Some(250)).await;
+    sqlx::query("UPDATE smtp_transactions SET postfix_queue_ids = $2::text[] WHERE id = $1")
+        .bind(transaction_id.0)
+        .bind(vec!["AA1B2C3D".to_string()])
+        .execute(&pool)
+        .await
+        .expect("the queue identifier fixture must be set");
+    sqlx::query("UPDATE delivery_attempts SET postfix_queue_id = $2 WHERE tenant_message_id = $1")
+        .bind(tenant_message_id.0)
+        .bind("EE4F5G6H")
+        .execute(&pool)
+        .await
+        .expect("the attempt queue identifier fixture must be set");
+
+    let (state, _store, root) = content_store(&pool, &fixture.deployment).await;
+    let uri = format!("/api/v1/mail-trace/transaction/{}", transaction_id.0);
+
+    let customer = context(
+        &fixture.deployment,
+        &fixture.customer_a,
+        vec!["customer_admin"],
+        vec![TRACE_VIEW_PERMISSION],
+    );
+    let response = mail_trace_router(state.clone())
+        .layer(Extension(customer))
+        .oneshot(get_request(&uri))
+        .await
+        .expect("the detail must answer");
+    assert_eq!(response.status(), StatusCode::OK);
+    let data = json_body(response).await["data"].clone();
+    assert_eq!(
+        data["transaction_id"],
+        json!(transaction_id.0.to_string()),
+        "the customer keeps the handle for their own message"
+    );
+    assert!(data["deployment_id"].is_null(), "{data}");
+    assert!(data["content_hash"].is_null(), "{data}");
+    assert!(data["trace_id"].is_null(), "{data}");
+    assert_eq!(data["postfix_queue_ids"], json!([]));
+    assert!(data["delivery_attempts"][0]["postfix_queue_id"].is_null());
+    assert_eq!(
+        data["delivery_attempts"][0]["smtp_code"],
+        json!("250"),
+        "and keeps what the attempt did"
+    );
+
+    let response = mail_trace_router(state.clone())
+        .layer(Extension(admin_context(
+            &fixture.deployment,
+            &fixture.customer_a,
+        )))
+        .oneshot(get_request(&uri))
+        .await
+        .expect("the detail must answer");
+    let data = json_body(response).await["data"].clone();
+    assert_eq!(data["deployment_id"], json!(fixture.deployment.0));
+    assert_eq!(
+        data["content_hash"],
+        json!(format!("content-hash-{}", transaction_id.0))
+    );
+    assert_eq!(
+        data["trace_id"],
+        json!(format!("trace-{}", transaction_id.0))
+    );
+    assert_eq!(data["postfix_queue_ids"], json!(["AA1B2C3D"]));
+    assert_eq!(
+        data["delivery_attempts"][0]["postfix_queue_id"],
+        json!("EE4F5G6H")
+    );
+
     let _ = std::fs::remove_dir_all(&root);
 }
 

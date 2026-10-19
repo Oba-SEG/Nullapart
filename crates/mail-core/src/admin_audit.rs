@@ -249,7 +249,7 @@ impl AuthorizedAuditAccess {
             // An operator standing inside a customer's console is treated as that
             // customer for readout purposes: impersonation narrows what they may
             // see, so it also narrows what the platform tells them.
-            platform_placement: (is_system || is_support) && context.impersonation.is_none(),
+            platform_placement: crate::admin_rbac::platform_placement(context),
         })
     }
 }
@@ -398,7 +398,10 @@ pub struct AuditEventListItem {
     pub result: String,
     pub reason: Option<String>,
     pub source_ip: Option<String>,
-    pub trace_id: String,
+    /// The platform's log correlation id. Absent for a customer placement: it
+    /// names nothing inside the customer's own record and only makes sense
+    /// against the platform's logs.
+    pub trace_id: Option<String>,
 }
 
 /// One redacted key/value pair rendered instead of raw JSON.
@@ -414,6 +417,8 @@ pub struct AuditDetailField {
 pub struct AuditEventDetail {
     #[serde(flatten)]
     pub item: AuditEventListItem,
+    /// The platform's own session record. Absent for a customer placement: a
+    /// tenant sees who acted, never which internal session row carried it.
     pub session_id: Option<String>,
     pub details: Vec<AuditDetailField>,
 }
@@ -482,7 +487,7 @@ impl AuditEventRecord {
             })
     }
 
-    fn list_item(&self) -> AuditEventListItem {
+    fn list_item(&self, platform: bool) -> AuditEventListItem {
         AuditEventListItem {
             id: self.id,
             created_at: self.created_at,
@@ -497,14 +502,14 @@ impl AuditEventRecord {
             result: self.result.clone(),
             reason: self.reason(),
             source_ip: self.source_ip.clone(),
-            trace_id: self.trace_id.clone(),
+            trace_id: platform.then(|| self.trace_id.clone()),
         }
     }
 
-    fn detail(&self) -> AuditEventDetail {
+    fn detail(&self, platform: bool) -> AuditEventDetail {
         AuditEventDetail {
-            item: self.list_item(),
-            session_id: self.session_id.clone(),
+            item: self.list_item(platform),
+            session_id: platform.then(|| self.session_id.clone()).flatten(),
             details: detail_fields(&self.details),
         }
     }
@@ -753,7 +758,10 @@ impl AuditStore for InMemoryAuditStore {
         );
 
         Ok(AuditEventPage {
-            events: selected.iter().map(AuditEventRecord::list_item).collect(),
+            events: selected
+                .iter()
+                .map(|record| record.list_item(access.platform_placement))
+                .collect(),
             next_cursor,
         })
     }
@@ -776,7 +784,7 @@ impl AuditStore for InMemoryAuditStore {
                     "success",
                     serde_json::json!({ "scope": access.scope.as_guc() }),
                 );
-                Ok(Some(record.detail()))
+                Ok(Some(record.detail(access.platform_placement)))
             },
             None => {
                 self.push_access(
@@ -1253,7 +1261,10 @@ impl AuditStore for PostgresAuditStore {
             .map_err(|_| AdminAuditError::PersistenceFailed)?;
 
         Ok(AuditEventPage {
-            events: selected.iter().map(AuditEventRecord::list_item).collect(),
+            events: selected
+                .iter()
+                .map(|record| record.list_item(access.platform_placement))
+                .collect(),
             next_cursor,
         })
     }
@@ -1294,7 +1305,7 @@ impl AuditStore for PostgresAuditStore {
                     .commit()
                     .await
                     .map_err(|_| AdminAuditError::PersistenceFailed)?;
-                Ok(Some(record.detail()))
+                Ok(Some(record.detail(access.platform_placement)))
             },
             None => {
                 Self::record_access(
@@ -1759,7 +1770,7 @@ async fn export_events(
     match state.0.store.export(&access, &filters).await {
         Ok(records) => {
             let truncated = records.len() as i64 == MAX_EXPORT_ROWS;
-            let csv = render_csv(&records);
+            let csv = render_csv(&records, access.platform_placement);
             let mut response = (
                 StatusCode::OK,
                 [
@@ -1850,8 +1861,10 @@ fn api_error(status: StatusCode, code: &'static str, message: &'static str) -> R
 
 /// Renders export rows as CSV. Cells are quoted, control characters are
 /// removed and spreadsheet-formula prefixes are neutralised; the free-form
-/// `details` column is deliberately never exported.
-pub fn render_csv(records: &[AuditEventRecord]) -> String {
+/// `details` column is deliberately never exported. The trace column stays
+/// empty for a customer export, because the correlation id names the platform's
+/// logs rather than the customer's record.
+pub fn render_csv(records: &[AuditEventRecord], platform: bool) -> String {
     let mut output = String::from(CSV_HEADER);
     output.push('\n');
     for record in records {
@@ -1868,7 +1881,11 @@ pub fn render_csv(records: &[AuditEventRecord]) -> String {
             record.result.clone(),
             record.source_ip.clone().unwrap_or_default(),
             record.reason().unwrap_or_default(),
-            record.trace_id.clone(),
+            if platform {
+                record.trace_id.clone()
+            } else {
+                String::new()
+            },
         ];
         let rendered: Vec<String> = row.iter().map(|cell| csv_cell(cell)).collect();
         output.push_str(&rendered.join(","));
@@ -2085,6 +2102,76 @@ mod tests {
             allowed.scope,
             AuditScope::Customer("customer-b".to_string())
         );
+    }
+
+    /// A trace id and a session id name the platform's own logs, not anything
+    /// inside the customer's record, so the customer projection leaves them out
+    /// and a platform projection keeps them.
+    #[test]
+    fn the_internal_identifiers_follow_the_seat_reading_them() {
+        use nullapart_policy::ImpersonationContext;
+
+        let seeded = record(Some("customer-a"), "release", "admin@example.test");
+        let access_for = |context: &TenantContext| {
+            AuthorizedAuditAccess::from_context(
+                context,
+                &DeploymentId::new(TEST_DEPLOYMENT),
+                None,
+                None,
+            )
+            .expect("audit view for the seeded context")
+        };
+
+        let customer = access_for(&context(
+            &["customer_admin"],
+            &[AUDIT_VIEW_PERMISSION],
+            false,
+        ));
+        assert!(!customer.platform_placement);
+        assert_eq!(seeded.list_item(customer.platform_placement).trace_id, None);
+        assert_eq!(seeded.detail(customer.platform_placement).session_id, None);
+
+        let platform = access_for(&context(&["system_admin"], &[AUDIT_VIEW_PERMISSION], false));
+        assert!(platform.platform_placement);
+        assert_eq!(
+            seeded
+                .list_item(platform.platform_placement)
+                .trace_id
+                .as_deref(),
+            Some("trace")
+        );
+        assert_eq!(
+            seeded
+                .detail(platform.platform_placement)
+                .session_id
+                .as_deref(),
+            Some("session")
+        );
+
+        // An operator who entered a customer's console is answered as that
+        // customer, so the identifiers stay with the seat they belong to.
+        let mut entering = context(&["system_admin"], &[AUDIT_VIEW_PERMISSION], false);
+        entering.impersonation = Some(ImpersonationContext {
+            real_actor: entering.actor.clone(),
+            impersonated_subject: Some("subject@example.test".to_string()),
+            impersonated_customer: nullapart_mail_contracts::CustomerId::new("customer-a"),
+            started_at: Utc::now(),
+            reason: "investigating a customer report".to_string(),
+            session_id: "session".to_string(),
+        });
+        let impersonated = access_for(&entering);
+        assert!(!impersonated.platform_placement);
+        assert_eq!(
+            seeded.list_item(impersonated.platform_placement).trace_id,
+            None
+        );
+
+        // The same rule holds for a CSV export: the header stays, the column is
+        // empty because the correlation id means nothing outside the platform.
+        let customer_csv = render_csv(std::slice::from_ref(&seeded), false);
+        assert!(!customer_csv.contains("\"trace\""), "{customer_csv}");
+        let platform_csv = render_csv(std::slice::from_ref(&seeded), true);
+        assert!(platform_csv.contains("\"trace\""), "{platform_csv}");
     }
 
     #[test]
@@ -2585,7 +2672,7 @@ mod tests {
             trace_id: "trace".to_string(),
             details: serde_json::Value::Null,
         };
-        let csv = render_csv(&[record]);
+        let csv = render_csv(&[record], true);
         assert!(csv.contains("\"actor\"\"@example.test\""));
         assert!(csv.contains("\"'=cmd()\""));
         assert!(csv.contains("\"line break\""));

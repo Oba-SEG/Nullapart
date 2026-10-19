@@ -65,6 +65,7 @@ export interface TraceDeliveryAttempt {
   scheduled_at: string | null;
   completed_at: string | null;
   next_retry_at: string | null;
+  /** MTA queue identifier; withheld from the customer projection. */
   postfix_queue_id: string | null;
 }
 
@@ -85,15 +86,19 @@ export interface TraceFlowStage {
 
 export interface TraceTransaction {
   transaction_id: string;
+  /** Platform log correlation id; the customer projection leaves it out. */
   trace_id: string | null;
   direction: string;
-  deployment_id: string;
+  /** Which node accepted the mail — platform-only machinery. */
+  deployment_id: string | null;
   envelope_sender: string | null;
   message_id: string | null;
+  /** Content dedup hash — platform-only machinery. */
   content_hash: string | null;
   received_at: string;
   recipients: TraceRecipient[];
   auth: TraceAuthResults;
+  /** MTA queue identifiers — empty in the customer projection. */
   postfix_queue_ids: string[];
   instances: TraceInstance[];
   delivery_attempts: TraceDeliveryAttempt[];

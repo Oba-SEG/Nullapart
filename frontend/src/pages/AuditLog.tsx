@@ -33,7 +33,8 @@ interface AuditEvent {
   result: string;
   reason: string | null;
   source_ip: string | null;
-  trace_id: string;
+  /** Platform log correlation id; absent in a customer projection. */
+  trace_id: string | null;
 }
 
 interface AuditEventPage {
@@ -381,7 +382,9 @@ export function AuditLog() {
                     >
                       {new Date(event.created_at).toLocaleString()}
                     </button>
-                    <span className="audit-meta">Trace {event.trace_id}</span>
+                    {event.trace_id ? (
+                      <span className="audit-meta">Trace {event.trace_id}</span>
+                    ) : null}
                   </td>
                   <td>
                     {event.actor_login}
@@ -466,10 +469,12 @@ export function AuditLog() {
                 {humanizeToken(detail.data.resource_type)} · {detail.data.resource_id ?? "—"}
               </dd>
             </div>
-            <div>
-              <dt>Session</dt>
-              <dd>{detail.data.session_id ?? "—"}</dd>
-            </div>
+            {detail.data.session_id ? (
+              <div>
+                <dt>Session</dt>
+                <dd>{detail.data.session_id}</dd>
+              </div>
+            ) : null}
             <div>
               <dt>Details</dt>
               <dd>

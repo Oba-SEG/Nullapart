@@ -486,6 +486,23 @@ fn static_role_level(role_level: &str) -> Option<&'static str> {
         .find(|level| *level == role_level)
         .filter(|level| rank_for_level(level) > 0)
 }
+
+/// Whether this caller sits in a platform seat rather than inside a customer
+/// console.
+///
+/// Permission decides what a caller may read; placement decides whose words the
+/// answer is written in. A customer projection leaves out the platform's own
+/// machinery (its deployment reference, MTA queue identifiers, content hashes
+/// and log correlation ids), and an operator who entered a customer's console
+/// through impersonation is answered as that customer.
+pub fn platform_placement(context: &TenantContext) -> bool {
+    context.impersonation.is_none()
+        && context
+            .actor
+            .roles
+            .iter()
+            .any(|role| role == SYSTEM_ADMIN_ROLE || role == SUPPORT_ROLE)
+}
 #[derive(Debug, thiserror::Error)]
 pub enum AdminRbacError {
     #[error("admin rbac persistence failed")]

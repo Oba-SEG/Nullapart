@@ -30,6 +30,7 @@ import { Dashboard } from "../pages/Dashboard";
 import { DomainSecurity } from "../pages/DomainSecurity";
 import { FeatureOverrides } from "../pages/FeatureOverrides";
 import { Messages } from "../pages/Messages";
+import { MessageDetail } from "../pages/MessageDetail";
 import { OutboundIntelligence } from "../pages/OutboundIntelligence";
 import { Policies } from "../pages/Policies";
 import { PolicyFamilyDetail } from "../pages/PolicyFamilyDetail";
@@ -110,6 +111,12 @@ const PLATFORM_LANGUAGE: Array<{ term: string; pattern: RegExp }> = [
   { term: "scanner node", pattern: /\bscanner node/i },
   { term: "fleet", pattern: /\bfleet\b/i },
   { term: "emergency stop", pattern: /\bemergency stop\b/i },
+  // The mail server's own bookkeeping. These name the platform's machinery, not
+  // the tenant's message, and the customer projection leaves them out.
+  { term: "MTA name", pattern: /\bpostfix\b/i },
+  { term: "MTA queue identifier", pattern: /\bqueue id/i },
+  { term: "content dedup hash", pattern: /\bcontent hash\b/i },
+  { term: "log correlation id", pattern: /\btrace[_ -]id\b/i },
 ];
 
 /** The tenant's own organisation record, with no domains or groups set yet. */
@@ -244,6 +251,53 @@ const policyFamilies = [
  * them, and the policy queue mixes all three management levels. Wording that
  * only leaks once data arrives is still a leak.
  */
+/**
+ * What the trace detail endpoint answers a customer seat with: the tenant's own
+ * message facts, and none of the platform's machinery. The correlation id, the
+ * node that accepted the mail, the content dedup hash and the mail server's
+ * queue identifiers are absent rather than blanked.
+ */
+const tenantTrace = {
+  transaction_id: "0f9d0a6b-1111-2222-3333-444455556666",
+  trace_id: null,
+  direction: "inbound",
+  deployment_id: null,
+  envelope_sender: "newsletter@partner.example",
+  message_id: "<20260106-0949@partner.example>",
+  content_hash: null,
+  received_at: "2026-01-06T09:49:55Z",
+  recipients: [{ address: "ops@acmefreight.example", orcpt: null, notify: null }],
+  auth: { spf_result: "pass", dkim_result: "pass", dmarc_result: "pass", arc_result: null },
+  postfix_queue_ids: [],
+  instances: [
+    {
+      tenant_message_id: "7d2c4e6a-1111-2222-3333-444455556666",
+      disposition: "delivered",
+      remediation_type: null,
+      created_at: "2026-01-06T09:49:58Z",
+      updated_at: "2026-01-06T09:50:02Z",
+    },
+  ],
+  delivery_attempts: [
+    {
+      attempt_number: 1,
+      status: "delivered",
+      smtp_code: "250",
+      enhanced_code: "2.0.0",
+      smtp_message: "250 2.0.0 accepted for delivery",
+      scheduled_at: "2026-01-06T09:50:00Z",
+      completed_at: "2026-01-06T09:50:02Z",
+      next_retry_at: null,
+      postfix_queue_id: null,
+    },
+  ],
+  findings: [],
+  flow_stages: [
+    { stage: "received", at: "2026-01-06T09:49:55Z" },
+    { stage: "delivered", at: "2026-01-06T09:50:02Z" },
+  ],
+};
+
 const PAYLOADS: Array<[string, unknown]> = [
   ["/auth/session", tenantSession],
   ["/quarantine", []],
@@ -268,7 +322,7 @@ const PAYLOADS: Array<[string, unknown]> = [
           result: "denied",
           reason: null,
           source_ip: "192.168.8.232",
-          trace_id: "trace-provider",
+          trace_id: null,
         },
         {
           id: "event-tenant",
@@ -284,7 +338,7 @@ const PAYLOADS: Array<[string, unknown]> = [
           result: "success",
           reason: null,
           source_ip: "192.168.8.232",
-          trace_id: "trace-tenant",
+          trace_id: null,
         },
       ],
       next_cursor: null,
@@ -361,6 +415,7 @@ const PAYLOADS: Array<[string, unknown]> = [
       },
     },
   ],
+  ["/mail-trace/transaction", tenantTrace],
   ["/policies", { families: policyFamilies, caller_tier: "customer" }],
 ];
 
@@ -426,6 +481,12 @@ const SURFACES: Surface[] = [
   },
   { name: "Quarantine", path: "/quarantine", entry: "/quarantine", component: Quarantine },
   { name: "Messages", path: "/messages", entry: "/messages", component: Messages },
+  {
+    name: "Message trace",
+    path: "/messages/$messageId",
+    entry: "/messages/0f9d0a6b-1111-2222-3333-444455556666",
+    component: MessageDetail,
+  },
   { name: "Audit log", path: "/audit-log", entry: "/audit-log", component: AuditLog },
   {
     name: "Administrators",
