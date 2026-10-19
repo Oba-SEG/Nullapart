@@ -66,6 +66,10 @@ const REASON_MAX_LEN: usize = 500;
 const VALUE_MAX_LEN: usize = 256;
 const TYPED_PREFIX: &str = "typed:";
 const SYSTEM_SCOPE_ID: &str = "system";
+/// How a customer's console names someone who works for the provider. The
+/// tenant is entitled to know an outside actor changed their policy; the
+/// operator's identity belongs to the platform's own history.
+const PROVIDER_PUBLISHER_LABEL: &str = "Your provider";
 
 const POLICIES_PATH: &str = "/api/v1/policies";
 const POLICY_PATH: &str = "/api/v1/policies/:family_key";
@@ -190,6 +194,11 @@ const OVERRIDE_MAX_REVISION_SQL: &str = "SELECT COALESCE(MAX(revision), 0) + 1 \
 /// deployment can already see, and a suspended account keeps its name because
 /// the person who wrote the row does not change when they lose access.
 const ACTOR_DISPLAY_NAMES_SQL: &str = "SELECT id::text, display_name FROM admin_users";
+/// The same directory plus the customer each identity belongs to. A revision
+/// history read by a customer has to say who published it without printing a
+/// user id, and `customer_id` is what tells a reader's own administrator apart
+/// from someone who works for the provider.
+const ACTOR_IDENTITIES_SQL: &str = "SELECT id::text, display_name, customer_id FROM admin_users";
 const OVERRIDE_INSERT_SQL: &str = "INSERT INTO feature_overrides \
      (id, feature_id, scope, scope_id, value, owner, reason, revision, expires_at) \
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
@@ -267,6 +276,10 @@ impl RevisionScope {
 struct RevisionSummaryResponse {
     revision_number: i64,
     published_by: String,
+    /// Additive per `docs/27`: `published_by` stays the stored actor reference
+    /// because a revision history has to keep naming the identity, not a label
+    /// that can change. The console reads the name.
+    published_by_name: String,
     published_at: DateTime<Utc>,
     scope_level: RevisionScope,
 }
@@ -275,6 +288,7 @@ struct RevisionSummaryResponse {
 struct RevisionDetailResponse {
     revision_number: i64,
     published_by: String,
+    published_by_name: String,
     published_at: DateTime<Utc>,
     scope_level: RevisionScope,
     activated_at: Option<DateTime<Utc>>,
@@ -1208,10 +1222,16 @@ fn override_response(
     }
 }
 
-fn active_revision(row: &FamilyActiveRow) -> Option<RevisionSummaryResponse> {
+fn active_revision(
+    row: &FamilyActiveRow,
+    identities: &HashMap<String, ActorIdentity>,
+    reader_customer: Option<&str>,
+) -> Option<RevisionSummaryResponse> {
+    let published_by = row.6.clone()?;
     Some(RevisionSummaryResponse {
         revision_number: row.5?,
-        published_by: row.6.clone()?,
+        published_by_name: publisher_name(identities, &published_by, reader_customer),
+        published_by,
         published_at: row.7?,
         scope_level: RevisionScope::parse(row.8.as_deref()?)?,
     })
@@ -1277,6 +1297,41 @@ pub(crate) async fn load_actor_display_names(
         .map_err(|_| unavailable())
 }
 
+/// An actor the revision history may name: who they are and which customer they
+/// belong to, which is NULL for a platform identity.
+struct ActorIdentity {
+    display_name: String,
+    customer_id: Option<String>,
+}
+
+/// Reads the directory a revision history needs to name its publishers.
+///
+/// `admin_users` is deployment-scoped by RLS, so this resolves only identities
+/// the reading deployment already owns. A suspended account keeps its name
+/// because the person who published a revision does not change when they lose
+/// access.
+async fn load_actor_identities(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<HashMap<String, ActorIdentity>, Response> {
+    sqlx::query_as::<_, (String, String, Option<String>)>(ACTOR_IDENTITIES_SQL)
+        .fetch_all(&mut **transaction)
+        .await
+        .map(|rows| {
+            rows.into_iter()
+                .map(|(id, display_name, customer_id)| {
+                    (
+                        id,
+                        ActorIdentity {
+                            display_name,
+                            customer_id,
+                        },
+                    )
+                })
+                .collect()
+        })
+        .map_err(|_| unavailable())
+}
+
 /// The human name for a stored actor reference.
 ///
 /// Older rows and non-console writers recorded a login rather than an id, and an
@@ -1288,6 +1343,43 @@ pub(crate) fn actor_display_name(names: &HashMap<String, String>, stored: &str) 
         .get(stored)
         .cloned()
         .unwrap_or_else(|| stored.to_string())
+}
+
+/// Who published a revision, in the words the reading seat can use.
+///
+/// A platform read gets the publisher's own name. A customer read gets a name
+/// only for a publisher inside their own organisation: the platform's operators
+/// are not named to a customer, which is how the rest of the tenant console
+/// already treats them, and an identity the directory no longer holds cannot be
+/// named as anything else. `None` for `reader_customer` is a platform seat.
+fn publisher_name(
+    identities: &HashMap<String, ActorIdentity>,
+    stored: &str,
+    reader_customer: Option<&str>,
+) -> String {
+    let Some(customer) = reader_customer else {
+        return identities
+            .get(stored)
+            .map(|identity| identity.display_name.clone())
+            .unwrap_or_else(|| stored.to_string());
+    };
+    match identities.get(stored) {
+        Some(identity) if identity.customer_id.as_deref() == Some(customer) => {
+            identity.display_name.clone()
+        },
+        _ => PROVIDER_PUBLISHER_LABEL.to_string(),
+    }
+}
+
+/// The customer a read is being answered for, or `None` for a platform seat.
+///
+/// Tier 0 is the customer tier as `caller_tier` resolves it, which is what an
+/// impersonating platform operator is answered as, so naming follows the
+/// placement of the read rather than the badge of the person holding the
+/// session. An unresolved role grants no tier and reads as the platform, which
+/// is how the rest of these routes already fail closed.
+fn reader_customer(caller: Option<u8>, context: &TenantContext) -> Option<&str> {
+    (caller == Some(0)).then_some(context.customer_id.0.as_str())
 }
 
 // ---------------------------------------------------------------------------
@@ -1347,6 +1439,11 @@ async fn list_families(
         Ok(rows) => rows.into_iter().collect::<HashMap<String, i64>>(),
         Err(_) => return unavailable(),
     };
+    let identities = match load_actor_identities(&mut transaction).await {
+        Ok(identities) => identities,
+        Err(response) => return response,
+    };
+    let reader_customer = reader_customer(caller, &context);
     let families = active_rows
         .iter()
         .map(|row| FamilySummaryResponse {
@@ -1356,7 +1453,7 @@ async fn list_families(
             management_level: row.3.clone(),
             security_floor: row.4,
             revision_count: counts.get(&row.0).copied().unwrap_or(0),
-            active_revision: active_revision(row),
+            active_revision: active_revision(row, &identities, reader_customer),
         })
         .collect();
     (
@@ -1447,6 +1544,11 @@ async fn get_family(
         Err(_) => return unavailable(),
     };
     let active_number = active_row.5;
+    let identities = match load_actor_identities(&mut transaction).await {
+        Ok(identities) => identities,
+        Err(response) => return response,
+    };
+    let reader_customer = reader_customer(Some(caller), &context);
     let mut revisions = Vec::with_capacity(rows.len());
     for row in rows {
         let Some(scope_level) = RevisionScope::parse(&row.3) else {
@@ -1458,9 +1560,11 @@ async fn get_family(
             .as_array()
             .map(|rules| rules.len() as i64)
             .unwrap_or(0);
+        let published_by = row.1;
         revisions.push(RevisionDetailResponse {
             revision_number: row.0,
-            published_by: row.1,
+            published_by_name: publisher_name(&identities, &published_by, reader_customer),
+            published_by,
             published_at: row.2,
             scope_level,
             activated_at: row.4,
@@ -1474,7 +1578,7 @@ async fn get_family(
         });
     }
     let caller_tier = tier_name(caller);
-    let summary = active_revision(&active_row);
+    let summary = active_revision(&active_row, &identities, reader_customer);
     let profile = rule_profile(&family_key);
     let family = FamilySummaryResponse {
         family_key: active_row.0,
@@ -3095,6 +3199,71 @@ mod tests {
         assert_eq!(tier_name(1), Some("support"));
         assert_eq!(tier_name(2), Some("system"));
         assert_eq!(tier_name(3), None);
+    }
+
+    /// A revision history has to say who published it. A platform seat reads the
+    /// operator's own name; a customer seat reads a name only when the publisher
+    /// belongs to that customer, and never a user id or a platform operator.
+    #[test]
+    fn a_revision_publisher_is_named_for_the_seat_reading_the_history() {
+        let mut identities = HashMap::new();
+        identities.insert(
+            "tenant-admin-id".to_string(),
+            ActorIdentity {
+                display_name: "Lerato Mokoena".to_string(),
+                customer_id: Some("local-customer".to_string()),
+            },
+        );
+        identities.insert(
+            "platform-id".to_string(),
+            ActorIdentity {
+                display_name: "Samuel Adeyemi".to_string(),
+                customer_id: None,
+            },
+        );
+
+        assert_eq!(
+            publisher_name(&identities, "platform-id", None),
+            "Samuel Adeyemi",
+            "a platform read names the operator who published"
+        );
+        assert_eq!(
+            publisher_name(&identities, "tenant-admin-id", Some("local-customer")),
+            "Lerato Mokoena",
+            "a customer names their own administrator"
+        );
+        for stored in [
+            "platform-id",
+            "other-customer-id",
+            "0f0f0f0f-1111-2222-3333-444444444444",
+        ] {
+            assert_eq!(
+                publisher_name(&identities, stored, Some("local-customer")),
+                PROVIDER_PUBLISHER_LABEL,
+                "{stored} is outside this customer, so the read says who owns it"
+            );
+        }
+        // An identity the directory no longer holds still keeps its stored
+        // reference for a platform read: the history stays honest about the row.
+        assert_eq!(
+            publisher_name(&identities, "deleted-id", None),
+            "deleted-id"
+        );
+    }
+
+    /// Placement, not the badge, decides whose words a revision history is
+    /// written in, so an impersonating platform operator is answered as the
+    /// customer they are reading for.
+    #[test]
+    fn the_reading_customer_follows_the_resolved_tier() {
+        let mut context = context();
+        context.actor.roles = vec![CUSTOMER_ADMIN_ROLE.to_string()];
+        assert_eq!(
+            reader_customer(Some(0), &context).map(String::from),
+            Some("local-customer".to_string())
+        );
+        assert_eq!(reader_customer(Some(2), &context), None);
+        assert_eq!(reader_customer(None, &context), None);
     }
 
     /// A refused reason is stored in the audit row and read back by the actor,
