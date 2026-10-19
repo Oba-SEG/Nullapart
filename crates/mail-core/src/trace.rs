@@ -1,10 +1,12 @@
 //! Mail trace search, transaction detail and full-message content.
 //!
 //! Two surfaces share this module. The workload surface
-//! (`POST /api/v1/trace/search`, `GET /api/v1/trace/transaction/:id`,
-//! `GET /api/v1/trace/health`) answers bearer-authenticated mail-node callers
-//! and reports only what `smtp_transactions`,
-//! `smtp_transaction_recipients` and the running process can prove.
+//! (`POST /api/v1/trace/search`, `GET /api/v1/trace/transaction/:id`) answers
+//! bearer-authenticated mail-node callers and reports only what
+//! `smtp_transactions`, `smtp_transaction_recipients` and the running process
+//! can prove. `GET /api/v1/trace/health` is the one surface reachable without a
+//! credential, because a load balancer has none to present, so it answers with
+//! liveness alone and names neither the node nor the build.
 //!
 //! The session surface (`/api/v1/mail-trace/*`) is merged into the
 //! authenticated local plane, so every request carries a server-side
@@ -154,8 +156,11 @@ const SESSION_ATTEMPTS_SQL: &str =
      FROM delivery_attempts AS a JOIN tenant_message_instances AS i \
      ON i.id = a.tenant_message_id WHERE i.transaction_id = $1 AND i.customer_id = $2 \
      ORDER BY a.scheduled_at, a.attempt_number";
-const SESSION_FINDINGS_SQL: &str =
-    "SELECT f.id, f.severity, f.category, f.description, f.scanner_type, \
+/// The customer finding read deliberately omits `f.description`: that column is
+/// scanner-authored prose and the projection rebuilds the sentence from severity
+/// and category, so fetching it would only move internal text into the process
+/// for nothing.
+const SESSION_FINDINGS_SQL: &str = "SELECT f.id, f.severity, f.category, f.scanner_type, \
      f.false_positive, f.created_at FROM security_findings AS f \
      WHERE f.transaction_id = $1 AND f.customer_id = $2 ORDER BY f.created_at, f.id";
 const ARTIFACT_SQL: &str =
@@ -342,12 +347,17 @@ impl TraceFindingResponse {
         id: Uuid,
         severity: String,
         category: String,
-        description: String,
         scanner_type: String,
         false_positive: bool,
         created_at: DateTime<Utc>,
     ) -> Self {
-        let description = customer_safe_finding_description(&severity, &category, &description);
+        // The stored description is scanner-authored prose: rule symbols, engine
+        // names, model identifiers, thresholds and raw scores. It is not
+        // filterable by vocabulary, because the next engine to write one names a
+        // detail nobody remembered to forbid, so the customer projection rebuilds
+        // the sentence from what a customer can act on: how serious, about what,
+        // and which analysis recorded it.
+        let description = generic_customer_safe_finding_description(&severity, &category);
         let scanner_type = customer_safe_finding_source(&scanner_type).to_string();
 
         Self {
@@ -360,34 +370,6 @@ impl TraceFindingResponse {
             created_at,
         }
     }
-}
-
-fn customer_safe_finding_description(severity: &str, category: &str, description: &str) -> String {
-    if description_contains_internal_evidence(description) {
-        return generic_customer_safe_finding_description(severity, category);
-    }
-
-    description.to_string()
-}
-
-fn description_contains_internal_evidence(description: &str) -> bool {
-    let normalized = description.to_lowercase();
-    [
-        "clamav",
-        "rspamd",
-        "urlanalysis",
-        "static-rule",
-        "static malware rule",
-        "static rule",
-        "inline ml",
-        "inline_ml",
-        "model_version",
-        "model version",
-        "threshold",
-        "score",
-    ]
-    .iter()
-    .any(|needle| normalized.contains(needle))
 }
 
 fn customer_safe_finding_source(scanner_type: &str) -> &'static str {
@@ -473,13 +455,15 @@ struct MessageContentResponse {
     attachments: Vec<MessageAttachmentResponse>,
 }
 
+/// The liveness answer for the one route that is reachable without a session.
+///
+/// `node_id` and the crate version used to be reported here, which told any
+/// caller on the network which machine answered and which build it was running.
+/// A load balancer only needs to know the process is up.
 #[derive(Serialize)]
 struct HealthCheckResponse {
-    status: String,
-    node_id: String,
-    version: String,
+    status: &'static str,
     uptime_seconds: u64,
-    queue_depth: Option<i64>,
 }
 
 struct TransactionBase {
@@ -1116,7 +1100,6 @@ async fn session_transaction_detail(
                 row.get("id"),
                 row.get("severity"),
                 row.get("category"),
-                row.get("description"),
                 row.get("scanner_type"),
                 row.get("false_positive"),
                 row.get("created_at"),
@@ -1510,16 +1493,13 @@ async fn handle_get_transaction(
     }
 }
 
-async fn handle_health_check(State(config): State<TraceConfig>) -> Response {
+async fn handle_health_check(State(_config): State<TraceConfig>) -> Response {
     (
         StatusCode::OK,
         Json(ApiEnvelope {
             data: HealthCheckResponse {
-                status: "healthy".to_string(),
-                node_id: config.node_id.clone(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
+                status: "healthy",
                 uptime_seconds: PROCESS_START.elapsed().as_secs(),
-                queue_depth: None,
             },
         }),
     )
@@ -1956,14 +1936,17 @@ mod tests {
         }
     }
 
+    /// The customer finding response is built without reading the stored
+    /// description at all, so scanner prose (model identifiers, thresholds, raw
+    /// scores, rule symbols) cannot reach a customer trace. This asserts the shape
+    /// rather than a vocabulary list: a future field carrying raw evidence fails
+    /// here instead of leaking.
     #[test]
     fn inline_ml_findings_are_projected_as_customer_safe_threat_analysis() {
         let finding = TraceFindingResponse::project_customer_safe(
             Uuid::new_v4(),
             "high".to_string(),
             "phishing".to_string(),
-            "Inline ML score 0.91 exceeded high threshold 0.90 for model inline-threat-v2"
-                .to_string(),
             "inline_ml".to_string(),
             false,
             Utc::now(),
@@ -1975,10 +1958,20 @@ mod tests {
             "high phishing evidence was recorded for this message."
         );
         let body = serde_json::to_string(&finding).expect("finding must serialize");
-        assert!(!body.contains("inline_ml"));
-        assert!(!body.contains("Inline ML"));
-        assert!(!body.contains("0.91"));
-        assert!(!body.contains("inline-threat-v2"));
+        for forbidden in [
+            "inline_ml",
+            "Inline ML",
+            "model",
+            "threshold",
+            "score",
+            "details",
+            "indicators",
+        ] {
+            assert!(
+                !body.contains(forbidden),
+                "customer finding carried {forbidden}: {body}"
+            );
+        }
     }
 
     #[test]
@@ -1987,7 +1980,6 @@ mod tests {
             Uuid::new_v4(),
             "high".to_string(),
             "malware".to_string(),
-            "clamav static-rule scanner matched urlanalysis signature".to_string(),
             "urlanalysis".to_string(),
             false,
             Utc::now(),
@@ -2007,7 +1999,6 @@ mod tests {
             Uuid::new_v4(),
             "critical".to_string(),
             "malware".to_string(),
-            "Static malware rule matched".to_string(),
             "custom".to_string(),
             false,
             Utc::now(),
@@ -2166,17 +2157,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn health_reports_only_real_node_values() {
+    async fn health_answers_without_naming_the_node_or_its_build() {
         let response = trace_router(workload_config())
             .oneshot(get("/api/v1/trace/health"))
             .await
             .expect("the health check must answer");
         assert_eq!(response.status(), StatusCode::OK);
         let body = body_value(response).await;
-        assert_eq!(body["data"]["node_id"], json!("mailcore-local-01"));
-        assert_eq!(body["data"]["version"], json!(env!("CARGO_PKG_VERSION")));
+        assert_eq!(body["data"]["status"], json!("healthy"));
         assert!(body["data"]["uptime_seconds"].as_u64().is_some());
+        // This route is the module's one unauthenticated surface, so an identity
+        // here is readable by anyone who can reach the port.
+        assert!(body["data"]["node_id"].is_null());
+        assert!(body["data"]["version"].is_null());
         assert!(body["data"]["queue_depth"].is_null());
+        assert!(!body.to_string().contains("mailcore-local-01"));
         let uptime = body["data"]["uptime_seconds"]
             .as_u64()
             .expect("uptime must be reported");

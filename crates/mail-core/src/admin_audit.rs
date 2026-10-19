@@ -142,6 +142,11 @@ pub struct AuthorizedAuditAccess {
     session_id: String,
     trace_id: String,
     source_ip: Option<String>,
+    /// The actor's own placement, not the read filter. `scope` says which rows
+    /// this read may see; it says nothing about who is asking, because a System
+    /// Admin filtering to one customer and a Customer Admin both end up in
+    /// `AuditScope::Customer`. Platform readouts key off this field.
+    platform_placement: bool,
 }
 
 impl AuthorizedAuditAccess {
@@ -241,6 +246,10 @@ impl AuthorizedAuditAccess {
             session_id: context.session_id.clone(),
             trace_id: context.trace_id.clone(),
             source_ip,
+            // An operator standing inside a customer's console is treated as that
+            // customer for readout purposes: impersonation narrows what they may
+            // see, so it also narrows what the platform tells them.
+            platform_placement: (is_system || is_support) && context.impersonation.is_none(),
         })
     }
 }
@@ -1652,6 +1661,23 @@ async fn checkpoint_status(
         Ok(access) => access,
         Err(error) => return error_response(error),
     };
+    // The checkpoint seals the whole append-only ledger of the installation and
+    // carries its root hash, signer key id and archive location. A customer
+    // console has no use for any of that, so the readout is platform-only even
+    // though `audit:view` is what reaches this route.
+    if !access.platform_placement {
+        let _ = state
+            .0
+            .store
+            .record_denied(
+                &access,
+                ACCESS_DENIED_ACTION,
+                None,
+                "checkpoint is a platform readout",
+            )
+            .await;
+        return api_error(StatusCode::FORBIDDEN, "FORBIDDEN", "Permission is required");
+    }
     match state.0.store.checkpoint_status(&access).await {
         Ok(status) => (StatusCode::OK, Json(ApiEnvelope { data: status })).into_response(),
         Err(error) => error_response(error),
@@ -2174,6 +2200,39 @@ mod tests {
             .records()
             .iter()
             .any(|record| record.resource_id.as_deref() == Some("checkpoint-status")));
+    }
+
+    #[tokio::test]
+    async fn checkpoint_status_is_a_platform_readout_for_a_tenant() {
+        let store = Arc::new(InMemoryAuditStore::new());
+        let app = admin_audit_router(state_for(Arc::clone(&store)));
+
+        // A Customer Admin holds audit:view, which is what reaches this route, so
+        // the ledger's seal material has to be withheld by placement rather than
+        // by permission.
+        let tenant = context(&["customer_admin"], &[AUDIT_VIEW_PERMISSION], false);
+        let response = app
+            .oneshot(
+                Request::get("/api/v1/audit/checkpoint-status")
+                    .extension(tenant)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            body.as_ref(),
+            br#"{"code":"FORBIDDEN","message":"Permission is required"}"#
+        );
+        assert!(store
+            .records()
+            .iter()
+            .any(|record| record.result == "denied"
+                && record.actor_roles.contains(&"customer_admin".to_string())));
     }
 
     #[tokio::test]
