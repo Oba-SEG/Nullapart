@@ -794,7 +794,12 @@ key:` with nothing after it. It now asks for a number, and the tenant fixture
 check-all` green (297 tests, 34 files) with the placement-absence, crashed-render
 and organisation-record cases.
 
-**Live wire sweep on `.4`.** _(recorded below once this build is deployed.)_
+**Live wire sweep on `.4`.** Still not run. On 2026-10-20 the shared stack was
+unreachable from this machine (port 22 timed out, `:53080` gave no response), so no
+customer session could be minted against it and nothing was deployed. The sweep
+script is in `tmp-tenant-wire-sweep.sh` at the repo root and self-tests its own
+detectors before it hits the network; it stays unverified against live data until
+the stack answers. See the twentieth pass for the same statement in context.
 
 ## Landed in the thirteenth pass (the tenant got a switch panel, and a name it owns)
 
@@ -1169,6 +1174,84 @@ which is `#[ignore]`d and compile-verified, not run, for the same broken local
 database tunnel. A checkout that can reach a migrated Postgres runs it. The
 projection is pinned by the unit tests above, so what stays unproven is the
 wiring rather than the wording.
+
+**Live wire sweep on `.4`.** Not run for this pass: on 2026-10-20 the shared stack
+at `192.168.8.4` was unreachable from this machine (`ssh` on port 22 timed out and
+`:53080` returned no response), so neither the sweep nor a deploy could happen.
+The sweep script was rewritten and its detectors self-tested offline instead.
+
+## Landed in the twentieth pass (a tenant's policy answer carries no row keys)
+
+The policy and feature surface was the last tenant-readable module that had never
+adopted a placement projection of its own — it resolves `reader_customer` from
+`caller_tier` instead of `platform_placement`, and had been projecting *wording*
+(names, descriptions, the governing party) while still shipping the *references*
+the names were looked up from.
+
+- **What actually leaked was an identity, not a label.**
+  `RevisionSummaryResponse.published_by` and `RevisionDetailResponse.published_by`
+  carried the stored actor reference of whoever published a revision. For a family
+  published by one of the platform's own operators, that operator's directory id
+  was going into a customer's JSON. The console never printed it — and that is
+  exactly the case the doctrine already rules on: *a name that reaches the network
+  answer is readable in the browser's own inspector even when nothing prints it*
+  (`policy_admin.rs`, on the catalog wording). The same rule condemns a key.
+- **Four fields became additively absent for a customer read**: `published_by` on
+  both revision shapes, and `scope_id` + `owner` on `FeatureOverrideResponse` and
+  on `OverrideWriteResponse`. Each is `Option` +
+  `#[serde(skip_serializing_if = "Option::is_none")]`, so the platform arm keeps
+  the handle its audit trail and drill-down are addressed by and the tenant arm
+  has no key to reprint. No rename, no migration, same contract shape as the
+  sixteenth through nineteenth passes.
+- **`owner_display_name` now fails closed for a tenant.** It used
+  `actor_display_name`, whose documented fallback is the stored value, so a
+  customer whose colleague's account had been deleted read a bare UUID in the
+  sentence "set by …". `override_owner_name` keeps the reference-echo for a
+  platform read (its history stays honest about what is on the record) and gives a
+  customer `FORMER_OWNER_LABEL` — "a former administrator", which is a role, reads
+  after "set by", and is never a key.
+- **The projection is one decision per shape**, not a condition copied into each
+  arm: `(!customer_reader).then(…)` at the row, `reader_customer.is_none()` at the
+  revision, `customer_writer` at the write answer, so a route cannot drift from the
+  test.
+- **Red proofs, both directions.** Re-introducing `published_by` for a customer
+  arm failed with the leak named in the assertion text
+  (`"published_by":"platform-id"`); printing `owner` again failed the switchboard
+  test on `tenant-owner`; forcing `overrideScopeLabel(…, false)` in the console
+  failed on a rendered `CZA-1`; and branching the row on `override.owner` being
+  present failed the new key-less test. Every mutation was reverted and
+  `diff`-verified against a `/tmp` copy.
+- **The two console cases cover different regressions.** The existing customer test
+  keeps a *platform-shaped* fixture (keys present) so a page that prints one is
+  caught; the new one feeds the *key-less* answer the server now sends, so a page
+  that shows the person only when a key exists is caught too. React renders
+  `{undefined}` as nothing, which is why the second case asserts the name is still
+  there rather than relying only on an absence scan.
+- **`/operations` was checked and is not in scope.** It prints `entry.scope_id` and
+  `title={entry.published_by}`, but `OPERATIONS_VIEW_PERMISSION` is granted to no
+  role below `system_admin`, and the guard lists `/operations/runtime` among the
+  surfaces a tenant session cannot reach.
+
+**Gates**: `cargo fmt --all`, `cargo test -p nullapart-mail-core --lib` 659 passed
+(1 ignored), `cargo clippy -p nullapart-mail-core --all-targets -- -D warnings`
+clean (which also compile-verifies `tests/`). `pnpm check-all` green at 312 tests
+across 34 files, prettier clean.
+
+**A note on the test count.** The first library run of this pass reported five
+`ml_feedback_admin` failures (401 where 403 was expected, and an empty error body).
+That module and `slo_burn_rate` are **untracked work from another session in this
+shared working tree**, registered by an uncommitted `crates/mail-core/src/lib.rs`
+hunk; `ml_feedback_admin.rs` had been rewritten minutes earlier, mid-run. They were
+untouched by this slice, are excluded from its commit, and the two re-runs after
+that edit landed were clean (659/659 twice). Anyone bisecting the branch should
+treat that module as concurrently owned.
+
+**What this does not prove.** `project_features` and `project_family_summary` are
+pure and fully covered, but `list_features`, `get_family` and `write_override` read
+their rows from `sqlx` and resolve `caller_tier` through `custom_role_levels`, so
+the handler-to-projection wiring is covered only by the `#[ignore]`d Postgres tests
+that cannot reach a database from this machine. The wording and the split are
+pinned; the wiring is not run.
 
 ## Deploy incident: never `rsync --delete` to `.4`
 

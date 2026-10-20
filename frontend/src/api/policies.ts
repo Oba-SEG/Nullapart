@@ -96,11 +96,14 @@ export const OVERRIDE_VALUE_PREFIX = "typed:";
 
 export interface RevisionSummary {
   revision_number: number;
-  published_by: string;
-  /** The publisher's name for the seat reading the history. A customer read
-   * resolves a publisher outside their own organisation to the provider. A
-   * service that predates the field leaves it out, and the row key it stores is
-   * never printed. */
+  /** The stored actor reference. Only a platform answer carries it: it is a row
+   * key in the provider's directory and can be one of the platform's own
+   * operators, so a customer answer has no such key to read. Nothing prints it
+   * even when it is present. */
+  published_by?: string;
+  /** The publisher as the seat reading the history knows them. A customer read
+   * resolves a publisher outside their own organisation to the provider. This is
+   * the only publisher field a tenant answer has. */
   published_by_name?: string | null;
   published_at: string;
   scope_level: RevisionScope;
@@ -208,13 +211,17 @@ export interface RefreshResult {
 export interface FeatureOverride {
   id: string;
   scope: OverrideScope;
-  scope_id: string;
+  /** Which row of the ladder holds this override. A customer answer has the
+   * `scope` word and none of the identifier behind it, which is the deployment's
+   * own reference on a platform row. */
+  scope_id?: string;
   value: string;
-  /** The stored actor reference: an administrator identity id. Kept because
-   * audit records and support tickets name overrides by it. */
-  owner: string;
-  /** Whose decision this is, in the words an operator reads. The server falls
-   * back to `owner` when no display name exists, so it is never empty. */
+  /** The stored actor reference: an administrator identity id. Only a platform
+   * answer carries it; a tenant reads the row by the name of whoever set it. */
+  owner?: string;
+  /** Whose decision this is, in the words the reading seat gets. A customer
+   * answer never falls back to `owner`, so this is always a person or a role,
+   * not a key. */
   owner_display_name: string;
   reason: string;
   revision: number;

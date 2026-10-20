@@ -435,11 +435,52 @@ describe("FeatureOverrides", () => {
     expect(screen.queryByText("Security floor")).toBeNull();
     expect(screen.queryByText("Emergency stop")).toBeNull();
     expect(screen.queryByText("This customer · CZA-1")).toBeNull();
+    // The fixture deliberately carries the stored keys a platform answer has, so
+    // a page that reaches for them instead of the projected words is caught here
+    // rather than by the key-less read below.
+    for (const key of ["CZA-1", "6f1f6b3e"]) {
+      expect(document.body.textContent).not.toContain(key);
+    }
     expect(screen.getByText("Your setting")).toBeTruthy();
     // The columns an operator compares against are not on a tenant table.
     expect(screen.queryByText("What it controls")).toBeNull();
     expect(screen.queryByText("Default")).toBeNull();
     expect(screen.getByText("On for your sending")).toBeTruthy();
+  });
+
+  /** The answer a tenant now actually receives: the row is named by the person
+   * who set it and carries no stored key at all. A console that built its
+   * sentence out of `scope_id` or `owner` would print `undefined` here. */
+  it("names the person behind a customer row that carries no keys", async () => {
+    const keyless = {
+      ...customerBulkGuard,
+      overrides: [
+        {
+          id: "override-tenant",
+          scope: "tenant",
+          value: "typed:rate_limit=10",
+          owner_display_name: "Lerato Mokoena",
+          reason: "Campaign weekend lift",
+          revision: 3,
+          created_at: "2026-01-05T09:00:00Z",
+          expires_at: "2026-02-01T00:00:00Z",
+        },
+      ],
+    };
+    stubFetch(customerSession, ["tenant"], () => customerSavedResult("inherit"), {
+      data: {
+        features: [keyless, customerContentReview],
+        allowed_override_scopes: ["tenant"],
+      },
+    });
+    renderAt("/features-overrides");
+
+    await screen.findByText("Bulk sending limits");
+    expect(screen.getByText(/set by Lerato Mokoena/)).toBeTruthy();
+    expect(screen.getAllByText("rate_limit=10").length).toBeGreaterThan(0);
+    for (const absent of ["undefined", "CZA-1", "6f1f6b3e", "null"]) {
+      expect(document.body.textContent).not.toContain(absent);
+    }
   });
 
   it("says who decided each customer value instead of where it came from", async () => {

@@ -71,6 +71,11 @@ const SYSTEM_SCOPE_ID: &str = "system";
 /// operator's identity belongs to the platform's own history.
 const PROVIDER_PUBLISHER_LABEL: &str = "Your provider";
 
+/// Who set an override the customer directory can no longer name. Reads after
+/// the console's "set by", so it is a role, not a key: a stored reference that
+/// only resolves inside the platform must not become the tenant's sentence.
+const FORMER_OWNER_LABEL: &str = "a former administrator";
+
 const POLICIES_PATH: &str = "/api/v1/policies";
 const POLICY_PATH: &str = "/api/v1/policies/:family_key";
 const POLICY_REVISIONS_PATH: &str = "/api/v1/policies/:family_key/revisions";
@@ -276,10 +281,16 @@ impl RevisionScope {
 #[derive(Serialize)]
 struct RevisionSummaryResponse {
     revision_number: i64,
-    published_by: String,
-    /// Additive per `docs/27`: `published_by` stays the stored actor reference
-    /// because a revision history has to keep naming the identity, not a label
-    /// that can change. The console reads the name.
+    /// The stored actor reference. Platform-only, and additively absent for a
+    /// customer read per `docs/27`: it is the directory id of whoever published
+    /// the revision, which can be a platform operator's, and an identifier the
+    /// customer console never prints is still readable in the browser's own
+    /// inspector, so it does not belong in their answer at all.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    published_by: Option<String>,
+    /// Additive per `docs/27`: `published_by` stays for the seats allowed to
+    /// hold it, because a revision history has to keep naming the identity, not
+    /// a label that can change. The console reads the name.
     published_by_name: String,
     published_at: DateTime<Utc>,
     scope_level: RevisionScope,
@@ -288,7 +299,10 @@ struct RevisionSummaryResponse {
 #[derive(Serialize)]
 struct RevisionDetailResponse {
     revision_number: i64,
-    published_by: String,
+    /// Same placement rule as the summary: a customer read gets the name, never
+    /// the reference the name was looked up from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    published_by: Option<String>,
     published_by_name: String,
     published_at: DateTime<Utc>,
     scope_level: RevisionScope,
@@ -357,9 +371,16 @@ struct RefreshResponse {
 struct FeatureOverrideResponse {
     id: Uuid,
     scope: OverrideScope,
-    scope_id: String,
+    /// Which row on the ladder this override sits at. A customer read gets the
+    /// `scope` word and never the identifier behind it, which is the
+    /// deployment's own reference on a platform or system row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope_id: Option<String>,
     value: String,
-    owner: String,
+    /// The stored actor reference of whoever set this, for the seats allowed to
+    /// hold it. A customer answer has `owner_display_name` and nothing else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    owner: Option<String>,
     /// Whose decision this is, in the words an operator reads. `owner` stays
     /// because it is the stored reference audit names.
     owner_display_name: String,
@@ -408,9 +429,14 @@ struct FeatureListResponse {
 struct OverrideWriteResponse {
     id: Uuid,
     scope: OverrideScope,
-    scope_id: String,
+    /// Withheld on the same placement rule as the list read, so a tenant who
+    /// writes their own override is not handed the platform's row keys in the
+    /// answer that confirms it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope_id: Option<String>,
     value: String,
-    owner: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    owner: Option<String>,
     owner_display_name: String,
     reason: String,
     revision: i64,
@@ -1231,18 +1257,38 @@ pub(crate) struct LoadedOverride {
     pub(crate) item: FeatureOverride,
 }
 
+/// The words a customer read uses for whoever set an override.
+///
+/// A platform read falls back to the stored reference when the directory holds
+/// no name for it, which keeps the history honest about what is on the record.
+/// A customer has no such reference to be honest about: an owner the directory
+/// no longer holds is named by what they were to that tenant, never by a key
+/// that only means something inside the platform.
+fn override_owner_name(
+    names: &HashMap<String, String>,
+    stored: &str,
+    customer_reader: bool,
+) -> String {
+    match names.get(stored) {
+        Some(name) => name.clone(),
+        None if customer_reader => FORMER_OWNER_LABEL.to_string(),
+        None => stored.to_string(),
+    }
+}
+
 fn override_response(
     loaded: &LoadedOverride,
     names: &HashMap<String, String>,
+    customer_reader: bool,
 ) -> FeatureOverrideResponse {
     let item = &loaded.item;
     FeatureOverrideResponse {
         id: loaded.id,
         scope: item.scope,
-        scope_id: item.scope_id.clone(),
+        scope_id: (!customer_reader).then(|| item.scope_id.clone()),
         value: encode_feature_value(&item.value),
-        owner: item.owner.clone(),
-        owner_display_name: actor_display_name(names, &item.owner),
+        owner: (!customer_reader).then(|| item.owner.clone()),
+        owner_display_name: override_owner_name(names, &item.owner, customer_reader),
         reason: item.reason.clone(),
         revision: item.revision,
         created_at: item.created_at,
@@ -1256,10 +1302,11 @@ fn active_revision(
     reader_customer: Option<&str>,
 ) -> Option<RevisionSummaryResponse> {
     let published_by = row.6.clone()?;
+    let customer_reader = reader_customer.is_some();
     Some(RevisionSummaryResponse {
         revision_number: row.5?,
         published_by_name: publisher_name(identities, &published_by, reader_customer),
-        published_by,
+        published_by: (!customer_reader).then_some(published_by),
         published_at: row.7?,
         scope_level: RevisionScope::parse(row.8.as_deref()?)?,
     })
@@ -1636,7 +1683,7 @@ async fn get_family(
         revisions.push(RevisionDetailResponse {
             revision_number: row.0,
             published_by_name: publisher_name(&identities, &published_by, reader_customer),
-            published_by,
+            published_by: reader_customer.is_none().then_some(published_by),
             published_at: row.2,
             scope_level,
             activated_at: row.4,
@@ -2083,7 +2130,7 @@ fn project_features(
                 .iter()
                 .copied()
                 .filter(|loaded| !customer_reader || loaded.item.scope == OverrideScope::Tenant)
-                .map(|loaded| override_response(loaded, actor_names))
+                .map(|loaded| override_response(loaded, actor_names, customer_reader))
                 .collect(),
         });
     }
@@ -2387,20 +2434,21 @@ async fn write_override(
         Ok(evaluation) => evaluation,
         Err(_) => return unavailable(),
     };
+    let customer_writer = caller == Some(0);
     let response = OverrideWriteResponse {
         id: inserted_id,
         scope: body.scope,
-        scope_id,
+        scope_id: (!customer_writer).then(|| scope_id.clone()),
         value: encoded,
-        owner: owner.clone(),
-        owner_display_name: actor_display_name(&actor_names, &owner),
+        owner: (!customer_writer).then(|| owner.clone()),
+        owner_display_name: override_owner_name(&actor_names, &owner, customer_writer),
         reason: reason.to_string(),
         revision,
         created_at,
         expires_at: body.expires_at,
         effective_value: encode_feature_value(&evaluation.value),
-        winning_scope: (caller != Some(0)).then_some(evaluation.winning_scope),
-        governed_by: (caller == Some(0)).then(|| governing_party(evaluation.winning_scope)),
+        winning_scope: (!customer_writer).then_some(evaluation.winning_scope),
+        governed_by: customer_writer.then(|| governing_party(evaluation.winning_scope)),
     };
     let Some(value) = envelope(&response) else {
         return unavailable();
@@ -3219,9 +3267,11 @@ mod tests {
         // platform's name for the technique, which is why the platform name is
         // on the withheld list below rather than merely unprinted.
         assert_eq!(value[0]["display_name"], "Message content review");
-        // The floor flag, the kill switch, the scope ladder and the platform's
-        // own prose are absent rather than blanked, so nothing downstream has to
-        // remember to hide them.
+        // The floor flag, the kill switch, the scope ladder, the platform's own
+        // prose and the stored row keys are absent rather than blanked, so
+        // nothing downstream has to remember to hide them. `local-customer` is
+        // the tenant's own identifier, but it is minted by the platform and
+        // never quoted back at them: the row is simply their setting.
         for withheld in [
             "tenant_authorization",
             "Deep AI content analysis scanner",
@@ -3233,16 +3283,27 @@ mod tests {
             "deployment",
             "platform-owner",
             "ob1",
+            "tenant-owner",
+            "local-customer",
+            "scope_id",
         ] {
             assert!(
                 !text.contains(withheld),
                 "a customer answer must not carry {withheld}: {text}"
             );
         }
-        // Their own row survives, and who governs replaces the ladder without
-        // losing the honest answer: the platform's kill still holds.
+        // Their own row survives, named by who set it and who governs it, and
+        // the honest answer about the platform's kill still holds.
         assert_eq!(value[0]["overrides"].as_array().expect("rows").len(), 1);
-        assert_eq!(value[0]["overrides"][0]["owner"], "tenant-owner");
+        assert_eq!(
+            value[0]["overrides"][0]["owner_display_name"],
+            "Dana Whitfield"
+        );
+        assert!(
+            value[0]["overrides"][0].get("owner").is_none(),
+            "a customer row carried a stored actor reference: {}",
+            value[0]["overrides"][0]
+        );
         assert_eq!(value[0]["governed_by"], "provider");
         assert_eq!(value[0]["effective_value"], "disabled");
 
@@ -3270,6 +3331,9 @@ mod tests {
             "\"scope_id\":\"system\"",
             "platform-owner",
             "ob1",
+            "tenant-owner",
+            "\"scope_id\":\"local-customer\"",
+            "Dana Whitfield",
         ] {
             assert!(
                 platform_text.contains(published),
@@ -3737,6 +3801,105 @@ mod tests {
             shared.description,
             "Spam classification thresholds and disposition"
         );
+    }
+
+    /// One published family, as the read model receives it, with the publisher
+    /// reference the seat is about to be answered for.
+    fn family_row_with_publisher(stored: &str) -> FamilyActiveRow {
+        (
+            "ml_threat_classification".to_string(),
+            "ML threat classification".to_string(),
+            "Machine-learning threat classification evidence".to_string(),
+            "support".to_string(),
+            false,
+            Some(4),
+            Some(stored.to_string()),
+            Some(Utc::now()),
+            Some("tenant".to_string()),
+            Some("Automatic threat review".to_string()),
+            Some("Automatic threat review evidence".to_string()),
+        )
+    }
+
+    /// A revision's publisher reference is a row key in the platform's own
+    /// directory, and for a family published by one of its operators it is that
+    /// operator's identity. The console prints a name, so a customer read has no
+    /// use for the key, and a key that only means something inside the platform
+    /// must not be readable in a tenant's browser.
+    #[test]
+    fn a_customer_revision_history_carries_no_publisher_reference() {
+        let identities = HashMap::from([
+            (
+                "platform-id".to_string(),
+                ActorIdentity {
+                    display_name: "ob1".to_string(),
+                    customer_id: None,
+                },
+            ),
+            (
+                "tenant-id".to_string(),
+                ActorIdentity {
+                    display_name: "Naledi Pillay".to_string(),
+                    customer_id: Some("local-customer".to_string()),
+                },
+            ),
+        ]);
+
+        for (stored, expected_name) in [
+            ("platform-id", PROVIDER_PUBLISHER_LABEL),
+            ("tenant-id", "Naledi Pillay"),
+        ] {
+            let row = family_row_with_publisher(stored);
+            let for_customer =
+                project_family_summary(&row, 1, &identities, reader_customer(Some(0), &context()));
+            let value = serde_json::to_value(&for_customer).expect("serializable");
+
+            assert_eq!(
+                value["active_revision"]["published_by_name"], expected_name,
+                "{stored} published a revision this customer reads as {expected_name}"
+            );
+            assert!(
+                value["active_revision"].get("published_by").is_none(),
+                "a customer revision carried a publisher reference: {value}"
+            );
+            let text = value.to_string();
+            for key in [stored, "platform-id", "tenant-id"] {
+                assert!(
+                    !text.contains(key),
+                    "a customer revision history carried {key}: {text}"
+                );
+            }
+
+            // Anti-vacuous: the platform seat still holds the reference the
+            // audit trail is addressed by.
+            let for_platform = project_family_summary(&row, 1, &identities, None);
+            assert_eq!(
+                serde_json::to_value(&for_platform).expect("serializable")["active_revision"]
+                    ["published_by"],
+                stored,
+                "a platform revision lost the reference it triages with"
+            );
+        }
+    }
+
+    /// A tenant's override was set by someone in their own organisation, and when
+    /// that identity is gone the row still has to read as a person. A platform
+    /// read keeps the stored reference so its history stays honest about what is
+    /// on the record, even after the account is deleted.
+    #[test]
+    fn an_unresolved_override_owner_reads_as_a_person_to_a_tenant() {
+        let names = HashMap::from([("dana-id".to_string(), "Dana Whitfield".to_string())]);
+
+        assert_eq!(
+            override_owner_name(&names, "dana-id", true),
+            "Dana Whitfield"
+        );
+        assert_eq!(
+            override_owner_name(&names, "gone-id", true),
+            FORMER_OWNER_LABEL,
+            "a deleted identity must not reach a tenant as a key"
+        );
+        assert_eq!(override_owner_name(&names, "gone-id", false), "gone-id");
     }
 
     /// A refused reason is stored in the audit row and read back by the actor,
