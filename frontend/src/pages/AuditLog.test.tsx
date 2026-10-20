@@ -153,7 +153,11 @@ describe("AuditLog", () => {
     stubFetch();
     renderInRouter();
 
-    fireEvent.click(await screen.findByRole("button", { name: /2026/ }));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /view audit event quarantine release by admin@example\.test/i,
+      }),
+    );
 
     expect(await screen.findByText("release_reason")).toBeTruthy();
     expect(screen.getByText("session_token")).toBeTruthy();

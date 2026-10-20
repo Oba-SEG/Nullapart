@@ -75,7 +75,9 @@ jobs:
         # CI while every advisory with an available remediation still fails.
         run: cargo audit --ignore RUSTSEC-2023-0071
       - name: Trivy filesystem scan (critical gate)
-        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0 # 0.29.0
+        # v0.29.0 depended on a setup-trivy tag that GitHub can no longer resolve.
+        # This release pins its setup dependency by immutable commit as well.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
