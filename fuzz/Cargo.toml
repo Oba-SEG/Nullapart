@@ -1,0 +1,37 @@
+[package]
+name = "nullapart-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+nullapart-mail-core = { path = "../crates/mail-core" }
+serde_json = "1"
+# Keep the fuzz build on the workspace-pinned ONNX Runtime release candidate;
+# an unpinned resolution pulls an incompatible newer rc.
+ort = "=2.0.0-rc.13"
+
+[[bin]]
+name = "handoff_request"
+path = "fuzz_targets/handoff_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dmarc_aggregate"
+path = "fuzz_targets/dmarc_aggregate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "milter_evidence_headers"
+path = "fuzz_targets/milter_evidence_headers.rs"
+test = false
+doc = false
+bench = false

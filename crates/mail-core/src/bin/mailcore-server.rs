@@ -26,6 +26,7 @@ use nullapart_mail_core::domain_observer::{DomainObserverConfig, DomainObserverW
 use nullapart_mail_core::domain_security::{domain_security_router, DomainSecurityState};
 use nullapart_mail_core::handoff::HandoffConfig;
 use nullapart_mail_core::inline_ml::stage::InlineMlStage;
+use nullapart_mail_core::ml_feedback_admin::{ml_feedback_admin_router, MlFeedbackAdminState};
 use nullapart_mail_core::model_registry::{model_registry_router, ModelRegistryState};
 use nullapart_mail_core::notification_api::{notification_router, NotificationApiState};
 use nullapart_mail_core::notification_delivery::{
@@ -371,6 +372,10 @@ async fn local_quarantine_api(
             deployment_id.clone(),
         )))
         .merge(policy_admin_router(AdminPolicyState::new(
+            pool.clone(),
+            deployment_id.clone(),
+        )))
+        .merge(ml_feedback_admin_router(MlFeedbackAdminState::new(
             pool.clone(),
             deployment_id.clone(),
         )))

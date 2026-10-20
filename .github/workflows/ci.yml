@@ -47,6 +47,97 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+  security:
+    name: Dependency and image security gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - name: Cache Cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: security-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            security-${{ runner.os }}-
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Advisory audit
+        # openidconnect 4.x requires rsa 0.9.x. RustSec has no fixed release
+        # for RUSTSEC-2023-0071, so this single exception remains visible in
+        # CI while every advisory with an available remediation still fails.
+        run: cargo audit --ignore RUSTSEC-2023-0071
+      - name: Trivy filesystem scan (critical gate)
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0 # 0.29.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+          scanners: vuln,secret
+      - name: Install nightly and cargo-fuzz
+        run: |
+          rustup toolchain install nightly --profile minimal
+          cargo +nightly install cargo-fuzz --locked
+      - name: Bounded fuzz runs (handoff, DMARC, milter evidence)
+        run: |
+          set -eu
+          for target in handoff_request dmarc_aggregate milter_evidence_headers; do
+            cargo +nightly fuzz run "$target" -- -max_total_time=45 -timeout=10
+          done
+
+  compose-smoke:
+    name: Inline ML fixture and filter wrapper smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - name: Cache Cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: smoke-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            smoke-${{ runner.os }}-
+      - name: Generate inline-ML fixture
+        run: |
+          pip install --quiet onnx numpy
+          python crates/mail-core/tests/fixtures/make_inline_ml_fixture.py "$RUNNER_TEMP/inline-ml-fixture"
+      - name: Fixture model load and inference contract
+        env:
+          NULLAPART_INLINE_ML_FIXTURE_DIR: ${{ runner.temp }}/inline-ml-fixture
+        run: cargo test -p nullapart-mail-core --test inline_ml_fixture_smoke -- --ignored
+      - name: Build mailcore-filter
+        run: cargo build -p nullapart-mail-core --bin mailcore-filter
+      - name: Filter selftest and wrapper EX_TEMPFAIL on broken binary
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/filter-smoke"
+          cp target/debug/mailcore-filter "$RUNNER_TEMP/filter-smoke/mailcore-filter"
+          cp docker/mailcore-filter-wrapper.sh "$RUNNER_TEMP/filter-smoke/wrapper"
+          chmod +x "$RUNNER_TEMP/filter-smoke/wrapper"
+          "$RUNNER_TEMP/filter-smoke/mailcore-filter" --selftest
+          cp target/debug/mailcore-filter "$RUNNER_TEMP/filter-smoke/mailcore-filter.broken"
+          truncate -s 0 "$RUNNER_TEMP/filter-smoke/mailcore-filter.broken"
+          set +e
+          NULLAPART_MAILCORE_FILTER_BIN="$RUNNER_TEMP/filter-smoke/mailcore-filter.broken" \
+            "$RUNNER_TEMP/filter-smoke/wrapper" \
+            --queue-id CI-SMOKE --client-address 192.0.2.1 \
+            --client-helo example.net --sender smoke@example.com \
+            -- alice@phase2.test
+          status=$?
+          set -e
+          test "$status" -eq 75
+
   frontend:
     name: Frontend checks
     runs-on: ubuntu-latest
@@ -130,7 +221,12 @@ jobs:
       - name: Generate build provenance
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
-          subject-path: target/release/*
+          # Attest distributable executables only. `target/release/*` also
+          # expands to dependency artefacts and exceeds GitHub's 1,024-subject
+          # attestation limit.
+          subject-path: |
+            target/release/mailcore-filter
+            target/release/mailcore-server
       - name: Scan SBOM for critical vulnerabilities
         uses: anchore/scan-action@1638637db639e0ade3258b51db49a9a137574c3e # v6
         id: scan

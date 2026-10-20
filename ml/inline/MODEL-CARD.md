@@ -138,6 +138,15 @@ Gates (all ✅): int8 size ≤ 100 MB; int8 p95 ≤ 50 ms; fp32↔int8 parity me
   bit-identical to fp32.
 - The model is trained only on the listed corpora; novel threats and distribution shift are out
   of scope. This card makes no compliance or certification claim.
+- **Adversarial robustness is unmeasured in training and measured only offline by
+  `adversarial_eval.py`** (case flips, whitespace inflation, zero-width characters, Cyrillic
+  homoglyphs, instruction-embedding prefixes, gibberish suffixes). The model has no adversarial
+  training; surface perturbations can flip individual predictions. The report
+  (`run-logs/adversarial-eval.json`) records flip rates per perturbation, and the model treats
+  the flip-rate gate (`--max-flip-rate`, default 0.25) as a regression signal, not a guarantee.
+  Prompt-injection-style text inside a message cannot grant tool or policy authority (see the
+  Deep AI serving contract tests), but it may still shift this classifier's scores; downstream
+  disposition always requires server-side policy, never the model verdict alone.
 
 ## 8. Reproduction (local Mac)
 

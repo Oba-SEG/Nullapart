@@ -35,6 +35,13 @@ Thumbs.db
 # Build artifacts
 /build/
 /out/
+fuzz/target/
+fuzz/corpus/
+fuzz/artifacts/
+
+# Local-only ML evaluation output. These reports are regenerated from a local
+# checkpoint and must not become source or CI input by accident.
+ml/inline/run-logs/
 
 # Local-only runtime credential material written by compose.local.yml
 infrastructure/containers/.zitadel-bootstrap/

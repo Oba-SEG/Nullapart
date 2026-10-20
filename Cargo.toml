@@ -7,6 +7,9 @@ members = [
     "crates/scanner-sdk",
     "crates/observability",
 ]
+# cargo-fuzz manages its own workspace and requires nightly; keeping it out
+# of the main workspace avoids forcing nightly on regular CI.
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.1.0"

@@ -190,6 +190,7 @@ pub const BUILTIN_ROLES: [BuiltinRole; 3] = [
             crate::policy_admin::POLICIES_MANAGE_PERMISSION,
             crate::model_registry::MODELS_VIEW_PERMISSION,
             crate::model_registry::MODELS_MANAGE_PERMISSION,
+            crate::ml_feedback_admin::ML_FEEDBACK_VIEW_PERMISSION,
             crate::connectors_remediation_api::CONNECTORS_VIEW_PERMISSION,
             crate::connectors_remediation_api::CONNECTORS_MANAGE_PERMISSION,
             OPERATIONS_VIEW_PERMISSION,
@@ -221,6 +222,7 @@ pub const BUILTIN_ROLES: [BuiltinRole; 3] = [
             crate::policy_admin::POLICIES_VIEW_PERMISSION,
             crate::policy_admin::POLICIES_MANAGE_PERMISSION,
             crate::model_registry::MODELS_VIEW_PERMISSION,
+            crate::ml_feedback_admin::ML_FEEDBACK_VIEW_PERMISSION,
             crate::connectors_remediation_api::CONNECTORS_VIEW_PERMISSION,
             crate::connectors_remediation_api::CONNECTORS_MANAGE_PERMISSION,
             OPERATIONS_VIEW_PERMISSION,
@@ -428,6 +430,12 @@ pub const PERMISSION_CATALOG: &[PermissionMeta] = &[
         key: crate::model_registry::MODELS_MANAGE_PERMISSION,
         display_name: "Manage models",
         description: "Register, promote or roll back models.",
+        group: "Models",
+    },
+    PermissionMeta {
+        key: crate::ml_feedback_admin::ML_FEEDBACK_VIEW_PERMISSION,
+        display_name: "View ML feedback",
+        description: "Read the ML feedback candidate queue in the authorized scope.",
         group: "Models",
     },
     PermissionMeta {
