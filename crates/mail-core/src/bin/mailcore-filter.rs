@@ -19,6 +19,7 @@ use sha2::{Digest, Sha256};
 
 const EX_TEMPFAIL: i32 = 75;
 const HANDOFF_PATH: &str = "/internal/handoff";
+const SELFTEST_MARKER: &str = "nullapart-mailcore-filter-ready";
 
 /// Shared HTTP client with connection pooling across invocations.
 ///
@@ -118,6 +119,10 @@ async fn main() {
     // is never reached on a broken binary and the wrapper can map the
     // difference to EX_TEMPFAIL instead of accepting a permanent bounce.
     if env::args().nth(1).as_deref() == Some("--selftest") {
+        // A marker prevents an empty or text file from being treated as a
+        // successful shell script on platforms that fall back from exec(2)
+        // to a command interpreter. The wrapper requires this exact value.
+        println!("{SELFTEST_MARKER}");
         process::exit(0);
     }
 

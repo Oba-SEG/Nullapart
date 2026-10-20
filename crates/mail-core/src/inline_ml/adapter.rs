@@ -107,7 +107,7 @@ fn threshold_findings(
     thresholds: &MlThresholdConfig,
     identity: &super::runtime::ModelIdentity,
 ) -> Vec<nullapart_scanner_sdk::types::ScannerFinding> {
-    use nullapart_scanner_sdk::types::ScannerFinding;
+    use nullapart_scanner_sdk::types::{Indicator, IndicatorType, ScannerFinding};
     let mut findings = Vec::new();
     for (index, label) in INLINE_ML_LABELS.iter().enumerate() {
         let Some(category) = label_to_category(label) else {
@@ -148,7 +148,18 @@ fn threshold_findings(
                 },
                 "scores": serde_json::Value::Object(all_scores.clone()),
             })),
-            indicators: Vec::new(),
+            // The classifier observes message content only (no envelope or
+            // header metadata), so the one indicator it can honestly emit is
+            // the behavioral verdict itself: category + band, resolvable to
+            // the model identity in `details`.
+            indicators: vec![Indicator {
+                indicator_type: IndicatorType::Behavior,
+                value: format!("inline_ml_{key}_{}", band_label(band).to_ascii_lowercase()),
+                context: Some(format!(
+                    "model {} v{} score {:.4}",
+                    identity.model_id, identity.model_version, score
+                )),
+            }],
             false_positive: false,
         });
     }

@@ -75,10 +75,14 @@ fi
 # infrastructure failure into a permanent 5.3.0 bounce. The selftest proves
 # the executable and its dynamic dependencies load, and any residual exec
 # failure is mapped to EX_TEMPFAIL so Postfix retries instead.
-/usr/libexec/nullapart/mailcore-filter --selftest >/dev/null 2>&1 \
-  || fail "mailcore-filter failed selftest (binary or dependencies unusable)"
+# NULLAPART_MAILCORE_FILTER_BIN exists only so the CI smoke can point the
+# wrapper at a deliberately broken copy; Postfix never sets it.
+filter_bin="${NULLAPART_MAILCORE_FILTER_BIN:-/usr/libexec/nullapart/mailcore-filter}"
+if [ "$("$filter_bin" --selftest 2>/dev/null)" != "nullapart-mailcore-filter-ready" ]; then
+  fail "mailcore-filter failed selftest (binary or dependencies unusable)"
+fi
 
-exec /usr/libexec/nullapart/mailcore-filter \
+exec "$filter_bin" \
   --queue-id "$queue_id" \
   --client-address "$client_address" \
   --client-hostname "$client_hostname" \

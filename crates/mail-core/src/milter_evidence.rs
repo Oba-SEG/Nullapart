@@ -19,8 +19,8 @@
 
 use chrono::Utc;
 use nullapart_mail_contracts::finding::{
-    Confidence, FindingCategory, FindingId, FindingScope, FindingSeverity, ScannerStatus,
-    ScannerType, SecurityFinding,
+    Confidence, FindingCategory, FindingId, FindingScope, FindingSeverity, Indicator,
+    IndicatorType, ScannerStatus, ScannerType, SecurityFinding,
 };
 use nullapart_scanner_sdk::fabric::ScannerOutcome;
 use nullapart_scanner_sdk::trait_defs::ScannerId as SdkScannerId;
@@ -217,8 +217,17 @@ pub fn merge_milter_evidence(
                 "action": action,
                 "is_spam": observations.is_spam,
                 "symbols": detail_symbols,
+                "authentication_results": {
+                    "spf": observations.spf_result,
+                    "dkim": observations.dkim_result,
+                    "dmarc": observations.dmarc_result,
+                },
             })),
-            indicators: Vec::new(),
+            indicators: vec![Indicator {
+                indicator_type: IndicatorType::Behavior,
+                value: "rspamd_spam_verdict".to_string(),
+                context: Some(format!("score {:.2}, action {action}", observations.score)),
+            }],
             created_at: Utc::now(),
             false_positive: false,
             transaction_id: Some(context.transaction_id.clone()),
@@ -255,21 +264,22 @@ fn derive_auth_results(symbols: &[String]) -> (Option<String>, Option<String>, O
     let dkim = mapped(
         symbols,
         &[
-            ("DKIM_FAIL", "fail"),
-            ("DKIM_TEMPFAIL", "temperror"),
-            ("DKIM_PERMERROR", "permerror"),
-            ("DKIM_MISSING", "none"),
-            ("DKIM_ALLOW", "pass"),
+            ("R_DKIM_FAIL", "fail"),
+            ("R_DKIM_TEMPFAIL", "temperror"),
+            ("R_DKIM_PERMERROR", "permerror"),
+            ("R_DKIM_NA", "none"),
+            ("R_DKIM_ALLOW", "pass"),
         ],
     );
     let dmarc = mapped(
         symbols,
         &[
-            ("DMARC_REJECT", "reject"),
-            ("DMARC_QUARANTINE", "quarantine"),
-            ("DMARC_FAIL", "fail"),
-            ("DMARC_UNKNOWN", "none"),
-            ("DMARC_ALLOW", "pass"),
+            ("DMARC_POLICY_REJECT", "reject"),
+            ("DMARC_POLICY_QUARANTINE", "quarantine"),
+            ("DMARC_POLICY_SOFTFAIL", "softfail"),
+            ("DMARC_BAD_POLICY", "permerror"),
+            ("DMARC_NA", "none"),
+            ("DMARC_POLICY_ALLOW", "pass"),
         ],
     );
     (spf, dkim, dmarc)
@@ -362,7 +372,7 @@ mod tests {
 X-Rspamd-Score: 7.41\r\n\
 X-Rspamd-Action: add header\r\n\
 X-Rspamd-Is-Spam: yes\r\n\
-X-Rspamd-Symbols: R_SPF_FAIL,DKIM_ALLOW,DMARC_QUARANTINE,SUBJ_ALL_CAPS(3.00),MISSING_MID\r\n\
+X-Rspamd-Symbols: R_SPF_FAIL,R_DKIM_ALLOW,DMARC_POLICY_QUARANTINE,SUBJ_ALL_CAPS(3.00),MISSING_MID\r\n\
 From: promo@gmail.com\r\n\
 \r\nbody";
         let observations = parse_queued_evidence(raw);
