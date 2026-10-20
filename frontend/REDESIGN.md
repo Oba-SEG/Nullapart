@@ -1184,8 +1184,8 @@ The sweep script was rewritten and its detectors self-tested offline instead.
 
 The policy and feature surface was the last tenant-readable module that had never
 adopted a placement projection of its own — it resolves `reader_customer` from
-`caller_tier` instead of `platform_placement`, and had been projecting *wording*
-(names, descriptions, the governing party) while still shipping the *references*
+`caller_tier` instead of `platform_placement`, and had been projecting _wording_
+(names, descriptions, the governing party) while still shipping the _references_
 the names were looked up from.
 
 - **What actually leaked was an identity, not a label.**
@@ -1193,8 +1193,8 @@ the names were looked up from.
   carried the stored actor reference of whoever published a revision. For a family
   published by one of the platform's own operators, that operator's directory id
   was going into a customer's JSON. The console never printed it — and that is
-  exactly the case the doctrine already rules on: *a name that reaches the network
-  answer is readable in the browser's own inspector even when nothing prints it*
+  exactly the case the doctrine already rules on: _a name that reaches the network
+  answer is readable in the browser's own inspector even when nothing prints it_
   (`policy_admin.rs`, on the catalog wording). The same rule condemns a key.
 - **Four fields became additively absent for a customer read**: `published_by` on
   both revision shapes, and `scope_id` + `owner` on `FeatureOverrideResponse` and
@@ -1222,8 +1222,8 @@ the names were looked up from.
   present failed the new key-less test. Every mutation was reverted and
   `diff`-verified against a `/tmp` copy.
 - **The two console cases cover different regressions.** The existing customer test
-  keeps a *platform-shaped* fixture (keys present) so a page that prints one is
-  caught; the new one feeds the *key-less* answer the server now sends, so a page
+  keeps a _platform-shaped_ fixture (keys present) so a page that prints one is
+  caught; the new one feeds the _key-less_ answer the server now sends, so a page
   that shows the person only when a key exists is caught too. React renders
   `{undefined}` as nothing, which is why the second case asserts the name is still
   there rather than relying only on an absence scan.
@@ -1252,6 +1252,130 @@ their rows from `sqlx` and resolve `caller_tier` through `custom_role_levels`, s
 the handler-to-projection wiring is covered only by the `#[ignore]`d Postgres tests
 that cannot reach a database from this machine. The wording and the split are
 pinned; the wiring is not run.
+
+## Landed in the twenty-first pass (a tenant's role row lists capabilities it holds)
+
+`GET /api/v1/admin/roles` had been projected by _level_: the ladder rule
+(`VisibleRoles::for_caller`) stops the directory at the highest rank the caller
+may grant, so a customer never sees a `system` or `support` bundle. What survived
+that filter was still answered with the platform's raw permission keys. A role is
+written by the provider, and a provider can write a **customer-level** custom role
+holding anything in the catalog, so the row a customer did list could name
+`deep-ai:view`, `operations:manage` or `audit:cross_customer` — capabilities that
+customer was never given, cannot hold, cannot trace and cannot grant.
+
+- **The two reads had disagreed.** `GET /admin/permissions` answers a grantor with
+  its own ceiling (that filter landed earlier on this branch), so the same tenant
+  was refused the vocabulary in one call and handed it in the other. One rule now
+  governs both.
+- **Withheld, not reworded.** `narrow_role_permissions` retains only keys the
+  reading session already holds and sets
+  `permissionsOutsideReach: true` — an additively absent key,
+  `Option` + `skip_serializing_if`, so a platform answer is byte-identical to
+  before and a row entirely inside the reader's reach carries no gap claim. The
+  server does **not** gain a second wording map: the tenant vocabulary already
+  lives in `PERMISSION_CAPABILITY_LABELS` (`lib/labels.ts`), which
+  `api/capabilities.ts` and this page both consume, and `PERMISSION_CATALOG`'s
+  display names are platform wording ("View Deep AI", "View scanner operations").
+  Naming the withheld set would have meant translating it for a reader who is by
+  definition not allowed those words; saying "more than you can see" is the honest
+  remainder.
+- **The gap is stated in the console, in the tenant's own words.** `Roles.tsx`
+  counts and chips `shownPermissions(...)` and appends a dashed, visibly
+  non-chip `More than you can see` with a hint that explains why that role is not
+  assignable. `grantsOutsideReach` reads the server flag **or** recomputes the
+  shortfall itself, so an older or regressed read that still sends the key cannot
+  print it. Same precedent as the `roleLevel === "customer"` directory filter.
+- **A projection that shrinks an array must not loosen a grant check.**
+  `rolePermissionsWithin` is trivially true on a narrowed list, which would have
+  made an ungrantable role look offerable in the administrator picker.
+  `AdminUsers.toRoleView` now refuses on `beyondHeld` (the server flag, or a key
+  the session genuinely lacks) and keeps built-in rows exempt for the same reason
+  the route exempts them: only a custom role is subset-checked.
+- **Red proofs.** In the Rust test, replacing `if platform_seat` with `if true`
+  failed on the serialized row containing `"deep-ai:view"`; deleting
+  `withheld |= !held;` failed the `permissionsOutsideReach` assertion; forcing
+  `let mut withheld = true` failed the "absent key means nothing was withheld" arm
+  on the caller's own builtin row. In the console, dropping the `shownPermissions`
+  filter failed the new `it.each` case (the arm where an older server still sends
+  the key), and printing the raw key instead of the tenant's capability word
+  failed the boundary guard's `Roles` surface, whose fixture now deliberately
+  carries `"deep-ai:view"` on a customer-level custom role. Every mutation was
+  reverted and `diff`-verified against a `/tmp` copy.
+
+### The guard itself had two blind spots, and this pass closed them
+
+Fixing the console is worth less than a sweep that can see it, so the same slice
+audited the sweeper. Both defects made the guard _green_, which is the only
+failure mode that matters for a guard.
+
+- **An anchored term cannot match a table.** The scan reads
+  `document.body.textContent`, and `textContent` welds a cell to its neighbour:
+  the role directory's "17 capabilities" plus a leaked chip reads
+  `capabilitysadmin:users:manage`. The permission-key term was
+  `/\b(admin|audit|…):[a-z_-]+/i`, and `\badmin` has no boundary there, so every
+  permission key printed in a table cell was invisible to it. The term's own
+  sample ("This needs quarantine:release.") has a space in front of it, so the
+  completeness test called the pattern alive while it could never match the
+  render it exists to police. The leading anchor is gone and the sample is now
+  the welded shape (`"2 capabilitiesquarantine:view."`), which makes the
+  completeness test pin the property: restoring `\b` fails with
+  `these terms do not match the leak they name: [ 'permission key' ]`. Proven by
+  that mutation and reverted.
+- **A surface with no settle label sweeps a loading state.** `ready` exists for
+  exactly this, and only 6 of 16 surfaces used it. `Overview` was worse than
+  vacuous: it mounted `Dashboard` at `/`, which `Layout` treats as the public
+  corporate site (`isPublic` → a chrome-less `<main>` with no session chip), so
+  its settle point `findByText("Your customer · CZA-1")` could never resolve and
+  the case had been failing — and a failing case sweeps nothing. It now mounts at
+  `/console` (the route the real router maps to `Dashboard`) and waits on
+  `Nothing held`, the page's own held-mail read. Seven more surfaces gained a
+  settle label drawn from their fixture (`No held messages match these filters.`,
+  `Session login`, `legacy@example.test` rather than the caller's own address,
+  `Quarantine handling`, `Outbound sender approvals`, `Bulk sending limits`,
+  `Acme Freight`). `Messages` and `Settings` keep none on purpose: the first
+  issues no read until a search is submitted, the second is session-only.
+- **The new labels found one real string and one deliberate exemption.** With
+  `Feature settings` actually painting, the sweep flagged `rate_limit=10`. That is
+  not platform bookkeeping: a "specific value" override is free text the operator
+  types and the platform stores verbatim (the field's own hint says "sent exactly
+  as you type it"), so it is the customer's own word echoed back. The guard lets
+  exactly that one literal through, shared as `customerTypedOverrideValue` with
+  the fixture that serves it, the same mechanism the customer's own message
+  identifiers use. Everything else on that panel stays swept.
+- **Sweep liveness proved.** Planting "scanner" in a Dashboard signal detail
+  turned `Overview` red with that string in the finding; printing raw keys from
+  the role table turned `Roles` red. Both restorations left the source files
+  byte-identical.
+
+**Gates**: `cargo fmt --all`, `cargo test -p nullapart-mail-core --lib` 660 passed
+(1 ignored), `cargo clippy -p nullapart-mail-core --all-targets -- -D warnings`
+clean (which also compile-verifies `tests/`, including the concurrently-owned
+`ml_feedback_admin`). `pnpm check-all` green at 316 tests across 35 files. This
+pass also corrects the twentieth pass's own section text, which used `*emphasis*`
+and failed `prettier --check` in the commit it shipped in.
+
+**What this does not prove.** `narrow_role_permissions` is pure and covered
+end-to-end through the route, but only against the in-memory fixture store; the
+`sqlx` role rows behind `list_roles` are covered by the `#[ignore]`d Postgres tests
+that cannot reach a database from this machine. `SessionView.permissions` still
+carries raw keys — that is the caller's _own_ capability set, which the picker
+needs for the subset check above, and the guard's permission-key tripwire is what
+keeps it off the rendered page. Live verification against `192.168.8.4` is still
+outstanding: the host did not answer SSH or `:53080` on 2026-10-20, so the
+wire-level claim rests on the route tests, not on a captured tenant response.
+
+**The welding defect is fixed for one term, not for the scanner.** The general
+cure is to sweep per text node (so a boundary exists where the DOM has one) rather
+than over `textContent`, and that would re-validate every anchored term at once;
+it is deliberately not in this slice, because changing the scan for all 30 terms
+without re-auditing each term's samples would trade one unproven guard for
+another. The terms still anchored at the front — `queue id`/`queue reference`,
+`content hash`, `trace_id`, `internal key`, `platform`, `scanner`, `undefined` —
+are prose-shaped and get a boundary from the sentence they appear in, but a leak
+that lands as the first word of a table cell immediately after another cell would
+still read clean. Anyone who adds a term should give it a welded sample, which is
+what makes the completeness test pin the property.
 
 ## Deploy incident: never `rsync --delete` to `.4`
 

@@ -17,7 +17,18 @@ export interface RoleDefinition {
   description: string | null;
   roleLevel: RoleLevel;
   builtin: boolean;
+  /**
+   * The permission keys this reader is being shown. A customer answer carries
+   * only the capabilities that customer already holds; anything the platform
+   * wrote above them is left off rather than blanked.
+   */
   permissions: string[];
+  /**
+   * Only a customer answer carries this, and only when something was left off:
+   * a statement that a role grants more than this reader can see, made without
+   * naming it.
+   */
+  permissionsOutsideReach?: boolean;
   userCount: number;
 }
 

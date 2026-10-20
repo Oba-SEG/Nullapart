@@ -6467,6 +6467,10 @@ struct RoleDefinitionView {
     role_level: String,
     builtin: bool,
     permissions: Vec<String>,
+    /// Published only when the answer had to leave permissions out for this
+    /// caller, in the same shape as a directory row's `rolesOutsideReach`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    permissions_outside_reach: Option<bool>,
     user_count: i64,
 }
 
@@ -6479,9 +6483,32 @@ impl From<RoleDefinitionRecord> for RoleDefinitionView {
             role_level: role.role_level,
             builtin: role.builtin,
             permissions: role.permissions,
+            permissions_outside_reach: None,
             user_count: role.user_count,
         }
     }
+}
+
+/// Cuts a role's permission list down to what the reading session already holds.
+///
+/// A role definition is written by the platform, and a customer-level role can
+/// carry keys this customer was never given. Naming those to a tenant describes
+/// a capability it cannot hold, trace or grant, which is the same thing the
+/// ladder rule avoids when it withholds a role above the reader. The keys are
+/// left out rather than reworded, because the console already says its own
+/// held capabilities in its own words and needs no second vocabulary here.
+fn narrow_role_permissions(
+    mut view: RoleDefinitionView,
+    reader: &ActiveSession,
+) -> RoleDefinitionView {
+    let mut withheld = false;
+    view.permissions.retain(|permission| {
+        let held = reader.permissions.iter().any(|held| held == permission);
+        withheld |= !held;
+        held
+    });
+    view.permissions_outside_reach = withheld.then_some(true);
+    view
 }
 
 #[derive(Debug, Deserialize)]
@@ -6753,8 +6780,11 @@ async fn list_roles(
     // A caller can only grant a role whose level ranks at or below their own, so
     // the higher bundles are not a choice they have — and listing them would put
     // the platform's role ladder and its permission sets in front of a customer.
-    // The rank comes from the same rule the grant path enforces.
+    // The rank comes from the same rule the grant path enforces. Rows that do
+    // survive are cut again per reader: a platform-written customer-level role
+    // can carry permission keys this caller was never given.
     let grantable_rank = grantor_rank(&state, &session).await;
+    let platform_seat = platform_placement(&context);
     match state
         .0
         .store
@@ -6766,6 +6796,13 @@ async fn list_roles(
                 .into_iter()
                 .filter(|role| rank_for_level(&role.role_level) <= grantable_rank)
                 .map(RoleDefinitionView::from)
+                .map(|role| {
+                    if platform_seat {
+                        role
+                    } else {
+                        narrow_role_permissions(role, &session)
+                    }
+                })
                 .collect();
             (StatusCode::OK, Json(ApiEnvelope { data: roles })).into_response()
         },
@@ -9528,6 +9565,126 @@ mod tests {
                 .len(),
             BUILTIN_ROLES.len(),
             "the role-definition identity still sees every level"
+        );
+    }
+
+    /// A customer-level role is a row the customer directory does list, and its
+    /// permission set is written by the platform. A key the reading session was
+    /// never given names a capability that tenant can neither hold, trace nor
+    /// grant, so it is left out of the array rather than relabelled: the console
+    /// words the capabilities it is handed, and an unnamed gap is the honest
+    /// remainder.
+    #[tokio::test]
+    async fn a_customers_role_row_carries_only_the_capabilities_that_customer_has() {
+        let fixture = default_fixture();
+        let app = app(&fixture);
+        let (admin_cookie, admin_csrf) = admin_session(&app).await;
+        let (cookie, _) = customer_admin_session(&fixture, &app, "owner@example.test").await;
+        created_role(
+            &app,
+            &admin_cookie,
+            &admin_csrf,
+            &create_role_body(
+                "fleet_helper",
+                "customer",
+                &["quarantine:view", crate::deep_ai::DEEP_AI_VIEW_PERMISSION],
+            ),
+        )
+        .await;
+
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "GET",
+                "/api/v1/admin/roles",
+                &cookie,
+                None,
+                None,
+            ))
+            .await
+            .expect("request runs");
+        let roles = data_of(&read_body(response).await)
+            .as_array()
+            .expect("roles is an array")
+            .clone();
+        let helper = roles
+            .iter()
+            .find(|role| role["roleKey"] == "fleet_helper")
+            .expect("a customer-level custom role is in the caller's directory");
+        let permissions: Vec<&str> = helper["permissions"]
+            .as_array()
+            .expect("permissions")
+            .iter()
+            .map(|value| value.as_str().expect("permission is a string"))
+            .collect();
+        assert!(
+            permissions.contains(&QUARANTINE_VIEW_PERMISSION),
+            "a capability the caller holds stays in the row: {permissions:?}"
+        );
+        let answer = serde_json::to_string(helper).expect("serializable");
+        assert!(
+            !answer.contains(crate::deep_ai::DEEP_AI_VIEW_PERMISSION),
+            "a customer role row names a capability that customer cannot hold: {answer}"
+        );
+        assert_eq!(
+            helper["permissionsOutsideReach"],
+            serde_json::json!(true),
+            "the gap the caller is being told about, stated without naming it"
+        );
+
+        // The builtin row the caller fully holds is answered as stored, with no
+        // gap claim attached.
+        let own_role = roles
+            .iter()
+            .find(|role| role["roleKey"] == CUSTOMER_ADMIN_ROLE)
+            .expect("the caller's own role");
+        assert_eq!(
+            own_role["permissions"]
+                .as_array()
+                .expect("permissions")
+                .len(),
+            BUILTIN_ROLES
+                .iter()
+                .find(|role| role.key == CUSTOMER_ADMIN_ROLE)
+                .expect("customer_admin is builtin")
+                .permissions
+                .len(),
+            "a row entirely inside the caller's reach is not narrowed"
+        );
+        assert!(
+            own_role.get("permissionsOutsideReach").is_none(),
+            "an absent key means nothing was withheld; a flat false would claim a gap"
+        );
+
+        // Anti-vacuous: the platform seat that wrote this row is answered with
+        // the key it wrote, and with no gap flag for a row it can read whole.
+        let response = app
+            .clone()
+            .oneshot(role_request(
+                "GET",
+                "/api/v1/admin/roles",
+                &admin_cookie,
+                None,
+                None,
+            ))
+            .await
+            .expect("request runs");
+        let platform = data_of(&read_body(response).await)
+            .as_array()
+            .expect("roles is an array")
+            .clone();
+        let platform_helper = platform
+            .iter()
+            .find(|role| role["roleKey"] == "fleet_helper")
+            .expect("the writer sees its own row");
+        let platform_answer = serde_json::to_string(platform_helper).expect("serializable");
+        assert!(
+            platform_answer.contains(crate::deep_ai::DEEP_AI_VIEW_PERMISSION),
+            "the role-definition identity is answered with the keys it stores: {platform_answer}"
+        );
+        assert!(
+            platform_helper.get("permissionsOutsideReach").is_none(),
+            "a platform answer claims a gap it never made"
         );
     }
 

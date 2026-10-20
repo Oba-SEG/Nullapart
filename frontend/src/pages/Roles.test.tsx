@@ -66,6 +66,7 @@ interface StubOptions {
   permissions?: string[];
   deleteError?: { status: number; code: string; message: string };
   session?: Record<string, unknown>;
+  roles?: unknown[];
 }
 
 function stubFetch(options: StubOptions = {}) {
@@ -82,7 +83,7 @@ function stubFetch(options: StubOptions = {}) {
       });
     }
     if (method === "GET" && url.includes("/admin/roles")) {
-      return ok({ data: roles });
+      return ok({ data: options.roles ?? roles });
     }
     if (method === "GET" && url.includes("/admin/permissions")) {
       return ok({ data: catalog });
@@ -253,6 +254,50 @@ describe("Roles", () => {
       screen.getByText(/A role can let you manage your administrators and still not/),
     ).toBeTruthy();
     expect(screen.getByText("Custom roles written by your provider.")).toBeTruthy();
+  });
+
+  // The server answers a customer role row with the capabilities that customer
+  // holds and says the rest is outside their view. Either authority on its own
+  // has to keep a platform permission off a tenant's table: the flag when the
+  // read is narrowed, the array when it is not.
+  it.each([
+    {
+      name: "when the server says what it left out",
+      row: { permissions: ["quarantine:view"], permissionsOutsideReach: true },
+    },
+    {
+      name: "when an older server still sends the key",
+      row: { permissions: ["quarantine:view", "deep-ai:view"] },
+    },
+  ])("states a hidden capability without naming it $name", async ({ row }) => {
+    stubFetch({
+      permissions: ["admin:users:manage", "quarantine:view"],
+      session: {
+        tier: "customer",
+        roles: ["customer_admin"],
+        customerId: "customer-1",
+        capabilities: { defineRoles: { allowed: false, blocker: "role" } },
+      },
+      roles: [
+        {
+          roleKey: "mailroom_triage",
+          displayName: "Mailroom triage",
+          description: "Releases quarantine for this organisation.",
+          roleLevel: "customer",
+          builtin: false,
+          userCount: 1,
+          ...row,
+        },
+      ],
+    });
+    renderPage();
+
+    await screen.findByText("Mailroom triage");
+    expect(screen.getByText("View held mail")).toBeTruthy();
+    expect(screen.getByText("More than you can see")).toBeTruthy();
+    expect(screen.queryByText("deep-ai:view")).toBeNull();
+    expect(screen.queryByText(/advanced analysis/i)).toBeNull();
+    expect(screen.queryByText("Nothing extra is allowed")).toBeNull();
   });
 
   it("follows the published verdict even for a system session", async () => {

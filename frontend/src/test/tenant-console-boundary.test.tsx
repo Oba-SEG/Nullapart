@@ -138,10 +138,17 @@ const PLATFORM_LANGUAGE: Array<{ term: string; pattern: RegExp }> = [
   { term: "log correlation id", pattern: /\btrace[_ -]id\b/i },
   // Authorization keys. The customer's own roles are described by what they
   // allow, never by the row in the platform's permission table.
+  //
+  // No leading word anchor. `textContent` welds a cell to its neighbour, so a key
+  // printed straight after a count reads as "capabilitysadmin:users:manage" and
+  // `\badmin` reports the row as clean. The sample for this term is deliberately
+  // welded for the same reason the machine key's is a bare token: a term that
+  // only matches text with a space in front of it cannot match a table, and this
+  // suite would have called a directory full of raw keys spotless.
   {
     term: "permission key",
     pattern:
-      /\b(admin|audit|trace|policies|quarantine|notifications|domain-security|outbound-intelligence|operations|models|connectors|deep-ai|scanner):[a-z_-]+/i,
+      /(admin|audit|trace|policies|quarantine|notifications|domain-security|outbound-intelligence|operations|models|connectors|deep-ai|scanner):[a-z_-]+/i,
   },
   // The installation's own bookkeeping for where it filed a customer.
   { term: "surrogate row key", pattern: /\binternal key\b/i },
@@ -258,7 +265,12 @@ const roleDirectory = [
     description: "Releases quarantine for this organisation.",
     roleLevel: "customer",
     builtin: false,
-    permissions: ["quarantine:view", "quarantine:release"],
+    // A platform-written customer-level row carrying a capability this customer
+    // was never given. The server leaves such keys off a customer answer, and
+    // this fixture keeps sending one: a console that lists what it is handed
+    // would print `deep-ai:view` straight onto the page, which is the guard's
+    // own permission-key tripwire.
+    permissions: ["quarantine:view", "quarantine:release", "deep-ai:view"],
     userCount: 1,
   },
 ];
@@ -387,10 +399,22 @@ const tenantTrace = {
  */
 const tenantEventId = "6b1f9d2e-4c3a-4f57-9a11-2b3c4d5e6f70";
 
+/**
+ * The one typed-parameter value the fixture below serves. A feature override of
+ * kind "specific value" is free text the operator types and the platform stores
+ * verbatim — the edit field says "sent exactly as you type it" — so a tenant
+ * reading their own setting back is reading their own words. The machine-key term
+ * cannot tell that string from a row key in the platform's tables, so this is the
+ * narrowest exemption that lets the Feature settings sweep run against the panel
+ * that actually paints: one literal, not a class of shape.
+ */
+const customerTypedOverrideValue = "rate_limit=10";
+
 const CUSTOMER_MAIL_HANDLES = [
   tenantTrace.transaction_id,
   ...tenantTrace.instances.map((instance) => instance.tenant_message_id),
   tenantEventId,
+  customerTypedOverrideValue,
 ];
 
 function withoutCustomerHandles(text: string): string {
@@ -476,14 +500,14 @@ const customerFeatureList = {
       display_name: "Bulk sending limits",
       default_value: "enabled",
       allowed_scopes: ["tenant"],
-      effective_value: "typed:rate_limit=10",
+      effective_value: `typed:${customerTypedOverrideValue}`,
       governed_by: "you",
       overrides: [
         {
           id: 118,
           scope: "tenant",
           scope_id: "CZA-1",
-          value: "typed:rate_limit=10",
+          value: `typed:${customerTypedOverrideValue}`,
           owner: "00000000-0000-0000-0000-0000000000a1",
           owner_display_name: "Tenant Admin",
           reason: "Weekend campaign lift",
@@ -898,7 +922,7 @@ const TERM_SAMPLES: Array<[string, string]> = [
   ["MTA queue identifier", "Held with queue id 4A2F1B8C3D."],
   ["content dedup hash", "Matched by content hash."],
   ["log correlation id", "Quote trace_id when you contact us."],
-  ["permission key", "This needs quarantine:release."],
+  ["permission key", "2 capabilitiesquarantine:view."],
   ["surrogate row key", "Filed under internal key 118."],
   ["machine key", "Family ml_threat_classification."],
   [
@@ -970,7 +994,20 @@ interface Surface {
 }
 
 const SURFACES: Surface[] = [
-  { name: "Overview", path: "/", entry: "/", component: Dashboard },
+  // This sweep is of the console shell, and the shell deliberately drops its
+  // sidebar for "/" — Layout treats that path as the public corporate site. An
+  // Overview mounted there renders no session chip at all, so the settle below
+  // never lands. "/console" is the console home the real router maps to this
+  // page, shell and all.
+  {
+    name: "Overview",
+    path: "/console",
+    entry: "/console",
+    component: Dashboard,
+    // The held-mail count is this page's own read, and it only prints as words
+    // once that answer lands. Without it the scan would run against "Loading".
+    ready: "Nothing held",
+  },
   {
     name: "Domain security",
     path: "/domain-security",
@@ -990,7 +1027,15 @@ const SURFACES: Surface[] = [
     component: OutboundIntelligence,
     ready: "news@acmefreight.example",
   },
-  { name: "Quarantine", path: "/quarantine", entry: "/quarantine", component: Quarantine },
+  {
+    name: "Quarantine",
+    path: "/quarantine",
+    entry: "/quarantine",
+    component: Quarantine,
+    // The fixture answers an empty queue, so the state that proves the read
+    // landed is the empty panel itself.
+    ready: "No held messages match these filters.",
+  },
   {
     name: "Held message",
     path: "/quarantine/$tenant_message_id",
@@ -1006,26 +1051,49 @@ const SURFACES: Surface[] = [
     component: MessageDetail,
     ready: "high malware evidence was recorded for this message.",
   },
-  { name: "Audit log", path: "/audit-log", entry: "/audit-log", component: AuditLog },
+  {
+    name: "Audit log",
+    path: "/audit-log",
+    entry: "/audit-log",
+    component: AuditLog,
+    ready: "Session login",
+  },
   {
     name: "Administrators",
     path: "/admin-users",
     entry: "/admin-users",
     component: AdminUsers,
+    // The suspended row, not the caller's own address: the shell already paints
+    // that one from the session, so it would settle on a page with no directory.
+    ready: "legacy@example.test",
   },
-  { name: "Roles", path: "/roles", entry: "/roles", component: Roles },
-  { name: "Policies", path: "/policies", entry: "/policies", component: Policies },
+  {
+    name: "Roles",
+    path: "/roles",
+    entry: "/roles",
+    component: Roles,
+    ready: "Mailroom triage",
+  },
+  {
+    name: "Policies",
+    path: "/policies",
+    entry: "/policies",
+    component: Policies,
+    ready: "Quarantine handling",
+  },
   {
     name: "Policy family",
     path: "/policies/$familyKey",
     entry: "/policies/outbound_senders",
     component: PolicyFamilyDetail,
+    ready: "Outbound sender approvals",
   },
   {
     name: "Feature settings",
     path: "/policies/features",
     entry: "/policies/features",
     component: FeatureOverrides,
+    ready: "Bulk sending limits",
   },
   { name: "Settings", path: "/settings", entry: "/settings", component: Settings },
   {
@@ -1033,6 +1101,7 @@ const SURFACES: Surface[] = [
     path: "/customers",
     entry: "/customers",
     component: Customers,
+    ready: "Acme Freight",
   },
 ];
 

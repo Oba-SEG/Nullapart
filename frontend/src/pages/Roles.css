@@ -137,6 +137,18 @@
   font-size: var(--font-size-xs);
 }
 
+/* A gap the reader is told about without its contents being named. This is not a
+   capability, so it must not read like the chips beside it. */
+.roles-permission-outside {
+  display: inline-block;
+  padding: 2px var(--spacing-2);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-full);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+
 .roles-actions {
   display: flex;
   gap: var(--spacing-2);

@@ -79,6 +79,35 @@ function displayNameError(value: string): string | undefined {
   return undefined;
 }
 
+/**
+ * The capabilities this row may be listed with.
+ *
+ * A permission set is written by the platform, and a customer-level role can
+ * carry capabilities this customer was never given. The server leaves those keys
+ * off a customer answer rather than blanking them; this is the same rule applied
+ * to an answer that still carries them, so a console talking to an older or
+ * regressed read cannot name a provider capability on a tenant's table.
+ */
+function shownPermissions(role: RoleDefinition, tenant: boolean, held: Set<string>): string[] {
+  return tenant ? role.permissions.filter((permission) => held.has(permission)) : role.permissions;
+}
+
+/**
+ * Whether something had to be left out of this row for this reader: the server's
+ * own statement when it made the cut, and the console's when it did. A gap is
+ * said out loud because a shorter list is not the same as a complete one.
+ */
+function grantsOutsideReach(role: RoleDefinition, tenant: boolean, held: Set<string>): boolean {
+  return (
+    role.permissionsOutsideReach === true ||
+    (tenant && shownPermissions(role, tenant, held).length < role.permissions.length)
+  );
+}
+
+const OUTSIDE_VIEW_LABEL = "More than you can see";
+const OUTSIDE_VIEW_HINT =
+  "This role also grants capabilities above your customer's own reach, so they are not listed here. That is why your administrators cannot be given it: a role can only be assigned when you already hold everything it grants.";
+
 function errorCode(error: unknown): string {
   return typeof error === "object" && error !== null && "code" in error
     ? String((error as { code: unknown }).code)
@@ -160,9 +189,16 @@ export function Roles() {
     () => (roles.data ?? []).filter((role) => !tenant || role.roleLevel === "customer"),
     [roles.data, tenant],
   );
+  const heldPermissions = useMemo(
+    () => new Set(current?.permissions ?? []),
+    // A session that has not loaded yet holds nothing, so a customer row is
+    // listed empty for one frame rather than with the platform's words.
+    [current],
+  );
   const tenantPermissionCount = useMemo(
-    () => new Set(directory.flatMap((role) => role.permissions)).size,
-    [directory],
+    () =>
+      new Set(directory.flatMap((role) => shownPermissions(role, tenant, heldPermissions))).size,
+    [directory, tenant, heldPermissions],
   );
 
   const filtered = useMemo(() => {
@@ -173,7 +209,7 @@ export function Roles() {
         role.displayName,
         role.roleKey,
         role.roleLevel,
-        ...role.permissions.map((permission) =>
+        ...shownPermissions(role, tenant, heldPermissions).map((permission) =>
           tenant ? permissionCapabilityLabel(permission) : permission,
         ),
       ]
@@ -181,7 +217,7 @@ export function Roles() {
         .toLowerCase()
         .includes(needle),
     );
-  }, [directory, search, tenant]);
+  }, [directory, search, tenant, heldPermissions]);
 
   const rolesAvailable = roles.isSuccess;
   const rolesState = roles.isError ? "Unavailable" : "Loading";
@@ -355,90 +391,100 @@ export function Roles() {
             </tr>
           </thead>
           <tbody>
-            {filtered.map((role) => (
-              <tr key={role.roleKey}>
-                <td>
-                  <strong>{role.displayName}</strong>
-                  {/* The role key is the row in the platform's role table. A
-                      tenant grants roles by name and never quotes a key back,
-                      so the customer projection shows the name alone. */}
-                  {tenant ? null : <span className="roles-key">{role.roleKey}</span>}
-                </td>
-                <td>
-                  <Hint
-                    label={
-                      tenant
-                        ? "Every role listed here reaches one organisation: your own. Roles above that belong to your provider and are not listed."
-                        : "The level sets the widest scope this role can reach. System reaches everything, support reaches customer and support work, and customer reaches one customer."
-                    }
-                  >
-                    <span className={`roles-badge roles-badge-${role.roleLevel} hint-term`}>
-                      {tenant ? TENANT_ROLE_LEVEL_LABEL : roleLevelLabel(role.roleLevel)}
-                    </span>
-                  </Hint>
-                </td>
-                <td>
-                  <Hint
-                    label={
-                      tenant
-                        ? "Built-in roles come with Nullapart and custom roles are written by your provider. Neither can be edited or deleted from here."
-                        : "Built-in roles come with Nullapart and cannot be edited or deleted here. Custom roles are ones you created."
-                    }
-                  >
-                    <span className="hint-term">{role.builtin ? "Built-in" : "Custom"}</span>
-                  </Hint>
-                </td>
-                <td>
-                  <details className="roles-permissions">
-                    <summary>
-                      {role.permissions.length} {tenant ? "capability" : "permission"}
-                      {role.permissions.length === 1 ? "" : "s"}
-                    </summary>
-                    <div className="roles-permission-list">
-                      {role.permissions.length === 0 ? (
-                        <span className="roles-permission-empty">
-                          {tenant ? "Nothing extra is allowed" : "No permissions"}
-                        </span>
-                      ) : (
-                        role.permissions.map((permission) => (
+            {filtered.map((role) => {
+              const permissions = shownPermissions(role, tenant, heldPermissions);
+              const outside = grantsOutsideReach(role, tenant, heldPermissions);
+              return (
+                <tr key={role.roleKey}>
+                  <td>
+                    <strong>{role.displayName}</strong>
+                    {/* The role key is the row in the platform's role table. A
+                        tenant grants roles by name and never quotes a key back,
+                        so the customer projection shows the name alone. */}
+                    {tenant ? null : <span className="roles-key">{role.roleKey}</span>}
+                  </td>
+                  <td>
+                    <Hint
+                      label={
+                        tenant
+                          ? "Every role listed here reaches one organisation: your own. Roles above that belong to your provider and are not listed."
+                          : "The level sets the widest scope this role can reach. System reaches everything, support reaches customer and support work, and customer reaches one customer."
+                      }
+                    >
+                      <span className={`roles-badge roles-badge-${role.roleLevel} hint-term`}>
+                        {tenant ? TENANT_ROLE_LEVEL_LABEL : roleLevelLabel(role.roleLevel)}
+                      </span>
+                    </Hint>
+                  </td>
+                  <td>
+                    <Hint
+                      label={
+                        tenant
+                          ? "Built-in roles come with Nullapart and custom roles are written by your provider. Neither can be edited or deleted from here."
+                          : "Built-in roles come with Nullapart and cannot be edited or deleted here. Custom roles are ones you created."
+                      }
+                    >
+                      <span className="hint-term">{role.builtin ? "Built-in" : "Custom"}</span>
+                    </Hint>
+                  </td>
+                  <td>
+                    <details className="roles-permissions">
+                      <summary>
+                        {permissions.length} {tenant ? "capability" : "permission"}
+                        {permissions.length === 1 ? "" : "s"}
+                      </summary>
+                      <div className="roles-permission-list">
+                        {permissions.length === 0 && !outside ? (
+                          <span className="roles-permission-empty">
+                            {tenant ? "Nothing extra is allowed" : "No permissions"}
+                          </span>
+                        ) : null}
+                        {permissions.map((permission) => (
                           <span key={permission} className="roles-permission-chip">
                             {tenant ? permissionCapabilityLabel(permission) : permission}
                           </span>
-                        ))
-                      )}
-                    </div>
-                  </details>
-                </td>
-                <td>{role.userCount}</td>
-                {canManage ? (
-                  <td>
-                    {role.builtin ? (
-                      <span className="roles-managed">Managed by platform</span>
-                    ) : (
-                      <div className="roles-actions">
-                        <Button
-                          size="sm"
-                          onClick={() => {
-                            setDialog({ mode: "edit", original: role });
-                          }}
-                        >
-                          Edit
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="danger"
-                          onClick={() => {
-                            setDeleteTarget(role);
-                          }}
-                        >
-                          Delete
-                        </Button>
+                        ))}
+                        {outside ? (
+                          <Hint label={OUTSIDE_VIEW_HINT}>
+                            <span className="roles-permission-outside hint-term">
+                              {OUTSIDE_VIEW_LABEL}
+                            </span>
+                          </Hint>
+                        ) : null}
                       </div>
-                    )}
+                    </details>
                   </td>
-                ) : null}
-              </tr>
-            ))}
+                  <td>{role.userCount}</td>
+                  {canManage ? (
+                    <td>
+                      {role.builtin ? (
+                        <span className="roles-managed">Managed by platform</span>
+                      ) : (
+                        <div className="roles-actions">
+                          <Button
+                            size="sm"
+                            onClick={() => {
+                              setDialog({ mode: "edit", original: role });
+                            }}
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="danger"
+                            onClick={() => {
+                              setDeleteTarget(role);
+                            }}
+                          >
+                            Delete
+                          </Button>
+                        </div>
+                      )}
+                    </td>
+                  ) : null}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
         {roles.isLoading ? (

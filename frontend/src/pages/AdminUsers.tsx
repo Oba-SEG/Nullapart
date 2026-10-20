@@ -105,6 +105,15 @@ function toRoleView(
 ): RoleView {
   const aboveOwnLevel = rankForLevel(role.roleLevel) > rank;
   const withinHeld = role.builtin || rolePermissionsWithin(role, sessionPermissions);
+  // A customer answer leaves an above-reach permission off the array instead of
+  // blanking it, so `withinHeld` cannot see the gap on its own: the server's
+  // statement is what keeps this picker from offering a grant the API refuses.
+  // Built-in rows are exempt for the same reason the route exempts them: their
+  // sets are the fixed baseline, and only a custom role is subset-checked.
+  const beyondHeld =
+    !role.builtin &&
+    (role.permissionsOutsideReach === true ||
+      role.permissions.some((permission) => !sessionPermissions.includes(permission)));
   // A role above a tenant's own level belongs to the provider, not to this
   // customer, and its platform name is not something the tenant administers.
   // The lock is the server's; these are the words this console can honestly use.
@@ -118,12 +127,12 @@ function toRoleView(
       ? "A role above your customer's own level. Your provider assigns and removes it."
       : (role.description ?? (role.builtin ? "Built-in role." : "Custom role.")),
     builtin: role.builtin,
-    grantable: !aboveOwnLevel && withinHeld,
+    grantable: !aboveOwnLevel && withinHeld && !beyondHeld,
     grantReason: beyondTenant
       ? PROVIDER_ABOVE_GRANT
       : aboveOwnLevel
         ? ABOVE_LEVEL_GRANT
-        : withinHeld
+        : withinHeld && !beyondHeld
           ? null
           : PERMISSIONS_NOT_HELD,
     revocable: !aboveOwnLevel,
