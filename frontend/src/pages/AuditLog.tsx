@@ -386,6 +386,7 @@ export function AuditLog() {
                     <button
                       type="button"
                       className="audit-row-button"
+                      aria-label={`View audit event ${auditActionLabel(event.action)} by ${event.actor_login}`}
                       onClick={() => setSelected(event.id)}
                     >
                       {new Date(event.created_at).toLocaleString()}

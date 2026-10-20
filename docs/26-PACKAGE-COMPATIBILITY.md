@@ -66,6 +66,7 @@ Phase 0 should maintain an implementation manifest such as:
 |---|---|---|---|---|---|
 | Node.js | >=24.0.0 | CI/build runtime | full frontend CI | TBD | TBD |
 | pnpm | 11.5.0+ | Node compatibility | install/build | TBD | TBD |
+| Rust toolchain | 1.96.0 (`rust-toolchain.toml`) | rustfmt + Clippy; Cargo workspace lockfile | workspace format, lint, test, release and security CI | TBD | 2026-10-20 |
 | React | ^19.0.0 | ReactDOM same line | UI/E2E | TBD | TBD |
 | React DOM | ^19.0.0 | React same line | UI/E2E | TBD | TBD |
 | Vite | ^6.0.5 | supported Node | build/dev | TBD | TBD |
@@ -80,7 +81,11 @@ The lockfile remains the authoritative exact dependency resolution.
 
 ## Rust compatibility
 
-Rust dependencies follow the workspace/Cargo lockfile.
+Rust dependencies follow the workspace/Cargo lockfile. The repository pins Rust
+1.96.0 in `rust-toolchain.toml`, and every Rust CI job requests that same
+toolchain explicitly. This prevents a hosted-runner stable-channel update from
+silently changing the lint contract; upgrades remain deliberate compatibility
+changes with a full workspace/CI rerun.
 
 Maintain:
 

@@ -1445,7 +1445,11 @@ describe("tenant console boundary", () => {
     renderSurface(surfaceNamed("Audit log"));
     await screen.findByText("Your customer · CZA-1");
 
-    fireEvent.click(await screen.findByText("1/6/2026, 11:57:00 AM"));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "View audit event Session login by tenant-admin@example.test",
+      }),
+    );
     expect(await screen.findByText("Mail policy")).toBeInTheDocument();
 
     const text = paintedText(document.body);
