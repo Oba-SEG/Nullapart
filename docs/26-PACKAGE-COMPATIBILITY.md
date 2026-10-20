@@ -70,6 +70,8 @@ Phase 0 should maintain an implementation manifest such as:
 | React | ^19.0.0 | ReactDOM same line | UI/E2E | TBD | TBD |
 | React DOM | ^19.0.0 | React same line | UI/E2E | TBD | TBD |
 | Vite | ^6.0.5 | supported Node | build/dev | TBD | TBD |
+| Vitest / V8 coverage | ^5.0.3 | Node ^22.12.0 or ^24.0.0; Vite ^6.4.0+ | frontend check-all | TBD | 2026-10-20 |
+| DOMPurify | ^3.4.17 | browser sanitizer types are bundled | frontend check-all | TBD | 2026-10-20 |
 | TypeScript | ~5.6.2 | ecosystem support | typecheck | TBD | TBD |
 | TanStack Query | ^5.62.8 | React 18+ / supported TS | UI/integration | TBD | TBD |
 | Zod | ^3.24.1 | TS/tooling | form/API schema tests | TBD | TBD |
