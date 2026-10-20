@@ -2,8 +2,18 @@
 //!
 //! Establishes the telemetry contracts required for later Tier-3 SLO activation.
 //! Phase 0 does not prove production Tier-3 SLOs but sets the foundation.
+//!
+//! Application telemetry (docs/11): this crate implements the
+//! Sentry-compatible instrumentation layer that emits scrubbed envelopes
+//! to the regional SegLumberjack backend — scrub gate, envelope builder,
+//! best-effort emitter, capture glue and the local receiver.
 
 use serde::{Deserialize, Serialize};
+
+pub mod capture;
+pub mod emitter;
+pub mod envelope;
+pub mod scrub;
 
 /// Standard service/capability identifier for metrics.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
