@@ -671,12 +671,21 @@ impl FilesystemArtifactStore {
                         return Err(ArtifactStoreError::StorageUnavailable);
                     }
                     if capability_metadata.mode() & 0o777 != 0o700 {
+                        // Do not convert the directory capability into a
+                        // std file and chmod that handle: Linux may represent
+                        // a capability directory with O_PATH, for which
+                        // fchmod fails. Reopen the already accepted
+                        // capability at `.` with normal read access instead.
+                        // The fixed relative name cannot traverse or follow a
+                        // caller-controlled path.
+                        let mut directory_options = OpenOptions::new();
+                        directory_options.read(true);
                         capability
-                            .try_clone()
+                            .open_with(".", &directory_options)
                             .and_then(|directory| {
-                                directory
-                                    .into_std_file()
-                                    .set_permissions(std::fs::Permissions::from_mode(0o700))
+                                directory.set_permissions(cap_std::fs::Permissions::from_std(
+                                    std::fs::Permissions::from_mode(0o700),
+                                ))
                             })
                             .map_err(|_| ArtifactStoreError::StorageUnavailable)?;
                     }
