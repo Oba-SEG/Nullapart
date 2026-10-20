@@ -172,6 +172,12 @@ const PLATFORM_LANGUAGE: Array<{ term: string; pattern: RegExp }> = [
   // field the service did not publish, which is what happened when the UI was
   // rebuilt ahead of the API that names a revision's publisher.
   { term: "missing value", pattern: /\b(?:undefined|NaN)\b/ },
+  // A reading the page could not make. `new Date(undefined).toLocaleString()`
+  // does not print the missing word, it prints this, so a date field the answer
+  // left out reaches a customer as a broken clock instead of a blank. Same defect
+  // class as the term above, and a page that formats a timestamp it was never
+  // given is exactly as wrong.
+  { term: "broken reading", pattern: /Invalid Date/ },
   // A render that fell over. The sweep below only compares words on the page, so
   // an error boundary would scan as clean text and a surface that crashes on the
   // tenant's own answer could hide inside a green guard.
@@ -963,6 +969,7 @@ const TERM_SAMPLES: Array<[string, string]> = [
     "seen a3f19c0d2b7e48c1f6d0a5b2c9e4f1a3Campaign rule 9c4279a2-0d8e-455a-94c4-7c496786df12.",
   ],
   ["missing value", "Published by undefined on Tuesday."],
+  ["broken reading", "Last checked Invalid Date and no later."],
   ["crashed render", "Something went wrong while this screen was drawn."],
   ["model word", "The model flagged the link."],
   ["engine or artifact name", "Weighted by qwen, matched by Rspamd, served from an ONNX file."],

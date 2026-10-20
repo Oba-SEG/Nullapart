@@ -47,6 +47,7 @@ Lanczos upscales of the flattened contact sheet.
 | Primary vertical, horizontal and mark | `logos/primary-logo-dark@2x.png`, `logos/horizontal-logo-dark.png`, `logos/logo-mark@2x.png` | supplied originals; 2350×2272, 1770×521, 2048×2048 | Login, shell and compact context mark. |
 | Wordmark/tagline and monochrome lock-ups | `logos/wordmark-light.png`, `logos/tagline-lime.png`, `logos/horizontal-clean-teal.png`, `logos/horizontal-threat-magenta.png` | supplied originals | Approved variants for email, status communications and dark/light composition. |
 | Website hero and header | `web/website-hero-2560x900.png`, `web/website-header-1600x320.png` | supplied originals | Login hero; marketing/header usage only. |
+| Corporate security network | `web/corporate-security-network-16x9.png` | direct generated artwork from the approved design board; 1672×941 | Public corporate landing only; decorative image, with no embedded product claims or controls. |
 | Social cards | `social/x-card-1200x675.png`, `social/linkedin-card-1200x627.png`, `social/youtube-card-2560x1440.png` | supplied originals | Publishing assets; not loaded into the operator console. |
 | App, favicon and profile assets | `app/*` including Android, Apple, maskable, favicon and round signature mark variants | supplied originals; 16–2048 px | Wired by `index.html` and `site.webmanifest` for browser/PWA and email-signature use. |
 | Email signature and stationery artwork | `email/email-signature-horizontal-600.png`, `email/email-stationery-banner-{600x200,1200x400}.png` | supplied originals | Browser/email composition reference; the supplied 1200×400 banner is also bundled as the CID-safe mail-core attachment. |
@@ -65,6 +66,19 @@ The shell now applies the horizontal lock-up, status mark and an authenticated
 scope bar to every protected route. The login uses the supplied 2560×900 hero
 behind an overlay, preserving foreground contrast and never making a visual
 asset an authentication or authorization signal.
+
+## Public corporate landing
+
+**Implemented:** 2026-10-20.
+
+`/` is a public corporate landing page, distinct from the authenticated
+operator workspace at `/console`. It uses only generic, supportable product
+statements and never loads session, customer, operational or model data. Its
+calls to action lead to the existing `/login` flow; it does not imply a
+public self-service control plane. The new security-network artwork is a
+high-density generated asset informed by the approved design board, not a crop
+of that board. Its source prompt explicitly excludes logos, text, UI and
+status meaning, leaving all product language as accessible HTML.
 
 ## Operator workspace interaction model
 

@@ -25,7 +25,7 @@ async function requireAuth(): Promise<Session> {
 async function requirePermission(permission: string): Promise<Session> {
   const session = await requireAuth();
   if (!hasPermission(session, permission)) {
-    throw redirect({ to: "/" });
+    throw redirect({ to: "/console" });
   }
   return session;
 }
@@ -36,18 +36,17 @@ async function requirePermission(permission: string): Promise<Session> {
 async function requireAnyPermission(permissions: string[]): Promise<Session> {
   const session = await requireAuth();
   if (!permissions.some((permission) => hasPermission(session, permission))) {
-    throw redirect({ to: "/" });
+    throw redirect({ to: "/console" });
   }
   return session;
 }
 
-// Public routes that don't require auth
-async function publicOnly() {
-  const session = await loadSession();
-  if (session) {
-    throw redirect({ to: "/" });
-  }
-}
+// The login page must be reachable before a control-plane session exists. In
+// particular, a standalone frontend preview has no BFF mounted at `/auth`, so
+// it must not turn an absent session endpoint into a route-level error before
+// the sign-in form can render. The server still owns session creation and the
+// protected routes below always call `requireAuth`.
+function publicLogin() {}
 
 // Define routes
 const rootRoute = createRootRoute({
@@ -57,6 +56,12 @@ const rootRoute = createRootRoute({
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
+  component: lazyRouteComponent(() => import("../pages/CorporateWebsite"), "CorporateWebsite"),
+});
+
+const consoleRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/console",
   beforeLoad: requireAuth,
   component: lazyRouteComponent(() => import("../pages/Dashboard"), "Dashboard"),
 });
@@ -64,7 +69,7 @@ const indexRoute = createRoute({
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/login",
-  beforeLoad: publicOnly,
+  beforeLoad: publicLogin,
   component: lazyRouteComponent(() => import("../pages/Login"), "Login"),
 });
 
@@ -216,6 +221,7 @@ const modelsRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
+  consoleRoute,
   loginRoute,
   messagesRoute,
   messageDetailRoute,

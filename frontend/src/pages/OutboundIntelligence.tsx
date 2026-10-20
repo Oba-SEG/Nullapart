@@ -191,8 +191,12 @@ function dispositionTone(disposition: string): StatusTone {
 }
 
 function percent(part: number, total: number): string {
-  if (total <= 0) return "—";
-  return `${Math.round((part / total) * 100)}%`;
+  // A count the answer left out is not zero recipients. A share whose numerator
+  // or denominator did not arrive must never read as "NaN%" to a customer.
+  const value = Number(part);
+  const denominator = Number(total);
+  if (!Number.isFinite(value) || !Number.isFinite(denominator) || denominator <= 0) return "—";
+  return `${Math.round((value / denominator) * 100)}%`;
 }
 
 function SummaryCard({
@@ -597,7 +601,10 @@ export function OutboundIntelligence() {
                       <span>{sender.recipients_1h} recipients</span>
                     </td>
                     <td>
-                      {sender.unique_recipients_1h} unique
+                      {Number.isFinite(Number(sender.unique_recipients_1h))
+                        ? sender.unique_recipients_1h
+                        : "—"}{" "}
+                      unique
                       <span>
                         {percent(sender.new_recipients_1h, sender.unique_recipients_1h)} new
                       </span>

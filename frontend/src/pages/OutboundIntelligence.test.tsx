@@ -138,7 +138,7 @@ function ok(body: unknown, status = 200) {
   };
 }
 
-function stubFetch(session: object = managerSession) {
+function stubFetch(session: object = managerSession, body: object = baseSnapshot) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? "GET";
@@ -155,7 +155,7 @@ function stubFetch(session: object = managerSession) {
       });
     }
     if (url.includes("/outbound-intelligence")) {
-      return ok({ data: baseSnapshot });
+      return ok({ data: body });
     }
     throw new Error(`unexpected fetch ${url}`);
   });
@@ -193,6 +193,26 @@ describe("OutboundIntelligence", () => {
       this.open = false;
     };
   });
+
+  /**
+   * The new-recipient share is worked out of two counts in the answer. A customer
+   * read leaves a withheld value out rather than sending null, so a division by a
+   * number that never arrived reads "NaN%" — and a tenant would take that for a
+   * measurement of their own sending rather than of a page that gave up.
+   */
+  it.each(["new_recipients_1h", "unique_recipients_1h"])(
+    "shows a dash for the new-recipient share when %s never arrived",
+    async (missingCount) => {
+      const behaviour = { ...baseSnapshot.sender_behaviour[0] } as Record<string, unknown>;
+      delete behaviour[missingCount];
+      stubFetch(tenantSession, { ...baseSnapshot, sender_behaviour: [behaviour] });
+      renderAt("/outbound-intelligence");
+
+      await screen.findAllByText("bulk@example.test");
+      expect(screen.getByText("— new")).toBeTruthy();
+      expect(document.body.textContent).not.toMatch(/NaN|undefined/);
+    },
+  );
 
   it("renders outbound summaries, events, campaigns and approval controls", async () => {
     stubFetch();

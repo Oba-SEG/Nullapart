@@ -30,6 +30,7 @@ import "./Layout.css";
 export function Layout() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const isLogin = pathname === "/login";
+  const isPublic = isLogin || pathname === "/";
   const navRef = useRef<HTMLElement>(null);
 
   // Keep the active destination visible: the sidebar nav scrolls
@@ -60,13 +61,17 @@ export function Layout() {
   const session = useQuery({
     queryKey: ["session"],
     queryFn: ({ signal }) => loadSession(signal),
+    // The public corporate page never probes the authenticated-session
+    // endpoint. It must stay a content-only surface until a visitor enters
+    // the explicit sign-in flow.
+    enabled: !isPublic,
     staleTime: 60_000,
     retry: false,
   });
 
-  if (isLogin) {
+  if (isPublic) {
     return (
-      <main className="main auth-main">
+      <main className={isLogin ? "main auth-main" : undefined}>
         <Outlet />
       </main>
     );
@@ -96,7 +101,7 @@ export function Layout() {
         Skip to main content
       </a>
       <aside className="sidebar">
-        <Link to="/" className="sidebar-brand" aria-label="Nullapart home">
+        <Link to="/console" className="sidebar-brand" aria-label="Nullapart console home">
           <img
             src="/brand/logos/horizontal-logo-dark.png"
             alt="Nullapart"
@@ -107,7 +112,7 @@ export function Layout() {
         <nav ref={navRef} className="sidebar-nav" aria-label="Primary">
           <p className="nav-section-label">{sections.overview}</p>
           <Link
-            to="/"
+            to="/console"
             className="nav-link"
             activeOptions={{ exact: true }}
             activeProps={{ className: "nav-link active" }}

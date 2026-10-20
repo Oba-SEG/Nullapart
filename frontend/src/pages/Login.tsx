@@ -5,7 +5,7 @@ import "./Login.css";
 
 export function Login() {
   const search = new URLSearchParams(window.location.search);
-  const returnTo = search.get("return_to") ?? "/";
+  const returnTo = search.get("return_to") ?? "/console";
   const sessionExpired = search.get("reason") === "expired";
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

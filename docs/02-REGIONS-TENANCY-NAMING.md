@@ -84,7 +84,9 @@ Proposed form:
 - `uk.nullapart.com`;
 - `us.nullapart.com`.
 
-The public login landing page can exist at `nullapart.com` and route the administrator to the selected deployment.
+The public corporate landing exists at `nullapart.com`. It carries no customer,
+operator or runtime data. Administrator sign-in starts at `nullapart.com/login`
+and routes the administrator to the selected deployment.
 
 ## Mail DNS
 

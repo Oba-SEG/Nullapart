@@ -13,7 +13,7 @@ import { Layout } from "./Layout";
 import type { Session } from "../auth/session";
 
 const NAV_PATHS = [
-  "/",
+  "/console",
   "/operations",
   "/scanner-operations",
   "/domain-security",
@@ -91,12 +91,35 @@ function stubSession(session: unknown) {
 
 function renderLayout() {
   const rootRoute = createRootRoute({ component: () => <Layout /> });
-  const child = createRoute({ getParentRoute: () => rootRoute, path: "/", component: () => null });
-  const withChildren = NAV_PATHS.filter((path) => path !== "/").map((path) =>
+  const child = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/console",
+    component: () => null,
+  });
+  const withChildren = NAV_PATHS.filter((path) => path !== "/console").map((path) =>
     createRoute({ getParentRoute: () => rootRoute, path, component: () => null }),
   );
   const router = createRouter({
     routeTree: rootRoute.addChildren([child, ...withChildren]),
+    history: createMemoryHistory({ initialEntries: ["/console"] }),
+  });
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  );
+}
+
+function renderPublicLayout() {
+  const rootRoute = createRootRoute({ component: () => <Layout /> });
+  const child = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/",
+    component: () => <p>Public landing content</p>,
+  });
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([child]),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -127,6 +150,15 @@ afterEach(() => {
 });
 
 describe("Layout", () => {
+  it("does not start an authenticated-session request for the public landing", async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    renderPublicLayout();
+
+    expect(await screen.findByText("Public landing content")).toBeTruthy();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("labels the shell from the tier the server published", async () => {
     stubSession(tenantSession);
     renderLayout();

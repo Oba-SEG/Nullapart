@@ -426,7 +426,7 @@ fn parse_expected_sha256(content_hash: &ContentHash) -> Option<[u8; 32]> {
         return None;
     }
     let mut digest = [0u8; 32];
-    for (index, pair) in hex.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in hex.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         digest[index] = (hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?;
     }
     Some(digest)
@@ -438,7 +438,7 @@ fn parse_expected_sha256(content_hash: &ContentHash) -> Option<[u8; 32]> {
 /// bytes are logged or returned on mismatch.
 fn sha256_matches(bytes: &[u8], expected_digest: &[u8; 32]) -> bool {
     let actual = Sha256::digest(bytes);
-    actual.as_slice() == expected_digest.as_slice()
+    actual[..] == expected_digest[..]
 }
 
 /// Acquire the provider bytes exactly once and verify the acquired

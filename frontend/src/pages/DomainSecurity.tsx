@@ -172,9 +172,12 @@ function errorMessage(error: unknown): string {
 }
 
 function percent(part: number, total: number): string {
-  // A withheld or malformed count must not become "NaN%" on a customer's page.
-  if (!Number.isFinite(part) || !Number.isFinite(total) || total <= 0) return "—";
-  return `${Math.round((part / total) * 100)}%`;
+  // The customer projection withholds a count by leaving its key out. A share
+  // whose numerator or denominator did not arrive must never paint "NaN%".
+  const value = Number(part);
+  const denominator = Number(total);
+  if (!Number.isFinite(value) || !Number.isFinite(denominator) || denominator <= 0) return "—";
+  return `${Math.round((value / denominator) * 100)}%`;
 }
 
 function toneForStatus(status: string): StatusTone {
