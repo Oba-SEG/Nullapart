@@ -55,6 +55,10 @@ impl ReceiverState {
         let data_dir = std::env::var("SEGLUMBERJACK_LOCAL_DATA")
             .map(PathBuf::from)
             .unwrap_or_else(|_| std::env::temp_dir().join("seglumberjack-local"));
+        Self::with_data_dir(data_dir)
+    }
+
+    fn with_data_dir(data_dir: PathBuf) -> Self {
         std::fs::create_dir_all(&data_dir).expect("local store directory must create");
         let store_path = data_dir.join("envelopes.jsonl");
         Self {
@@ -119,7 +123,7 @@ fn validate_envelope_shape(body: &[u8]) -> bool {
 /// Minimal base64 (no external dependency): the local store is debug data.
 fn base64_encode(data: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut output = String::with_capacity((data.len() + 2) / 3 * 4);
+    let mut output = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0] as u32;
         let b1 = *chunk.get(1).unwrap_or(&0) as u32;
@@ -156,12 +160,19 @@ async fn ingest(
     if key.is_empty() || key.len() > 64 {
         return (StatusCode::FORBIDDEN, "key rejected");
     }
-    let content_type_is_envelope = headers
+    // The Sentry browser SDK sends envelopes as text/plain (fetch cannot
+    // carry credentials and keeps custom headers minimal); the Rust client
+    // uses the canonical x-sentry-envelope type. Accept both.
+    let content_type_ok = headers
         .get("content-type")
         .and_then(|value| value.to_str().ok())
-        .map(|value| value.contains("sentry-envelope"))
+        .map(|value| {
+            value.contains("sentry-envelope")
+                || value.contains("text/plain")
+                || value.contains("octet-stream")
+        })
         .unwrap_or(false);
-    if !content_type_is_envelope {
+    if !content_type_ok {
         state.rejected_total.fetch_add(1, Ordering::Relaxed);
         return (StatusCode::UNSUPPORTED_MEDIA_TYPE, "content-type rejected");
     }
@@ -169,6 +180,26 @@ async fn ingest(
         Ok(()) => (StatusCode::OK, "accepted"),
         Err((status, message)) => (status, message),
     }
+}
+
+/// CORS handling for the browser emitter: the console origin differs from
+/// the receiver origin, so preflight (carrying X-Sentry-Auth) must be
+/// answered before the envelope POST is attempted. The allow-list is broad
+/// only in the local compose stack; the real regional backend applies its
+/// own origin policy.
+async fn preflight() -> (StatusCode, [(&'static str, &'static str); 4]) {
+    (
+        StatusCode::OK,
+        [
+            ("access-control-allow-origin", "*"),
+            ("access-control-allow-methods", "OPTIONS, POST"),
+            (
+                "access-control-allow-headers",
+                "x-sentry-auth, content-type",
+            ),
+            ("access-control-max-age", "3600"),
+        ],
+    )
 }
 
 async fn stats(State(state): State<ReceiverState>) -> Json<serde_json::Value> {
@@ -194,9 +225,19 @@ async fn main() {
 fn receiver_router(state: ReceiverState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
-        .route("/api/:key/envelope/", post(ingest))
-        .route("/api/:key/envelope", post(ingest))
         .route("/stats", get(stats))
+        // The Rust client posts to `/api/<key>/envelope/`; the Sentry
+        // browser SDK derives `<project>/envelope/` from the DSN shape.
+        // No route variant overlaps because the paths differ by prefix.
+        // The Rust client posts to `/api/<key>/envelope/`; the Sentry
+        // browser SDK derives `<project>/envelope/` from the DSN shape.
+        // No route variant overlaps because the paths differ by prefix.
+        // matchit 0.7 (axum 0.7) only knows `:param` syntax, and one name
+        // per segment position is mandatory.
+        .route("/api/:project/envelope/", post(ingest).options(preflight))
+        .route("/api/:project/envelope", post(ingest).options(preflight))
+        .route("/:project/envelope/", post(ingest).options(preflight))
+        .route("/:project/envelope", post(ingest).options(preflight))
         .with_state(state)
 }
 
@@ -211,12 +252,13 @@ mod tests {
     };
 
     fn state() -> ReceiverState {
+        // Direct directory injection: process-global SEGLUMBERJACK_LOCAL_DATA
+        // would race across concurrent tokio tests (set_var is global).
         let data_dir = std::env::temp_dir().join(format!(
             "seglumberjack-test-{}",
             uuid::Uuid::new_v4().simple()
         ));
-        std::env::set_var("SEGLUMBERJACK_LOCAL_DATA", &data_dir);
-        ReceiverState::open()
+        ReceiverState::with_data_dir(data_dir)
     }
 
     fn identity() -> TelemetryIdentity {
@@ -311,6 +353,70 @@ mod tests {
             .await
             .expect("respond");
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn accepts_browser_sdk_route_and_content_type() {
+        let state = state();
+        let app = receiver_router(state.clone());
+        // The Sentry browser SDK derives `/seg/envelope/` from the DSN
+        // `http://key@host:9050/seg` and sends text/plain.
+        let envelope = build_envelope(
+            &EventSubmission {
+                kind: EventKind::HandlerError,
+                level: Level::Error,
+                message: "browser render failed".to_string(),
+                identifiers: Default::default(),
+                exception: None,
+                breadcrumbs: vec![],
+            },
+            &identity(),
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/seg/envelope/")
+                    .header("content-type", "text/plain;charset=UTF-8")
+                    .body(Body::from(envelope.0))
+                    .expect("build request"),
+            )
+            .await
+            .expect("respond");
+        assert_eq!(response.status(), StatusCode::OK);
+        let stored = std::fs::read_to_string(&*state.store_path).expect("store file");
+        assert_eq!(stored.lines().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn preflight_answers_options_without_consuming_the_store() {
+        let state = state();
+        let app = receiver_router(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/seg/envelope/")
+                    .header(
+                        "access-control-request-headers",
+                        "x-sentry-auth, content-type",
+                    )
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("respond");
+        assert_eq!(response.status(), StatusCode::OK);
+        let headers = response.headers();
+        assert_eq!(headers.get("access-control-allow-origin").unwrap(), "*");
+        assert!(headers
+            .get("access-control-allow-headers")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("x-sentry-auth"));
+        // Preflight must not create or touch the envelope store.
+        assert!(!state.store_path.exists(), "preflight wrote to the store");
     }
 
     #[test]

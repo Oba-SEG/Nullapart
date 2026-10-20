@@ -151,7 +151,7 @@ impl TelemetryEmitter {
         let bytes = envelope.0;
         // Spawning can fail only during runtime shutdown; the envelope is
         // dropped then and the permit release keeps the semaphore correct.
-        let _ = tokio::spawn(async move {
+        tokio::spawn(async move {
             let outcome = client
                 .post(&endpoint)
                 .header("content-type", "application/x-sentry-envelope")
