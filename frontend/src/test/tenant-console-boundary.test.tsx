@@ -26,6 +26,7 @@ import { Layout } from "../components/Layout";
 import { AdminUsers } from "../pages/AdminUsers";
 import { AuditLog } from "../pages/AuditLog";
 import { Customers } from "../pages/Customers";
+import { CustomerDetail } from "../pages/CustomerDetail";
 import { Dashboard } from "../pages/Dashboard";
 import { DomainSecurity } from "../pages/DomainSecurity";
 import { FeatureOverrides } from "../pages/FeatureOverrides";
@@ -139,12 +140,11 @@ const PLATFORM_LANGUAGE: Array<{ term: string; pattern: RegExp }> = [
   // Authorization keys. The customer's own roles are described by what they
   // allow, never by the row in the platform's permission table.
   //
-  // No leading word anchor. `textContent` welds a cell to its neighbour, so a key
-  // printed straight after a count reads as "capabilitysadmin:users:manage" and
-  // `\badmin` reports the row as clean. The sample for this term is deliberately
-  // welded for the same reason the machine key's is a bare token: a term that
-  // only matches text with a space in front of it cannot match a table, and this
-  // suite would have called a directory full of raw keys spotless.
+  // No leading word anchor, and no trailing one. The sweep gives each painted run
+  // its own edge, but a run can still carry a key inside a longer token — a label
+  // rendered as "role:mailroom_triage", a count printed straight before a key —
+  // and a term that demands whitespace would read those as clean. The sample for
+  // this term is glued for the same reason the machine key's is a bare token.
   {
     term: "permission key",
     pattern:
@@ -154,16 +154,15 @@ const PLATFORM_LANGUAGE: Array<{ term: string; pattern: RegExp }> = [
   { term: "surrogate row key", pattern: /\binternal key\b/i },
   // Machine identifiers. A snake_case token is how a platform table keys a row;
   // a tenant reads a human label for the same thing, so any hit here is a value
-  // that reached the console without a naming layer over it. No word anchors:
-  // `textContent` welds adjacent elements together, so a key rendered straight
-  // after a heading has no boundary to match.
+  // that reached the console without a naming layer over it. No word anchors: a
+  // key printed at the edge of any other word is still a key the customer reads.
   { term: "machine key", pattern: /[a-z][a-z0-9]*(?:_[a-z0-9]+)+/ },
   // A primary key. The ledger's `resource_id` column holds one for rows about
   // the platform's own records (a session, another audit event), and a tenant
   // console that prints it is showing them a database row. The bare-hash branch
-  // has no trailing anchor for the same reason the machine key above has none:
-  // `textContent` welds `<strong>a3f19c…</strong><span>Campaign…</span>` together,
-  // so a hash printed straight before a word has no boundary to end on.
+  // has no trailing anchor for the same reason the machine key above has none: the
+  // page can paint a hash straight against the word after it, and a key that runs
+  // into a label is still a key.
   {
     term: "opaque row key",
     pattern:
@@ -419,6 +418,38 @@ const CUSTOMER_MAIL_HANDLES = [
 
 function withoutCustomerHandles(text: string): string {
   return CUSTOMER_MAIL_HANDLES.reduce((seen, handle) => seen.split(handle).join(" "), text);
+}
+
+/**
+ * Every run of text the page actually painted, one text node per line.
+ *
+ * `document.body.textContent` is the obvious way to read a rendered page and it
+ * is wrong for this guard: it concatenates nodes with no boundary at all, so a
+ * chip rendered straight after a heading reads as one fused word. A term with a
+ * `\b` anchor then cannot match what the customer plainly sees — the page shows
+ * "Capabilities" and "admin:users:manage" as separate runs, and the welded string
+ * "Capabilitiesadmin:users:manage" has no word boundary in front of the key.
+ * Walking the nodes and joining them with a newline gives each run its own edge,
+ * so anchored terms match a table as honestly as they match a paragraph, and a
+ * phrase still has to be a phrase: two cells that merely sit next to each other
+ * do not become "queue id".
+ */
+function paintedText(root: HTMLElement): string {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const parent = node.parentElement;
+      if (parent === null) return NodeFilter.FILTER_REJECT;
+      if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(parent.tagName)) {
+        return NodeFilter.FILTER_REJECT;
+      }
+      return (node as Text).data.trim() === ""
+        ? NodeFilter.FILTER_REJECT
+        : NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  const runs: string[] = [];
+  while (walker.nextNode() !== null) runs.push((walker.currentNode as Text).data);
+  return runs.join("\n");
 }
 
 /**
@@ -708,7 +739,9 @@ const PAYLOADS: Array<[string, unknown]> = [
             latest_policy: "none",
             reports_30d: 4,
             messages_30d: 120,
-            aligned_messages_30d: 118,
+            dkim_aligned_messages_30d: 118,
+            spf_aligned_messages_30d: 118,
+            dmarc_aligned_messages_30d: 118,
             rejected_or_quarantined_messages_30d: 0,
           },
           report_authorization: null,
@@ -986,7 +1019,7 @@ interface Surface {
   component: FC;
   /**
    * A label that only exists once this surface's own read has painted. The scan
-   * below takes `document.body.textContent`, and the session chip settles before
+   * below walks the page's text nodes, and the session chip settles before
    * a page's tables do, so without this a surface could scan green purely because
    * its rows had not rendered yet.
    */
@@ -1103,6 +1136,16 @@ const SURFACES: Surface[] = [
     component: Customers,
     ready: "Acme Freight",
   },
+  // A customer seat reaches this page by following its own organisation from the
+  // list above, so the detail is part of the tenant's console even though the
+  // route is the platform's customer record.
+  {
+    name: "Your organisation detail",
+    path: "/customers/$customerId",
+    entry: "/customers/CZA-1",
+    component: CustomerDetail,
+    ready: "Acme Freight",
+  },
 ];
 
 /** Every path the shell links to, so its nav renders without dangling links. */
@@ -1198,7 +1241,7 @@ describe("tenant console boundary", () => {
         await screen.findAllByText(surface.ready);
       }
 
-      const text = withoutCustomerHandles(document.body.textContent ?? "");
+      const text = withoutCustomerHandles(paintedText(document.body));
       const leaks: string[] = [];
       for (const { term, pattern } of PLATFORM_LANGUAGE) {
         // Every match, not the first: a page with three machine keys left on it
@@ -1242,6 +1285,30 @@ describe("tenant console boundary", () => {
       ({ term, pattern }) => !pattern.test(sampleFor.get(term)!),
     ).map(({ term }) => term);
     expect(dead, "these terms do not match the leak they name").toEqual([]);
+  });
+
+  /**
+   * The sweep reads runs, not a welded string, and this is the regression that
+   * proves it. Two spans with no whitespace between them are one word to
+   * `textContent`: the Domain security page painted "Aligned" and "NaN%" as
+   * neighbours, the fused run had no word boundary in front of the value, and the
+   * guard called a visible defect clean. Each run gets its own edges here, so an
+   * anchored term can reach a table cell.
+   */
+  it("keeps the edge between two painted runs so an anchored term can reach a table", () => {
+    const container = document.createElement("div");
+    container.innerHTML = "<span>Aligned</span><span>NaN%</span>";
+    document.body.append(container);
+    try {
+      expect(container.textContent).toBe("AlignedNaN%");
+      expect(container.textContent).not.toMatch(/\b(?:undefined|NaN)\b/);
+
+      const runs = paintedText(container);
+      expect(runs).toBe("Aligned\nNaN%");
+      expect(runs).toMatch(/\b(?:undefined|NaN)\b/);
+    } finally {
+      container.remove();
+    }
   });
 
   /**
@@ -1374,7 +1441,7 @@ describe("tenant console boundary", () => {
     fireEvent.click(await screen.findByText("1/6/2026, 11:57:00 AM"));
     expect(await screen.findByText("Mail policy")).toBeInTheDocument();
 
-    const text = document.body.textContent ?? "";
+    const text = paintedText(document.body);
     expect(text).toContain("Automatic threat review");
     expect(text).toContain("Your organisation");
     expect(text).not.toMatch(/[a-z][a-z0-9]*(?:_[a-z0-9]+)+/);
@@ -1394,7 +1461,7 @@ describe("tenant console boundary", () => {
 
     expect(await screen.findByText(/#3 · by Tenant Admin/)).toBeInTheDocument();
     expect(screen.getByText(/#7 · by Your provider/)).toBeInTheDocument();
-    expect(document.body.textContent ?? "").not.toMatch(
+    expect(paintedText(document.body)).not.toMatch(
       /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
     );
   });
@@ -1410,7 +1477,7 @@ describe("tenant console boundary", () => {
     await screen.findByText("Your customer · CZA-1");
 
     await screen.findByText("Session login");
-    const text = document.body.textContent ?? "";
+    const text = paintedText(document.body);
     expect(text).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
     // Anti-vacuous: the rows are rendered, they simply carry no reference. A
     // sender the customer approved keeps its address.
@@ -1435,7 +1502,7 @@ describe("tenant console boundary", () => {
     expect(screen.queryByText("Duration")).toBeNull();
     expect(screen.queryByText(/required/i)).toBeNull();
 
-    const text = document.body.textContent ?? "";
+    const text = paintedText(document.body);
     expect(text).not.toMatch(/\d+\s*ms/);
     expect(text).not.toMatch(/scanner/i);
   });

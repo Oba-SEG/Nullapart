@@ -251,4 +251,22 @@ describe("DomainSecurity findings", () => {
 
     expect(screen.queryByRole("region", { name: "Findings" })).not.toBeInTheDocument();
   });
+
+  /**
+   * The customer read keeps the counts it publishes and leaves the rest out, so an
+   * absent numerator is a real answer rather than a broken one. A percentage
+   * worked out from a value that never arrived reads "NaN%", and the tenant who
+   * sees it cannot tell whether their mail aligned or the page simply gave up.
+   */
+  it("shows a dash for the alignment share when the count never arrived", async () => {
+    const summary = { ...securityBody().summary } as Record<string, unknown>;
+    delete summary.dmarc_aligned_messages_30d;
+    stub({ session: viewSession, body: securityBody({ summary }) });
+    renderPage();
+    await screen.findByText("Domain security");
+
+    const card = await screen.findByText("DMARC alignment");
+    expect(card.parentElement).toHaveTextContent("—");
+    expect(document.body.textContent).not.toMatch(/NaN/);
+  });
 });

@@ -1375,7 +1375,65 @@ another. The terms still anchored at the front — `queue id`/`queue reference`,
 are prose-shaped and get a boundary from the sentence they appear in, but a leak
 that lands as the first word of a table cell immediately after another cell would
 still read clean. Anyone who adds a term should give it a welded sample, which is
-what makes the completeness test pin the property.
+what makes the completeness test pin the property. _(Closed by the twenty-second
+pass: the sweep reads text nodes now, and the `Domain security` surface is what
+proved it.)_
+
+## Landed in the twenty-second pass (the sweep reads runs, not a welded string)
+
+The previous pass left its own tool defect open: the scan compared
+`document.body.textContent`, which concatenates nodes with no boundary at all, and
+repaired it for the one term it happened to be looking at. This pass fixes it for
+every term, because a guard that cannot see a table is not a guard.
+
+- **The sweep now walks text nodes.** `paintedText(root)` takes every non-blank
+  run under the element, skips `script`/`style`/`noscript`/`template`, and joins
+  them with a newline, so each run keeps the edges the DOM gave it. The four
+  targeted "this stayed off the page" assertions moved to the same read; the row
+  and card checks that name a subtree keep `textContent`, since they compare whole
+  phrases rather than a word at an edge.
+- **It found a leak the old read had certified clean.** `Domain security` printed
+  `NaN%`. The page paints "Aligned" and the share as sibling runs, so
+  `textContent` fused them into `AlignedNaN%`, `/\b(?:undefined|NaN)\b/` had no
+  boundary to start on, and the surface swept green while a customer's page showed
+  an arithmetic failure. The cause was a field name the guard fixture had invented
+  (`aligned_messages_30d`) where the wire answer is
+  `dmarc_aligned_messages_30d`; the fixture now carries all three alignment counts
+  under their real names, which is the point of a platform-shaped fixture.
+- **A missing count reads as a dash, not a number.** `percent()` returned
+  `NaN%` because it only guarded the denominator. It now returns `—` for a
+  non-finite numerator or denominator: the customer projection withholds keys by
+  leaving them out, so an absent count is a supported answer rather than a broken
+  one, and a tenant cannot tell "the page gave up" from "nothing aligned".
+- **Both halves are pinned by tests.** `DomainSecurity.test.tsx` deletes
+  `dmarc_aligned_messages_30d` from the summary and asserts the card shows `—` and
+  the page has no `NaN`; reverting `percent()` to `total <= 0` fails it with
+  `DMARC alignmentNaN%40 messages in the last 30 days`. In the guard, a new case
+  renders the welded pair itself, asserts `textContent` is `AlignedNaN%` and _does
+  not_ match the term, then asserts `paintedText` is `Aligned\nNaN%` and does — so
+  anyone who moves the sweep back to `textContent` fails a test that names the
+  defect. Reverted and `diff`-verified byte-identical.
+- **Coverage closed against the router.** Every route a customer session can
+  reach is now swept. `/customers/$customerId` was the gap: `CustomerDetail` is
+  gated on `admin:customers:view`, which `customer_admin` holds, and a tenant gets
+  there by following their own organisation from the list above, but the guard had
+  never rendered it. It joins `SURFACES` as _Your organisation detail_ with a
+  settle label and **sweeps clean**; the remaining route names belong to
+  platform-only gates (`operations:view`, `scanner:operations:view`, `deep-ai:view`,
+  `connectors:view`, `models:view`) or to the unauthenticated `/` and `/login`.
+
+**Gates**: `pnpm check-all` green at 319 tests across 35 files (format, brand
+manifest, lint, typecheck, test). No Rust changed in this slice, so the cargo
+gates were not re-run.
+
+**What this does not prove.** Runs are now separated, so a two-word term can only
+match a phrase one run actually contains: a cell that renders "Queue" and "id" as
+two elements is no longer `queue id` to the sweep, which is the correct reading but
+is the opposite trade from the old weld. A value glued inside one text node (a
+label written as `role:mailroom_triage` with no space) is still caught only by the
+terms that carry no anchors. And this is still a render-level guard: the payloads
+are fixtures, so it proves the console cannot print a platform word it is handed,
+not that the service never hands one — that claim rests on the route tests.
 
 ## Deploy incident: never `rsync --delete` to `.4`
 

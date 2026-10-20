@@ -172,7 +172,8 @@ function errorMessage(error: unknown): string {
 }
 
 function percent(part: number, total: number): string {
-  if (total <= 0) return "—";
+  // A withheld or malformed count must not become "NaN%" on a customer's page.
+  if (!Number.isFinite(part) || !Number.isFinite(total) || total <= 0) return "—";
   return `${Math.round((part / total) * 100)}%`;
 }
 
