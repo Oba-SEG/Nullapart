@@ -1276,8 +1276,9 @@ impl FilesystemArtifactStore {
     /// `capability.remove_file(final_name)` — the capability-relative unlink
     /// of that single directory entry, never an ambient path — so no
     /// directory, sibling artifact or temp file is removed. After the
-    /// removal the open directory is synced through a cloned capability
-    /// handle (`try_clone().into_std_file().sync_all()`).
+    /// removal the already accepted capability directory is reopened at `.`
+    /// with read access and synced. This avoids Linux `O_PATH` handles, which
+    /// cannot be synced directly.
     ///
     /// State-transition rules, all applied under the same write lock:
     /// - file removal fails: `StorageUnavailable` with metadata and
@@ -1367,9 +1368,12 @@ impl FilesystemArtifactStore {
                     .remove_file(&final_name)
                     .map_err(|_| ArtifactStoreError::StorageUnavailable)?;
                 drop(handle);
+                let mut directory_options = OpenOptions::new();
+                directory_options.read(true);
+                directory_options.follow(FollowSymlinks::No);
                 if capability
-                    .try_clone()
-                    .and_then(|directory| directory.into_std_file().sync_all())
+                    .open_with(".", &directory_options)
+                    .and_then(|directory| directory.sync_all())
                     .is_err()
                 {
                     return Ok(RetentionFileOutcome::RemovedRootSyncFailed);

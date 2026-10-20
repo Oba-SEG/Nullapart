@@ -2933,7 +2933,11 @@ mod tests {
         let id = Uuid::new_v4();
         let encoded = encode_cursor(&created_at, &id);
         let (decoded_at, decoded_id) = parse_cursor(&encoded).expect("valid cursor");
-        assert_eq!(decoded_at, created_at);
+        assert_eq!(
+            decoded_at,
+            DateTime::from_timestamp_micros(created_at.timestamp_micros())
+                .expect("a DateTime cursor timestamp must be representable")
+        );
         assert_eq!(decoded_id, id);
     }
 }
