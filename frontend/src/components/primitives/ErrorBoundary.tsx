@@ -6,6 +6,7 @@
  */
 
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { captureException } from "../../lib/telemetry";
 
 interface Props {
   children: ReactNode;
@@ -37,7 +38,16 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    // Log to SegLumberjack/Sentry in production
+    // Fire-and-forget telemetry: the scrub gate lives in telemetry.ts, and
+    // a report failure is silent by contract (the Fallback UI does not
+    // depend on any network).
+    try {
+      captureException(error, this.state.correlationId, {
+        component: "ErrorBoundary",
+      });
+    } catch {
+      // Reporting must never break the falling-back boundary.
+    }
     console.error("ErrorBoundary caught:", error, errorInfo);
   }
 

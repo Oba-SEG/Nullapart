@@ -146,6 +146,10 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.seglumberjack
+    # The browser emitter runs outside compose and needs the envelope
+    # endpoint; bound to the operator's address like every other surface.
+    ports:
+      - "${NULLAPART_BIND_ADDRESS:-127.0.0.1}:${NULLAPART_TELEMETRY_PORT:-9050}:9050"
     mem_limit: 128m
     cpus: 0.25
     networks: [backend]
@@ -179,6 +183,12 @@ services:
     build:
       context: ./frontend
       dockerfile: ../docker/Dockerfile.frontend
+      args:
+        # Vite embeds these at build time; the DSN points at the operator's
+        # own address for the browser, unlike the server-side endpoint.
+        VITE_TELEMETRY_DSN: ${NULLAPART_FRONTEND_TELEMETRY_DSN:-http://local-browser-key@127.0.0.1:9050/seg}
+        VITE_TELEMETRY_ENVIRONMENT: local
+        VITE_TELEMETRY_RELEASE: compose-local
     ports:
       - "${NULLAPART_BIND_ADDRESS:-127.0.0.1}:${NULLAPART_FRONTEND_PORT:-53080}:80"
     environment:
