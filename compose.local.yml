@@ -63,6 +63,12 @@ services:
       NULLAPART_LOCAL_CONTROL_CUSTOMER_ID: ${NULLAPART_LOCAL_CONTROL_CUSTOMER_ID:-CZA-1}
       NULLAPART_TRACE_WORKLOAD_TOKEN: ${NULLAPART_TRACE_WORKLOAD_TOKEN:-}
       NULLAPART_DNS_RESOLVER: ${NULLAPART_DNS_RESOLVER:-}
+      # Application telemetry (docs/11): Sentry-compatible envelopes to the
+      # local SegLumberjack-compatible receiver. Production points this at
+      # the regional backend instead; unset explicitly disables emission.
+      NULLAPART_TELEMETRY_ENDPOINT: ${NULLAPART_TELEMETRY_ENDPOINT:-http://seglumberjack:9050/api/local-mailcore/envelope/}
+      NULLAPART_TELEMETRY_ENVIRONMENT: local
+      NULLAPART_TELEMETRY_RELEASE: ${NULLAPART_TELEMETRY_RELEASE:-compose-local}
       NULLAPART_DEEP_AI_WORKLOAD_TOKEN: ${NULLAPART_DEEP_AI_WORKLOAD_TOKEN:-local-deep-ai-workload-token}
       NULLAPART_DEEP_AI_MODEL: ${NULLAPART_DEEP_AI_MODEL:-local-qwen3.5-9b-phase7}
       # Inline ML pass-2 stage (Phase 4 increment 3). The feature switch
@@ -134,6 +140,14 @@ services:
     cpus: 1.0
     volumes:
       - ${NULLAPART_DKIM_KEY_DIR:-./infrastructure/containers/dkim-unconfigured}:/run/nullapart/dkim:ro
+    networks: [backend]
+
+  seglumberjack:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.seglumberjack
+    mem_limit: 128m
+    cpus: 0.25
     networks: [backend]
 
   postfix:

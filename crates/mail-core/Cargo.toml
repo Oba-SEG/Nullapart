@@ -10,6 +10,7 @@ repository.workspace = true
 nullapart-mail-contracts = { path = "../mail-contracts" }
 nullapart-policy = { path = "../policy" }
 nullapart-scanner-sdk = { path = "../scanner-sdk" }
+nullapart-observability = { path = "../observability" }
 async-trait = "0.1"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json"] }
 serde = { workspace = true }

@@ -1,0 +1,38 @@
+# Local SegLumberjack-compatible envelope receiver (development backend).
+# Production telemetry targets the regional SegLumberjack service; this
+# image exists so local compose stacks exercise the same wire protocol.
+FROM rust:1.96-slim-trixie AS builder
+
+RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+
+RUN --mount=type=cache,id=nullapart-cargo-registry-v2,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=nullapart-seglumberjack-target-v2,target=/src/target,sharing=locked \
+    cargo build --release --bin seglumberjack-local && \
+    cp /src/target/release/seglumberjack-local /tmp/seglumberjack-local && \
+    strip /tmp/seglumberjack-local
+
+# Runtime
+FROM debian:trixie-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates libssl3 && \
+    rm -rf /var/lib/apt/lists/* && \
+    useradd -r -s /sbin/nologin seglumberjack
+
+COPY --from=builder /tmp/seglumberjack-local /usr/local/bin/
+
+RUN install -d -o seglumberjack -g seglumberjack -m 0750 /data && \
+    chown seglumberjack:seglumberjack /data
+
+EXPOSE 9050
+
+USER seglumberjack
+
+ENV SEGLUMBERJACK_LOCAL_DATA=/data \
+    SEGLUMBERJACK_LOCAL_BIND=0.0.0.0:9050
+
+ENTRYPOINT ["/usr/local/bin/seglumberjack-local"]

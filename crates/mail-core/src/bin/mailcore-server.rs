@@ -60,15 +60,29 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+    use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    let telemetry_error_layer = nullapart_observability::capture::ErrorCaptureLayer::new(
+        nullapart_observability::capture::TelemetryConfig::from_env(),
+    );
+    let log_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    tracing_subscriber::registry()
+        .with(log_filter)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .json()
+                .with_current_span(false)
+                .with_span_list(false),
         )
-        .json()
-        .with_current_span(false)
-        .with_span_list(false)
+        .with(telemetry_error_layer)
         .try_init()
         .map_err(|_| "structured tracing subscriber initialization failed")?;
+
+    // Panics report to SegLumberjack as envelopes; the previous hook keeps
+    // running so stderr retains the standard panic trace.
+    nullapart_observability::capture::install_panic_hook(
+        nullapart_observability::capture::TelemetryConfig::from_env(),
+    );
 
     let deployment_id = DeploymentId::new(
         &env::var("NULLAPART_DEPLOYMENT_ID").map_err(|_| "NULLAPART_DEPLOYMENT_ID is required")?,
