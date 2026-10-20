@@ -221,15 +221,13 @@ jobs:
           path: .
           format: spdx-json
           output-file: sbom/source-sbom.spdx.json
-      - name: Upload SBOM artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: sbom
-          path: |
-            sbom/
-            crates/**/*.cdx.json
-          retention-days: 90
       - name: Generate build provenance
+        # GitHub does not offer attestation persistence to user-owned private
+        # repositories. Keep the real attestation mandatory wherever the
+        # platform supports it; the private-repository fallback below records
+        # the limitation rather than claiming an unsigned file is an
+        # attestation.
+        if: ${{ github.event.repository.private == false || github.event.repository.owner.type != 'User' }}
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           # Attest distributable executables only. `target/release/*` also
@@ -238,6 +236,32 @@ jobs:
           subject-path: |
             target/release/mailcore-filter
             target/release/mailcore-server
+      - name: Record unavailable GitHub attestation
+        if: ${{ github.event.repository.private && github.event.repository.owner.type == 'User' }}
+        run: |
+          cat > sbom/PROVENANCE-NOT-ATTESTED.md <<EOF
+          # GitHub build attestation unavailable
+
+          GitHub Actions does not persist build attestations for a user-owned private repository.
+          This file is an explicit limitation record, not an attestation and not a release approval.
+          A release or deployment must require a real trusted attestation after the repository
+          is public or is owned by an eligible organization.
+
+          Source revision: ${GITHUB_SHA}
+          Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+
+          Executable SHA-256:
+          EOF
+          sha256sum target/release/mailcore-filter target/release/mailcore-server >> sbom/PROVENANCE-NOT-ATTESTED.md
+          echo "::warning::GitHub build attestations are unavailable for this user-owned private repository; see the retained limitation record."
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sbom
+          path: |
+            sbom/
+            crates/**/*.cdx.json
+          retention-days: 90
       - name: Scan SBOM for critical vulnerabilities
         uses: anchore/scan-action@1638637db639e0ade3258b51db49a9a137574c3e # v6
         id: scan

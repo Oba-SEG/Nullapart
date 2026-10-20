@@ -34,6 +34,18 @@ Responsibilities:
 
 No production deployment credentials.
 
+### Current provenance limitation
+
+GitHub persists artifact attestations only where the repository and account
+entitlement support it. The CI workflow creates a GitHub build attestation
+where that capability is available. For a user-owned private repository, where
+GitHub rejects attestation persistence, CI instead retains an explicit
+`PROVENANCE-NOT-ATTESTED.md` record alongside the SBOM with source and binary
+SHA-256 values. It is not an attestation, signature, or release approval.
+Release/deployment must require a trusted attestation once the repository is
+public or is moved to an eligible organization; the fallback never satisfies a
+production provenance requirement.
+
 ### `main.yml`
 
 Trigger:
